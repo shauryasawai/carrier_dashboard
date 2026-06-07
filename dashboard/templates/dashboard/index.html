@@ -1,0 +1,266 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Carrier Efficiency Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'dashboard/styles.css' %}">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+</head>
+<body>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="masthead-inner">
+      <div class="brand">
+        <span class="brand-mark">◇</span>
+        <div>
+          <h1>Carrier Efficiency Console</h1>
+          <p class="tagline">Shipment performance &amp; partner scoring</p>
+        </div>
+      </div>
+      <div class="masthead-meta">
+        <span id="metaStatus">No data loaded</span>
+        {% if frido_user %}<span class="user-chip"><span class="user-dot"></span>{{ frido_user }} · <a href="{% url 'logout' %}">Log out</a></span>{% endif %}
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+
+    <!-- Upload zone -->
+    <section id="uploadZone" class="upload-zone">
+      <div class="upload-card" id="dropArea">
+        <div class="upload-icon">⤓</div>
+        <h2>Drop your shipment workbook</h2>
+        <p>Standard export format (<code>.xlsx</code> or <code>.csv</code>). Everything is processed on your machine &mdash; nothing is stored.</p>
+        <label class="btn-primary" for="fileInput">Choose file</label>
+        <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
+        <p class="upload-hint" id="uploadHint"></p>
+      </div>
+    </section>
+
+    <!-- Dashboard -->
+    <section id="dashboard" class="dashboard" hidden>
+
+      <!-- Filter bar. Every categorical filter is a multi-select checkbox
+           dropdown (.msel); leaving one empty means "all". -->
+      <div class="filters">
+        <div class="filter">
+          <label>Delivery type</label>
+          <div class="msel" data-name="delivery_type" data-all="All types">
+            <button type="button" class="msel-toggle"><span class="msel-text">Forward</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden>
+              <label class="msel-opt"><input type="checkbox" value="Forward" checked><span>Forward</span></label>
+              <label class="msel-opt"><input type="checkbox" value="Reverse Pickup"><span>Reverse</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Warehouse</label>
+          <div class="msel" data-name="warehouse" data-all="All warehouses">
+            <button type="button" class="msel-toggle"><span class="msel-text">All warehouses</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden></div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Carrier account</label>
+          <div class="msel" data-name="account" data-all="All accounts">
+            <button type="button" class="msel-toggle"><span class="msel-text">All accounts</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden></div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Zone</label>
+          <div class="msel" data-name="zone" data-all="All zones">
+            <button type="button" class="msel-toggle"><span class="msel-text">All zones</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden></div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Weight</label>
+          <div class="msel" data-name="weight" data-all="All weights">
+            <button type="button" class="msel-toggle"><span class="msel-text">All weights</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden>
+              <label class="msel-opt"><input type="checkbox" value="Light"><span>Light (0&ndash;3kg)</span></label>
+              <label class="msel-opt"><input type="checkbox" value="Medium"><span>Medium (3&ndash;10kg)</span></label>
+              <label class="msel-opt"><input type="checkbox" value="Heavy"><span>Heavy (10kg+)</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Payment</label>
+          <div class="msel" data-name="payment" data-all="All">
+            <button type="button" class="msel-toggle"><span class="msel-text">All</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden>
+              <label class="msel-opt"><input type="checkbox" value="PREPAID"><span>Prepaid</span></label>
+              <label class="msel-opt"><input type="checkbox" value="COD"><span>COD</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Pickup time</label>
+          <div class="msel" data-name="slot" data-all="All times">
+            <button type="button" class="msel-toggle"><span class="msel-text">All times</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden>
+              <label class="msel-opt"><input type="checkbox" value="Before 12pm"><span>Before 12pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="12&ndash;1pm"><span>12&ndash;1pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="1&ndash;2pm"><span>1&ndash;2pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="2&ndash;3pm"><span>2&ndash;3pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="3&ndash;4pm"><span>3&ndash;4pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="4&ndash;5pm"><span>4&ndash;5pm</span></label>
+              <label class="msel-opt"><input type="checkbox" value="After 5pm"><span>After 5pm</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>Pickup from</label>
+          <input type="date" id="fDateFrom">
+        </div>
+        <div class="filter">
+          <label>Pickup to</label>
+          <input type="date" id="fDateTo">
+        </div>
+        <button class="btn-ghost" id="reuploadBtn">↻ New file</button>
+      </div>
+
+      <!-- Summary stats -->
+      <div class="stat-row" id="statRow"></div>
+
+      <!-- Score table -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Partner efficiency score</h3>
+          <p id="scoreFormula" class="panel-sub"></p>
+        </div>
+        <div class="table-scroll">
+          <table class="score-table" id="scoreTable"></table>
+        </div>
+      </div>
+
+      <!-- Outcome matrix per carrier account -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Outcome matrix by carrier account</h3>
+          <p id="statusSub" class="panel-sub"></p>
+        </div>
+        <div class="table-scroll">
+          <table class="score-table matrix-table" id="statusTable"></table>
+        </div>
+      </div>
+
+      <!-- Charts -->
+      <div class="chart-grid">
+        <div class="panel">
+          <div class="panel-head"><h3>Efficiency score</h3></div>
+          <div class="chart-box" style="--h: 320px"><canvas id="cScore"></canvas></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3>Pickup → delivery TAT</h3><span class="panel-sub">hours</span></div>
+          <div class="chart-box" style="--h: 320px"><canvas id="cTat"></canvas></div>
+        </div>
+      </div>
+
+      <!-- Partner performance per warehouse (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Partner performance by warehouse</h3>
+          <p id="whcSub" class="panel-sub"></p>
+        </div>
+        <div class="whc-controls">
+          <label class="whc-pick-label" for="whcPick">Warehouse</label>
+          <select id="whcPick"></select>
+          <span class="whc-note">Scores are relative <em>within</em> the selected warehouse — i.e. each partner ranked against the others picking up here.</span>
+        </div>
+        <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cWhc"></canvas></div>
+        <div class="table-scroll">
+          <table class="score-table" id="whcTable"></table>
+        </div>
+      </div>
+
+      <!-- Warehouse breakdown -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Warehouse breakdown</h3>
+          <p id="whSub" class="panel-sub"></p>
+        </div>
+        <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cWh"></canvas></div>
+        <div class="table-scroll">
+          <table class="score-table" id="whTable"></table>
+        </div>
+      </div>
+
+      <!-- City breakdown (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>City rollup</h3>
+          <p id="citySub" class="panel-sub"></p>
+        </div>
+        <div class="table-scroll">
+          <table class="score-table" id="cityTable"></table>
+        </div>
+      </div>
+
+      <!-- Destination rollup (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Destination rollup</h3>
+          <p id="destSub" class="panel-sub"></p>
+          <input type="search" class="panel-search" id="destSearch" placeholder="Search destination…" autocomplete="off">
+        </div>
+        <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDest"></canvas></div>
+        <div class="table-scroll">
+          <table class="score-table" id="destTable"></table>
+        </div>
+      </div>
+
+      <!-- Lane analysis (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Top lanes (pickup → drop)</h3>
+          <p id="laneSub" class="panel-sub"></p>
+          <input type="search" class="panel-search" id="laneSearch" placeholder="Search lane…" autocomplete="off">
+        </div>
+        <div class="table-scroll">
+          <table class="score-table" id="laneTable"></table>
+        </div>
+      </div>
+
+      <!-- Product breakdown -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Product breakdown</h3>
+          <p id="productSub" class="panel-sub"></p>
+        </div>
+        <div id="productGrid" class="product-grid"></div>
+      </div>
+
+      <!-- Business mix -->
+      <div class="panel">
+        <div class="panel-head"><h3>Business mix</h3></div>
+        <div class="mix-grid">
+          <div class="mix-cell"><span class="mix-label">Weight bucket</span><div class="chart-box" style="--h: 190px"><canvas id="cWeight"></canvas></div></div>
+          <div class="mix-cell"><span class="mix-label">Payment mode</span><div class="chart-box" style="--h: 190px"><canvas id="cPay"></canvas></div></div>
+          <div class="mix-cell"><span class="mix-label">Delivery type</span><div class="chart-box" style="--h: 190px"><canvas id="cDtype"></canvas></div></div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+
+  <footer class="footer">
+    <p>Scores are relative within the current filter set &middot; TAT averages exclude shipments missing the required timestamps</p>
+  </footer>
+
+  <script>
+    window.PROCESS_URL = "{% url 'process_upload' %}";
+    window.CSRF_TOKEN = "{{ csrf_token }}";
+    window.LOGIN_URL = "{% url 'login' %}";
+  </script>
+  <script src="{% static 'dashboard/app.js' %}"></script>
+</body>
+</html>

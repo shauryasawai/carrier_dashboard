@@ -1,0 +1,9 @@
+.env
+/my_env
+/*.pyc
+/__pycache__/
+/db.sqlite3
+/venv/
+.DS_Store
+.idea/
+scripts/

@@ -1,0 +1,138 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign in · Frido Carrier Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root{
+      --teal:#0fb6a9; --teal-deep:#0a8c84; --teal-dark:#076b65;
+      --ink:#16263a; --ink-soft:#4b5b6b; --faint:#8a98a6;
+      --line:#e3ebec; --bg:#eef7f6; --card:#ffffff;
+      --danger:#d6453b; --danger-bg:#fdeceb;
+      --sans:'Inter',system-ui,sans-serif; --display:'Poppins',sans-serif;
+    }
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{
+      font-family:var(--sans); color:var(--ink); min-height:100vh;
+      background:radial-gradient(1200px 600px at 0% 0%, #d6f1ee 0%, var(--bg) 45%, #eaf4f3 100%);
+      display:flex; align-items:center; justify-content:center; padding:24px;
+    }
+    .auth{
+      width:100%; max-width:920px; background:var(--card); border-radius:22px;
+      box-shadow:0 24px 60px -20px rgba(16,38,58,.28), 0 2px 8px rgba(16,38,58,.06);
+      overflow:hidden; display:grid; grid-template-columns:1.05fr 1fr;
+    }
+    /* Brand panel */
+    .brand-panel{
+      position:relative; padding:46px 42px; color:#fff;
+      background:linear-gradient(150deg, var(--teal) 0%, var(--teal-deep) 55%, var(--teal-dark) 100%);
+      display:flex; flex-direction:column; justify-content:space-between; overflow:hidden;
+    }
+    .brand-panel::before, .brand-panel::after{
+      content:""; position:absolute; border-radius:50%; background:rgba(255,255,255,.10);
+    }
+    .brand-panel::before{ width:280px; height:280px; right:-90px; top:-90px; }
+    .brand-panel::after{ width:200px; height:200px; left:-70px; bottom:-80px; background:rgba(255,255,255,.07); }
+    .wordmark{ font-family:var(--display); font-weight:700; font-size:34px; letter-spacing:-.02em; position:relative; }
+    .wordmark .dot{ color:#bdf3ec; }
+    .brand-kicker{ font-size:12px; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin-top:6px; }
+    .brand-body{ position:relative; z-index:1; }
+    .brand-body h2{ font-family:var(--display); font-weight:600; font-size:26px; line-height:1.25; margin-bottom:12px; }
+    .brand-body p{ font-size:14px; line-height:1.6; opacity:.92; max-width:330px; }
+    .brand-foot{ position:relative; z-index:1; font-size:12px; opacity:.8; display:flex; align-items:center; gap:8px; }
+    .brand-foot svg{ width:15px; height:15px; flex:none; }
+
+    /* Form panel */
+    .form-panel{ padding:46px 44px; display:flex; flex-direction:column; justify-content:center; }
+    .form-panel h1{ font-family:var(--display); font-weight:600; font-size:25px; letter-spacing:-.01em; }
+    .form-sub{ color:var(--ink-soft); font-size:14px; margin:6px 0 26px; }
+    .field{ margin-bottom:16px; }
+    .field label{ display:block; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); margin-bottom:7px; }
+    .field input{
+      width:100%; font-family:var(--sans); font-size:15px; color:var(--ink);
+      background:#f8fbfb; border:1.5px solid var(--line); border-radius:11px; padding:12px 14px;
+      transition:border-color .15s, background .15s, box-shadow .15s;
+    }
+    .field input:focus{ outline:none; border-color:var(--teal); background:#fff; box-shadow:0 0 0 4px rgba(15,182,169,.14); }
+    .btn{
+      width:100%; cursor:pointer; border:none; margin-top:8px;
+      font-family:var(--display); font-weight:600; font-size:15px; color:#fff; letter-spacing:.01em;
+      background:linear-gradient(135deg, var(--teal) 0%, var(--teal-deep) 100%);
+      padding:13px 18px; border-radius:11px; transition:transform .08s, filter .15s, box-shadow .15s;
+      box-shadow:0 8px 18px -6px rgba(10,140,132,.6);
+    }
+    .btn:hover{ filter:brightness(1.04); box-shadow:0 10px 22px -6px rgba(10,140,132,.7); }
+    .btn:active{ transform:translateY(1px); }
+    .error{
+      background:var(--danger-bg); color:var(--danger); border:1px solid #f3c7c3;
+      border-radius:10px; padding:11px 13px; font-size:13.5px; margin-bottom:18px;
+      display:flex; align-items:center; gap:9px;
+    }
+    .error svg{ width:17px; height:17px; flex:none; }
+    .note{ margin-top:24px; font-size:12.5px; color:var(--faint); line-height:1.5; display:flex; gap:8px; align-items:flex-start; }
+    .note svg{ width:15px; height:15px; flex:none; margin-top:1px; color:var(--teal-deep); }
+    @media (max-width:740px){
+      .auth{ grid-template-columns:1fr; max-width:440px; }
+      .brand-panel{ padding:34px 32px; }
+      .brand-body{ display:none; }
+      .form-panel{ padding:34px 30px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="auth">
+    <section class="brand-panel">
+      <div>
+        <div class="wordmark">frido<span class="dot">.</span></div>
+        <div class="brand-kicker">Carrier Efficiency Console</div>
+      </div>
+      <div class="brand-body">
+        <h2>Freedom to do more.</h2>
+        <p>Shipment performance &amp; partner scoring for the Frido operations team. Sign in to upload an export and explore carrier KPIs.</p>
+      </div>
+      <div class="brand-foot">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+        Authorised personnel only · Internal use
+      </div>
+    </section>
+
+    <section class="form-panel">
+      <h1>Sign in</h1>
+      <p class="form-sub">Frido internal team access</p>
+
+      {% if error %}
+      <div class="error">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v6M12 16.5v.5"/></svg>
+        <span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      <form method="post" action="{% url 'login' %}" autocomplete="off">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ next }}">
+        <div class="field">
+          <label for="username">Username</label>
+          <input type="text" id="username" name="username" value="{{ username|default:'' }}"
+                 autocomplete="username" required autofocus>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input type="password" id="password" name="password"
+                 autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn">Sign in &rarr;</button>
+      </form>
+
+      <div class="note">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z"/></svg>
+        <span>This is a restricted internal tool. Access attempts are rate-limited.</span>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
