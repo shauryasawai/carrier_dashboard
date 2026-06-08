@@ -8,7 +8,354 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{% static 'dashboard/styles.css' %}">
+  <style>
+    :root {
+  --paper: #f4f1ea;
+  --paper-2: #ebe7dc;
+  --ink: #1c1a17;
+  --ink-soft: #4a463e;
+  --ink-faint: #8a8377;
+  --line: #d8d2c4;
+  --line-strong: #c2bba9;
+  --accent: #b4451f;       /* burnt orange */
+  --accent-deep: #7a2d12;
+  --gold: #9a7b1f;
+  --good: #3d6b2e;
+  --warn: #a8741a;
+  --bad: #a8341f;
+  --card: #faf8f2;
+  --shadow: 0 1px 0 rgba(28,26,23,.04), 0 2px 8px rgba(28,26,23,.05);
+  --mono: 'Spline Sans Mono', monospace;
+  --sans: 'Archivo', sans-serif;
+  --display: 'Fraunces', serif;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: var(--sans);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+.grain {
+  position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .035;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* Masthead */
+.masthead {
+  position: relative; z-index: 1;
+  border-bottom: 2px solid var(--ink);
+  background: var(--paper);
+}
+.masthead-inner {
+  max-width: 1120px; margin: 0 auto; padding: 22px 32px;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px;
+}
+.brand { display: flex; align-items: center; gap: 16px; }
+.brand-mark {
+  font-size: 30px; color: var(--accent); line-height: 1;
+}
+.masthead h1 {
+  font-family: var(--display);
+  font-weight: 600; font-size: 27px; letter-spacing: -.02em;
+  font-optical-sizing: auto;
+}
+.tagline { color: var(--ink-faint); font-size: 13px; letter-spacing: .04em; text-transform: uppercase; }
+.masthead-meta { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); text-align: right; display: flex; align-items: center; gap: 16px; justify-content: flex-end; }
+.user-chip {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: var(--paper-2); border: 1px solid var(--line);
+  border-radius: 20px; padding: 4px 12px; font-size: 11.5px; color: var(--ink-soft);
+}
+.user-chip .user-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--good); flex: none; }
+.user-chip a { color: var(--accent); text-decoration: none; font-weight: 500; }
+.user-chip a:hover { text-decoration: underline; }
+@media (max-width: 760px) { .masthead-meta .user-chip { display: none; } }
+
+.wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 32px; }
+
+/* Upload */
+.upload-zone { padding: 60px 0; }
+.upload-card {
+  border: 2px dashed var(--line-strong); border-radius: 14px;
+  background: var(--card); padding: 56px 40px; text-align: center;
+  max-width: 560px; margin: 0 auto; transition: border-color .2s, background .2s;
+}
+.upload-card.drag { border-color: var(--accent); background: var(--paper-2); }
+.upload-icon { font-size: 46px; color: var(--accent); line-height: 1; }
+.upload-card h2 { font-family: var(--display); font-weight: 500; font-size: 24px; margin: 16px 0 8px; letter-spacing: -.01em; }
+.upload-card p { color: var(--ink-soft); max-width: 380px; margin: 0 auto 22px; }
+.upload-card code { font-family: var(--mono); background: var(--paper-2); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+.upload-hint { font-family: var(--mono); font-size: 13px; margin-top: 18px !important; min-height: 18px; }
+.upload-hint.ok { color: var(--good); }
+.upload-hint.err { color: var(--bad); }
+
+.btn-primary {
+  display: inline-block; cursor: pointer;
+  background: var(--ink); color: var(--paper);
+  font-family: var(--sans); font-weight: 500; font-size: 14px;
+  padding: 11px 26px; border-radius: 8px; border: none;
+  letter-spacing: .02em; transition: transform .1s, background .2s;
+}
+.btn-primary:hover { background: var(--accent-deep); }
+.btn-primary:active { transform: scale(.97); }
+
+.btn-ghost {
+  cursor: pointer; background: transparent; border: 1px solid var(--line-strong);
+  color: var(--ink-soft); font-family: var(--mono); font-size: 12px;
+  padding: 7px 14px; border-radius: 7px; margin-left: auto; transition: all .15s;
+}
+.btn-ghost:hover { border-color: var(--ink); color: var(--ink); }
+
+/* Filters */
+.filters {
+  display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;
+  padding-bottom: 22px; margin-bottom: 26px; border-bottom: 1px solid var(--line);
+}
+.filter label {
+  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+}
+.filter select {
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 8px 12px; min-width: 150px; cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%234a463e' stroke-width='1.6'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
+}
+.filter select:focus { outline: none; border-color: var(--accent); }
+.filter input[type="date"] {
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 7px 12px; min-width: 150px; cursor: pointer;
+}
+.filter input[type="date"]:focus { outline: none; border-color: var(--accent); }
+
+/* Multi-select checkbox dropdown (.msel) */
+.filter-wide { flex: 1 1 100%; }
+.hint-inline { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--ink-faint); font-size: 10px; }
+
+.msel { position: relative; }
+.msel-toggle {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; min-width: 150px; cursor: pointer; text-align: left;
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 8px 12px;
+  transition: border-color .15s;
+}
+.msel-toggle:hover { border-color: var(--ink-faint); }
+.msel.open .msel-toggle { border-color: var(--accent); }
+.msel.has-sel .msel-toggle { border-color: var(--accent); color: var(--accent-deep); }
+.msel-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msel-caret { color: var(--ink-faint); font-size: 11px; flex: none; transition: transform .15s; }
+.msel.open .msel-caret { transform: rotate(180deg); }
+
+.msel-menu {
+  position: absolute; z-index: 30; top: calc(100% + 4px); left: 0;
+  min-width: 100%; max-width: 320px; max-height: 280px; overflow-y: auto;
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; box-shadow: 0 6px 20px rgba(28,26,23,.14);
+  padding: 5px;
+}
+.msel-opt {
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
+  padding: 7px 9px; border-radius: 6px; user-select: none; white-space: nowrap;
+}
+.msel-opt:hover { background: var(--paper-2); }
+.msel-opt input { accent-color: var(--accent); margin: 0; cursor: pointer; flex: none; }
+.msel-opt span { overflow: hidden; text-overflow: ellipsis; }
+.msel-opt:has(input:checked) { color: var(--accent-deep); font-weight: 500; }
+
+/* Stat cards */
+.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 28px; }
+.stat {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.stat::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+.stat-label { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
+.stat-value { font-family: var(--display); font-weight: 500; font-size: 30px; letter-spacing: -.02em; margin-top: 4px; font-optical-sizing: auto; }
+.stat-value .unit { font-size: 15px; color: var(--ink-faint); font-family: var(--mono); margin-left: 2px; }
+
+/* Panels */
+.panel {
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); margin-bottom: 26px; overflow: hidden;
+}
+.panel-head {
+  padding: 18px 22px 14px; border-bottom: 1px solid var(--line);
+  display: flex; align-items: baseline; gap: 12px;
+}
+.panel-head h3 { font-family: var(--display); font-weight: 500; font-size: 19px; letter-spacing: -.01em; }
+.panel-sub { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+
+/* Per-panel search box (destination / lane tables) */
+.panel-search {
+  margin-left: auto; align-self: center;
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
+  background: var(--paper); border: 1px solid var(--line-strong);
+  border-radius: 7px; padding: 6px 11px; width: 210px; max-width: 45%;
+  transition: border-color .15s, background .15s;
+}
+.panel-search:focus { outline: none; border-color: var(--accent); background: var(--card); }
+.panel-search::placeholder { color: var(--ink-faint); }
+
+/* Score table */
+.table-scroll { overflow-x: auto; }
+.score-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.score-table th {
+  text-align: left; font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-faint); font-weight: 500;
+  padding: 12px 16px; border-bottom: 1px solid var(--line); white-space: nowrap;
+}
+.score-table td { padding: 13px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.score-table tbody tr:last-child td { border-bottom: none; }
+.score-table tbody tr:hover { background: var(--paper-2); }
+.carrier-name { font-weight: 600; font-family: var(--sans); }
+.rank { font-family: var(--mono); color: var(--ink-faint); font-size: 12px; width: 28px; }
+.num { font-family: var(--mono); }
+.score-cell { display: flex; align-items: center; gap: 10px; min-width: 130px; }
+.score-val { font-family: var(--mono); font-weight: 600; font-size: 15px; min-width: 38px; }
+.score-bar { flex: 1; height: 7px; background: var(--paper-2); border-radius: 4px; overflow: hidden; min-width: 50px; }
+.score-bar > span { display: block; height: 100%; border-radius: 4px; }
+.g-good { color: var(--good); } .b-good { background: var(--good); }
+.g-warn { color: var(--warn); } .b-warn { background: var(--warn); }
+.g-bad  { color: var(--bad);  } .b-bad  { background: var(--bad); }
+.g-na { color: var(--ink-faint); }
+
+/* Product breakdown \u2014 card grid */
+.product-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px; padding: 18px 22px 22px;
+}
+.product-empty {
+  padding: 40px 22px; text-align: center; color: var(--ink-faint);
+  font-family: var(--mono); font-size: 13px;
+}
+.pc-card {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: 12px; padding: 14px 16px 16px; display: flex; flex-direction: column;
+}
+.pc-head {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--line); padding-bottom: 10px;
+}
+.pc-head { position: relative; }
+.pc-rank {
+  font-family: var(--mono); font-size: 11px; color: #fff;
+  background: var(--accent, #b4451f);
+  width: 20px; height: 20px; border-radius: 6px; display: inline-flex;
+  align-items: center; justify-content: center; flex: none;
+}
+.pc-name {
+  font-family: var(--display); font-weight: 500; font-size: 16px;
+  letter-spacing: -.01em; flex: 1; min-width: 0;
+}
+.pc-count { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
+.pc-count em { font-style: normal; color: var(--ink-faint); font-size: 11px; margin-left: 2px; }
+.pc-share {
+  height: 5px; background: var(--paper-2); border-radius: 3px; overflow: hidden; margin-bottom: 12px;
+}
+.pc-share > span { display: block; height: 100%; border-radius: 3px; }
+.pc-section { margin-top: 4px; }
+.pc-section + .pc-section { margin-top: 12px; }
+.pc-section-title {
+  font-family: var(--mono); font-size: 10px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 7px;
+}
+.pc-row {
+  display: grid; grid-template-columns: 1fr 70px auto; align-items: center;
+  gap: 8px; margin-bottom: 5px;
+}
+.pc-row-label {
+  font-size: 12.5px; color: var(--ink-soft); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.pc-bar { height: 6px; background: var(--paper-2); border-radius: 3px; overflow: hidden; }
+.pc-bar-fill { display: block; height: 100%; border-radius: 3px; }
+.pc-row-val {
+  font-family: var(--mono); font-size: 12px; color: var(--ink); text-align: right; white-space: nowrap;
+}
+.pc-row-val i { font-style: normal; color: var(--ink-faint); font-size: 10.5px; margin-left: 5px; }
+.pc-muted .pc-row-label, .pc-muted .pc-row-val { color: var(--ink-faint); font-style: italic; }
+@media (max-width: 520px) {
+  .product-grid { grid-template-columns: 1fr; padding: 14px; }
+}
+
+/* Matrix tables (outcome by carrier account) */
+.matrix-table { table-layout: auto; }
+.matrix-table th, .matrix-table td { text-align: right; }
+/* First two columns (rank + account) stay left-aligned */
+.matrix-table th:nth-child(1), .matrix-table td:nth-child(1),
+.matrix-table th:nth-child(2), .matrix-table td:nth-child(2) { text-align: left; }
+.matrix-table td.num, .matrix-table td.pct {
+  font-variant-numeric: tabular-nums; font-family: var(--mono);
+}
+.matrix-table th:nth-child(n+3) { width: 1%; }   /* numeric cols shrink to content */
+.matrix-table td.carrier-name { white-space: nowrap; width: 100%; } /* account col takes slack */
+.matrix-table th.rot {
+  font-size: 10px; letter-spacing: .02em; max-width: 64px;
+  white-space: normal; line-height: 1.2; vertical-align: bottom;
+}
+
+/* Empty-state cell (warehouse-carrier table with no data for current filters) */
+.score-table td.empty {
+  padding: 30px 16px; text-align: center;
+  font-family: var(--mono); font-size: 13px; color: var(--ink-faint);
+}
+
+/* Partner-performance-by-warehouse controls */
+.whc-controls {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px 18px;
+  padding: 16px 22px; border-bottom: 1px solid var(--line);
+  background: var(--paper-2);
+}
+.whc-pick-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.whc-controls select {
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 8px 12px; min-width: 240px; cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%234a463e' stroke-width='1.6'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
+}
+.whc-controls select:focus { outline: none; border-color: var(--accent); }
+.whc-note {
+  flex: 1 1 260px; font-size: 12px; line-height: 1.45; color: var(--ink-faint);
+}
+.whc-note em { font-style: italic; color: var(--ink-soft); }
+
+/* Charts */
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 26px; }
+.chart-box { position: relative; height: var(--h, 300px); padding: 16px 20px 20px; }
+.mix-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 8px; }
+.mix-cell { padding: 12px; }
+.mix-label { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); display: block; padding-left: 8px; }
+
+.footer { position: relative; z-index: 1; text-align: center; padding: 30px; color: var(--ink-faint); font-family: var(--mono); font-size: 12px; }
+
+@media (max-width: 760px) {
+  .masthead-inner, .wrap { padding-left: 18px; padding-right: 18px; }
+  .chart-grid { grid-template-columns: 1fr; }
+  .mix-grid { grid-template-columns: 1fr; }
+  .masthead-meta { display: none; }
+  .whc-controls select { min-width: 0; width: 100%; }
+  .whc-note { flex-basis: 100%; }
+}
+  </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 </head>
 <body>
@@ -261,6 +608,791 @@
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
   </script>
-  <script src="{% static 'dashboard/app.js' %}"></script>
+  <script>
+    (function () {
+  "use strict";
+
+  var charts = [];
+  var loaded = false;
+  var lastReport = null;       // keep the latest report for the warehouse picker
+  var whcSelection = "";       // currently selected warehouse in the partner-per-warehouse panel
+
+  var $ = function (id) { return document.getElementById(id); };
+
+  function fmtH(v) {
+    if (v == null || isNaN(v)) return "\u2014";
+    if (v >= 24) return (v / 24).toFixed(1) + "d";
+    return v.toFixed(1) + "h";
+  }
+  function fmtPct(v) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(1) + "%"; }
+  function fmtNum(v, dp) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(dp == null ? 2 : dp); }
+
+  function scoreClass(s) {
+    if (s == null) return "na";
+    if (s >= 75) return "good";
+    if (s >= 50) return "warn";
+    return "bad";
+  }
+
+  function setHint(msg, kind) {
+    var el = $("uploadHint");
+    el.textContent = msg || "";
+    el.className = "upload-hint" + (kind ? " " + kind : "");
+  }
+
+  function destroyCharts() {
+    charts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
+    charts = [];
+  }
+
+  function post(formData) {
+    return fetch(window.PROCESS_URL, {
+      method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" },
+      body: formData
+    })
+      .then(function (r) {
+        // Session expired / not signed in -> bounce to the login page.
+        if (r.status === 401 || r.status === 403) {
+          window.location.href = window.LOGIN_URL || "/login/";
+          throw new Error("Your session has expired. Redirecting to sign in…");
+        }
+        return r.json().then(function (body) {
+          if (!r.ok) throw new Error(body.error || "Request failed");
+          return body;
+        });
+      });
+  }
+
+  function currentFilters(fd) {
+    fd = fd || new FormData();
+    // Each .msel is a multi-select checkbox dropdown; append one field
+    // (named by data-name) per checked box. No boxes checked = field omitted
+    // = the backend treats it as "all".
+    document.querySelectorAll(".msel").forEach(function (m) {
+      var name = m.getAttribute("data-name");
+      m.querySelectorAll("input[type=checkbox]:checked").forEach(function (cb) {
+        fd.append(name, cb.value);
+      });
+    });
+    fd.append("date_from", $("fDateFrom").value);
+    fd.append("date_to", $("fDateTo").value);
+    return fd;
+  }
+
+  function handleFile(file) {
+    if (!file) return;
+    if (!/\.(xlsx|xlsm|csv|tsv)$/i.test(file.name)) {
+      setHint("Please choose a .xlsx or .csv file.", "err");
+      return;
+    }
+    setHint("Reading " + file.name + "\u2026", null);
+    var fd = currentFilters();
+    fd.append("file", file);
+    post(fd)
+      .then(function (report) {
+        loaded = true;
+        setHint("Loaded " + report.summary.total.toLocaleString() + " shipments.", "ok");
+        $("uploadZone").hidden = true;
+        $("dashboard").hidden = false;
+        $("metaStatus").textContent = file.name + " \u00b7 " + report.summary.total.toLocaleString() + " rows";
+        render(report);
+      })
+      .catch(function (err) { setHint(err.message, "err"); });
+  }
+
+  function refilter() {
+    if (!loaded) return;
+    post(currentFilters()).then(render).catch(function (err) {
+      $("metaStatus").textContent = "Error: " + err.message;
+    });
+  }
+
+  // Each dynamic dropdown is filled independently and only the FIRST time it
+  // actually receives options. This way a partial first response (e.g. only
+  // "zones") never permanently blocks the others from filling on a later one.
+  var filled = { zone: false, account: false, warehouse: false };
+  var dateBoundsSet = false;
+
+  function populateOptions(filters) {
+    filters = filters || {};
+
+    fillMsel("zone", filters.zones, function (z) {
+      return { value: z, text: z };
+    });
+    fillMsel("account", filters.accounts, function (a) {
+      return { value: a.value, text: a.label + " (" + (a.n || 0).toLocaleString() + ")" };
+    });
+    fillMsel("warehouse", filters.warehouses, function (w) {
+      return { value: w.value, text: w.label + " (" + (w.n || 0).toLocaleString() + ")" };
+    });
+
+    // Bound the date pickers to the data's pickup range (once).
+    if (!dateBoundsSet && (filters.date_min || filters.date_max)) {
+      var from = $("fDateFrom"), to = $("fDateTo");
+      if (filters.date_min) { from.min = filters.date_min; to.min = filters.date_min; }
+      if (filters.date_max) { from.max = filters.date_max; to.max = filters.date_max; }
+      dateBoundsSet = true;
+    }
+  }
+
+  // Inject checkbox options into a dynamic .msel dropdown (warehouse/account/zone).
+  function fillMsel(name, items, mapFn) {
+    if (filled[name]) return;
+    items = items || [];
+    if (!items.length) return;
+    var menu = document.querySelector('.msel[data-name="' + name + '"] .msel-menu');
+    if (!menu) return;
+    items.forEach(function (it) {
+      var o = mapFn(it);
+      var lab = document.createElement("label");
+      lab.className = "msel-opt";
+      var inp = document.createElement("input");
+      inp.type = "checkbox"; inp.value = o.value;
+      var sp = document.createElement("span");
+      sp.textContent = o.text;
+      lab.appendChild(inp); lab.appendChild(sp);
+      menu.appendChild(lab);
+    });
+    filled[name] = true;
+  }
+
+  // Still used by the warehouse-carrier picker (a single <select>).
+  function addOption(sel, value, text) {
+    var o = document.createElement("option");
+    o.value = value; o.textContent = text;
+    sel.appendChild(o);
+  }
+
+  // ---- Multi-select dropdown (.msel) behaviour --------------------------
+
+  // Update a dropdown's button label: "All", the single picked option, or
+  // "N selected".
+  function mselText(m) {
+    var checked = m.querySelectorAll("input[type=checkbox]:checked");
+    var txt = m.querySelector(".msel-text");
+    if (!checked.length) {
+      txt.textContent = m.getAttribute("data-all") || "All";
+      m.classList.remove("has-sel");
+      return;
+    }
+    m.classList.add("has-sel");
+    if (checked.length === 1) {
+      var sp = checked[0].parentNode.querySelector("span");
+      txt.textContent = sp ? sp.textContent : checked[0].value;
+    } else {
+      txt.textContent = checked.length + " selected";
+    }
+  }
+
+  function closeAllMsel(except) {
+    document.querySelectorAll(".msel.open").forEach(function (m) {
+      if (m !== except) {
+        m.classList.remove("open");
+        var menu = m.querySelector(".msel-menu");
+        if (menu) menu.hidden = true;
+      }
+    });
+  }
+
+  function render(report) {
+    lastReport = report;
+    populateOptions(report.filters);
+    renderStats(report.summary);
+    renderFormula(report.weights);
+    renderTable(report.carriers);
+    renderStatusMatrix(report);
+    renderProducts(report);
+    renderWarehouses(report);
+    renderCities(report);
+    renderDestinations(report);
+    renderLanes(report);
+    renderWarehouseCarrierPanel(report);
+    destroyCharts();
+    renderCharts(report);
+    renderWarehouseChart(report.warehouses);
+    renderDestChart(report.destinations);
+    renderWhcChart();
+  }
+
+  function renderStats(s) {
+    var cards = [
+      ["Shipments", s.total.toLocaleString(), ""],
+      ["Delivery success", fmtPct(s.success_rate), ""],
+      ["Avg pickup\u2192OFD1", fmtH(s.avg_p2o), ""],
+      ["Avg pickup\u2192delivery", fmtH(s.avg_p2d), ""],
+      ["Carriers", String(s.carriers), ""],
+      ["Warehouses", String(s.warehouses), ""]
+    ];
+    $("statRow").innerHTML = cards.map(function (c) {
+      return '<div class="stat"><div class="stat-label">' + c[0] +
+        '</div><div class="stat-value">' + c[1] + '</div></div>';
+    }).join("");
+  }
+
+  function renderFormula(w) {
+    $("scoreFormula").textContent =
+      "Weighted 0\u2013100 \u00b7 " + w.p2o + "% P\u2192OFD1 \u00b7 " + w.p2d +
+      "% P\u2192deliv \u00b7 " + w.succ + "% success \u00b7 " + w.fa +
+      "% 1st-attempt \u00b7 " + w.att + "% avg attempts";
+  }
+
+  // Shared KPI cells used by carrier / warehouse / city / whc tables.
+  function kpiCells(a) {
+    return '<td class="num">' + a.n.toLocaleString() + "</td>" +
+      '<td class="num">' + fmtH(a.p2o) + "</td>" +
+      '<td class="num">' + fmtH(a.p2d) + "</td>" +
+      '<td class="num">' + fmtPct(a.success_rate) + "</td>" +
+      '<td class="num">' + fmtPct(a.first_attempt_rate) + "</td>" +
+      '<td class="num">' + fmtNum(a.avg_attempts, 2) + "</td>";
+  }
+
+  function scoreCellHtml(score, minN) {
+    var cls = scoreClass(score);
+    if (score == null) {
+      var title = minN ? ' title="Below ' + minN + '-shipment threshold"' : "";
+      return '<span class="g-na"' + title + ">\u2014</span>";
+    }
+    var bar = Math.round(score);
+    return '<div class="score-cell"><span class="score-val g-' + cls + '">' +
+      score.toFixed(0) + '</span><span class="score-bar"><span class="b-' + cls +
+      '" style="width:' + bar + '%"></span></span></div>';
+  }
+
+  function renderTable(carriers) {
+    var head = "<thead><tr><th></th><th>Carrier</th><th>Score</th><th>Shipments</th>" +
+      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+    var rows = carriers.map(function (a, i) {
+      return "<tr>" +
+        '<td class="rank">' + (i + 1) + "</td>" +
+        '<td class="carrier-name">' + esc(a.carrier) + "</td>" +
+        "<td>" + scoreCellHtml(a.score) + "</td>" +
+        kpiCells(a) +
+        "</tr>";
+    }).join("");
+    $("scoreTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function esc(s) {
+    return String(s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  function renderWarehouses(report) {
+    var wh = report.warehouses;
+    var minN = report.warehouse_min_n;
+    var total = report.warehouse_total != null ? report.warehouse_total : wh.length;
+    var topN = report.warehouse_top_n;
+    var scored = wh.filter(function (w) { return w.score != null; }).length;
+    var lead = (topN != null && total > wh.length)
+      ? ("top " + wh.length + " of " + total.toLocaleString() + " pickup pincodes")
+      : (total.toLocaleString() + " pickup pincodes");
+    $("whSub").textContent =
+      lead + " \u00b7 " + scored + " scored (\u2265" + minN +
+      " shipments) \u00b7 ranked by volume";
+
+    var head = "<thead><tr><th></th><th>Warehouse</th><th>Score</th><th>Shipments</th>" +
+      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+    var rows = wh.map(function (w, i) {
+      return "<tr>" +
+        '<td class="rank">' + (i + 1) + "</td>" +
+        '<td class="carrier-name">' + esc(w.warehouse || w.pickup_pin) + "</td>" +
+        "<td>" + scoreCellHtml(w.score, minN) + "</td>" +
+        kpiCells(w) +
+        "</tr>";
+    }).join("");
+    $("whTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function renderCities(report) {
+    var cities = report.cities || [];
+    var minN = report.warehouse_min_n;
+    var scored = cities.filter(function (c) { return c.score != null; }).length;
+    $("citySub").textContent =
+      cities.length + " cities/regions \u00b7 " + scored + " scored (\u2265" + minN +
+      " shipments) \u00b7 ranked by volume";
+
+    var head = "<thead><tr><th></th><th>City / region</th><th>Score</th><th>Shipments</th>" +
+      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+    var rows = cities.map(function (c, i) {
+      return "<tr>" +
+        '<td class="rank">' + (i + 1) + "</td>" +
+        '<td class="carrier-name">' + esc(c.city) + "</td>" +
+        "<td>" + scoreCellHtml(c.score, minN) + "</td>" +
+        kpiCells(c) +
+        "</tr>";
+    }).join("");
+    $("cityTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  // Cap how many search matches we render at once (keeps the DOM light when a
+  // short query matches thousands of rows).
+  var SEARCH_CAP = 250;
+
+  // Shared renderer for the destination / lane breakdown tables. Both receive
+  // the FULL list from the backend: with no query we show the top-N by volume;
+  // with a query we filter the whole list (case-insensitive substring) and
+  // keep each row's true volume rank.
+  function renderRollup(opts) {
+    var all = opts.items || [];
+    var minN = opts.minN;
+    var topN = opts.topN;
+    var total = opts.total != null ? opts.total : all.length;
+    var q = (($(opts.searchId).value) || "").trim().toLowerCase();
+
+    // True volume rank (list is already sorted by volume desc).
+    var rankOf = {};
+    all.forEach(function (d, i) { rankOf[d[opts.labelKey]] = i + 1; });
+
+    var matches = q
+      ? all.filter(function (d) {
+          return String(d[opts.labelKey] || "").toLowerCase().indexOf(q) !== -1;
+        })
+      : all.slice(0, topN || all.length);
+    var shown = matches.slice(0, SEARCH_CAP);
+
+    if (q) {
+      $(opts.subId).textContent =
+        matches.length.toLocaleString() + " match" + (matches.length === 1 ? "" : "es") +
+        " of " + total.toLocaleString() + " " + opts.noun +
+        (matches.length > shown.length ? " · showing first " + shown.length : "");
+    } else {
+      var scored = all.filter(function (d) { return d.score != null; }).length;
+      var lead = (topN != null && total > shown.length)
+        ? ("top " + shown.length + " of " + total.toLocaleString() + " " + opts.noun)
+        : (total.toLocaleString() + " " + opts.noun);
+      $(opts.subId).textContent =
+        lead + " · " + scored + " scored (≥" + minN + " shipments) · " +
+        opts.tail + " · ranked by volume";
+    }
+
+    var head = "<thead><tr><th></th><th>" + opts.colLabel + "</th><th>Score</th><th>Shipments</th>" +
+      "<th>P→OFD1</th><th>P→Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+
+    if (!shown.length) {
+      $(opts.tableId).innerHTML = head +
+        '<tbody><tr><td class="empty" colspan="9">No ' + opts.noun.replace(/s$/, "") +
+        ' matches “' + esc(q) + '”.</td></tr></tbody>';
+      return;
+    }
+
+    var rows = shown.map(function (d) {
+      return "<tr>" +
+        '<td class="rank">' + (rankOf[d[opts.labelKey]] || "") + "</td>" +
+        '<td class="carrier-name">' + esc(d[opts.labelKey]) + "</td>" +
+        "<td>" + scoreCellHtml(d.score, minN) + "</td>" +
+        kpiCells(d) +
+        "</tr>";
+    }).join("");
+    $(opts.tableId).innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function renderDestinations(report) {
+    renderRollup({
+      items: report.destinations, total: report.destination_total,
+      topN: report.destination_top_n, minN: report.warehouse_min_n,
+      labelKey: "drop_city", noun: "destinations", colLabel: "Destination",
+      tail: "by drop city", subId: "destSub", tableId: "destTable",
+      searchId: "destSearch",
+    });
+  }
+
+  function renderLanes(report) {
+    renderRollup({
+      items: report.lanes, total: report.lane_total,
+      topN: report.lane_top_n, minN: report.lane_min_n,
+      labelKey: "lane", noun: "lanes", colLabel: "Lane",
+      tail: "pickup city → drop city", subId: "laneSub", tableId: "laneTable",
+      searchId: "laneSearch",
+    });
+  }
+
+  // ---- Outcome & pendency matrices --------------------------------------
+
+  // Color a percentage cell: green for the "good" outcome (Delivered),
+  // amber/red ramp for problem outcomes by magnitude.
+  function pctCell(value, kind) {
+    if (value == null) return '<td class="num pct">\u2014</td>';
+    var cls = "";
+    if (kind === "good") {
+      cls = value >= 90 ? "g-good" : value >= 75 ? "g-warn" : "g-bad";
+    } else {
+      // problem outcome: higher = worse
+      cls = value >= 15 ? "g-bad" : value >= 5 ? "g-warn" : "";
+    }
+    return '<td class="num pct ' + cls + '">' + value.toFixed(1) + "%</td>";
+  }
+
+  function renderStatusMatrix(report) {
+    var matrix = report.status_matrix || [];
+    var outcomes = report.outcomes || ["Delivered", "FWD Pendency", "RTO", "Cancelled"];
+    var totalN = matrix.reduce(function (a, r) { return a + r.n; }, 0);
+    $("statusSub").textContent =
+      matrix.length + " carrier accounts \u00b7 " + totalN.toLocaleString() +
+      " shipments \u00b7 row % of each account's own total";
+
+    var head = "<thead><tr><th></th><th>Carrier account</th><th>Shipments</th>";
+    outcomes.forEach(function (o) { head += "<th>" + esc(o) + "</th>"; });
+    head += "</tr></thead>";
+
+    var rows = matrix.map(function (r, i) {
+      var cells = "";
+      outcomes.forEach(function (o) {
+        var kind = (o === "Delivered") ? "good" : "bad";
+        cells += pctCell(r.pct[o], kind);
+      });
+      return "<tr>" +
+        '<td class="rank">' + (i + 1) + "</td>" +
+        '<td class="carrier-name">' + esc(r.account) + "</td>" +
+        '<td class="num">' + r.n.toLocaleString() + "</td>" +
+        cells + "</tr>";
+    }).join("");
+    $("statusTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  // ---- Product breakdown ------------------------------------------------
+
+  function renderProducts(report) {
+    var products = report.products || [];
+    var total = products.reduce(function (a, c) { return a + c.n; }, 0);
+    var grid = $("productGrid");
+
+    if (!report.has_products) {
+      $("productSub").textContent =
+        "This file has no 'Item Names' column \u2014 product breakdown unavailable.";
+      grid.innerHTML =
+        '<div class="product-empty">Upload an export that includes the Item Names column to see product categories.</div>';
+      return;
+    }
+    $("productSub").textContent =
+      products.length + " categories \u00b7 " + total.toLocaleString() +
+      " shipments \u00b7 grouped from product names";
+
+    // Color cycle for category accents.
+    var ACCENTS = ["#b4451f", "#3d6b2e", "#9a7b1f", "#4a463e", "#6b8aa0", "#7a2d12"];
+
+    grid.innerHTML = products.map(function (c, i) {
+      var accent = ACCENTS[i % ACCENTS.length];
+      var pct = total ? (c.n / total * 100) : 0;
+      var maxSub = c.subs.reduce(function (m, s) { return Math.max(m, s.n); }, 0) || 1;
+      var maxAcct = (c.accounts || []).reduce(function (m, a) { return Math.max(m, a.n); }, 0) || 1;
+
+      // Subcategory rows with proportional bars.
+      var subHtml = c.subs.map(function (s) {
+        var w = Math.round(s.n / maxSub * 100);
+        var sp = c.n ? (s.n / c.n * 100) : 0;
+        return '<div class="pc-row">' +
+          '<span class="pc-row-label" title="' + esc(s.subcategory) + '">' + esc(s.subcategory) + "</span>" +
+          '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '"></span></span>' +
+          '<span class="pc-row-val">' + s.n.toLocaleString() + '<i>' + sp.toFixed(0) + "%</i></span>" +
+          "</div>";
+      }).join("");
+
+      // Top carrier accounts (cap at 6, roll the rest into "others").
+      var accts = (c.accounts || []).slice();
+      var shown = accts.slice(0, 6);
+      var rest = accts.slice(6);
+      if (rest.length) {
+        var restN = rest.reduce(function (a, x) { return a + x.n; }, 0);
+        shown.push({ account: "+" + rest.length + " others", n: restN, _muted: true });
+      }
+      var acctHtml = shown.map(function (a) {
+        var w = Math.round(a.n / maxAcct * 100);
+        var ap = c.n ? (a.n / c.n * 100) : 0;
+        return '<div class="pc-row' + (a._muted ? " pc-muted" : "") + '">' +
+          '<span class="pc-row-label" title="' + esc(a.account) + '">' + esc(a.account) + "</span>" +
+          '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '99"></span></span>' +
+          '<span class="pc-row-val">' + a.n.toLocaleString() + '<i>' + ap.toFixed(0) + "%</i></span>" +
+          "</div>";
+      }).join("");
+
+      return '<div class="pc-card">' +
+          '<div class="pc-head" style="--accent:' + accent + '">' +
+            '<span class="pc-rank">' + (i + 1) + "</span>" +
+            '<span class="pc-name">' + esc(c.category) + "</span>" +
+            '<span class="pc-count">' + c.n.toLocaleString() +
+              ' <em>' + pct.toFixed(1) + "%</em></span>" +
+          "</div>" +
+          '<div class="pc-share"><span style="width:' + pct.toFixed(1) + '%;background:' + accent + '"></span></div>' +
+          '<div class="pc-section">' +
+            '<div class="pc-section-title">Subcategories</div>' + subHtml +
+          "</div>" +
+          '<div class="pc-section">' +
+            '<div class="pc-section-title">Shipped by</div>' + acctHtml +
+          "</div>" +
+        "</div>";
+    }).join("");
+  }
+
+  // Group the flat warehouse_carrier list into { pin: { label, rows[] } }.
+  function groupWhc(report) {
+    var groups = {};
+    var order = [];
+    (report.warehouse_carrier || []).forEach(function (r) {
+      var pin = r.pickup_pin;
+      if (!groups[pin]) {
+        groups[pin] = { pin: pin, label: r.warehouse || pin, total: r.wh_total, rows: [] };
+        order.push(pin);
+      }
+      groups[pin].rows.push(r);
+    });
+    // Order warehouses by total volume desc.
+    order.sort(function (a, b) { return (groups[b].total || 0) - (groups[a].total || 0); });
+    return { groups: groups, order: order };
+  }
+
+  function renderWarehouseCarrierPanel(report) {
+    var g = groupWhc(report);
+    var pick = $("whcPick");
+
+    // (Re)build the warehouse picker each render so it tracks the active filter set.
+    pick.innerHTML = "";
+    g.order.forEach(function (pin) {
+      var grp = g.groups[pin];
+      addOption(pick, pin, grp.label + " (" + (grp.total || 0).toLocaleString() + ")");
+    });
+
+    // Preserve the previous selection if it still exists, else default to the
+    // highest-volume warehouse.
+    if (!whcSelection || !g.groups[whcSelection]) {
+      whcSelection = g.order.length ? g.order[0] : "";
+    }
+    if (whcSelection) pick.value = whcSelection;
+
+    var minN = report.wh_carrier_min_n;
+    var nWh = g.order.length;
+    $("whcSub").textContent =
+      nWh + " warehouse" + (nWh === 1 ? "" : "s") +
+      " \u00b7 carriers scored against each other within each (\u2265" + minN + " shipments per cell)";
+
+    renderWhcTable(report);
+  }
+
+  function renderWhcTable(report) {
+    var g = groupWhc(report);
+    var grp = g.groups[whcSelection];
+    var minN = report.wh_carrier_min_n;
+    if (!grp) {
+      $("whcTable").innerHTML =
+        '<tbody><tr><td class="empty">No warehouse data for the current filters.</td></tr></tbody>';
+      return;
+    }
+
+    var head = "<thead><tr><th></th><th>Carrier</th><th>Score</th><th>Shipments</th><th>Share</th>" +
+      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+    var rows = grp.rows.map(function (a, i) {
+      return "<tr>" +
+        '<td class="rank">' + (i + 1) + "</td>" +
+        '<td class="carrier-name">' + esc(a.carrier) + "</td>" +
+        "<td>" + scoreCellHtml(a.score, minN) + "</td>" +
+        '<td class="num">' + a.n.toLocaleString() + "</td>" +
+        '<td class="num">' + fmtPct(a.wh_share) + "</td>" +
+        '<td class="num">' + fmtH(a.p2o) + "</td>" +
+        '<td class="num">' + fmtH(a.p2d) + "</td>" +
+        '<td class="num">' + fmtPct(a.success_rate) + "</td>" +
+        '<td class="num">' + fmtPct(a.first_attempt_rate) + "</td>" +
+        '<td class="num">' + fmtNum(a.avg_attempts, 2) + "</td>" +
+        "</tr>";
+    }).join("");
+    $("whcTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function renderWhcChart() {
+    if (!lastReport) return;
+    if (whcChart) { try { whcChart.destroy(); } catch (e) {} whcChart = null; }
+    var g = groupWhc(lastReport);
+    var grp = g.groups[whcSelection];
+    if (!grp) return;
+    var labels = grp.rows.map(function (a) { return a.carrier; });
+    // Bars = score where available, else 0; colour by score band.
+    whcChart = new Chart($("cWhc"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          label: "Score",
+          data: grp.rows.map(function (a) { return a.score == null ? 0 : a.score; }),
+          backgroundColor: grp.rows.map(function (a) { return scoreColor(a.score); }),
+          borderRadius: 3, barThickness: "flex", maxBarThickness: 24
+        }]
+      },
+      options: hbarOpts()
+    });
+  }
+
+  function scoreColor(s) {
+    if (s == null) return "#b4b2a9";
+    if (s >= 75) return "#3d6b2e";
+    if (s >= 50) return "#9a7b1f";
+    return "#b4451f";
+  }
+
+  // -----------------------------------------------------------------------
+
+  function renderWarehouseChart(wh) {
+    // Top warehouses by volume, P->delivery TAT as the bar.
+    var top = wh.slice(0, 12);
+    var labels = top.map(function (w) { return w.warehouse || w.pickup_pin; });
+    charts.push(new Chart($("cWh"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          data: top.map(function (w) { return w.p2d == null ? 0 : w.p2d; }),
+          backgroundColor: top.map(function (w) {
+            return w.score == null ? "#b4b2a9" : "#9a7b1f";
+          }),
+          borderRadius: 3, barThickness: "flex", maxBarThickness: 22
+        }]
+      },
+      options: hbarOpts()
+    }));
+  }
+
+  function renderDestChart(dest) {
+    // Top destinations by volume, P->delivery TAT as the bar (blue accent to
+    // distinguish from the warehouse/pickup-side chart).
+    if (!dest) return;
+    var top = dest.slice(0, 12);
+    var labels = top.map(function (d) { return d.drop_city; });
+    charts.push(new Chart($("cDest"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [{
+          data: top.map(function (d) { return d.p2d == null ? 0 : d.p2d; }),
+          backgroundColor: top.map(function (d) {
+            return d.score == null ? "#b4b2a9" : "#6b8aa0";
+          }),
+          borderRadius: 3, barThickness: "flex", maxBarThickness: 22
+        }]
+      },
+      options: hbarOpts()
+    }));
+  }
+
+  var INK = "#1c1a17", FAINT = "#8a8377", LINE = "rgba(28,26,23,.08)";
+  var PALETTE = ["#b4451f", "#3d6b2e", "#9a7b1f", "#4a463e", "#7a2d12", "#6b8aa0"];
+  var whcChart = null;
+
+  function hbarOpts() {
+    return {
+      indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: LINE }, ticks: { color: FAINT, font: { family: "Spline Sans Mono" } } },
+        y: { grid: { display: false }, ticks: { color: INK, font: { family: "Archivo", size: 12 } } }
+      }
+    };
+  }
+  function doughnutOpts() {
+    return {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: "bottom", labels: { color: FAINT, boxWidth: 10, font: { family: "Spline Sans Mono", size: 11 } } } },
+      cutout: "58%"
+    };
+  }
+
+  function renderCharts(report) {
+    var c = report.carriers;
+    var labels = c.map(function (a) { return a.carrier; });
+
+    charts.push(new Chart($("cScore"), {
+      type: "bar",
+      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.score == null ? 0 : a.score; }), backgroundColor: "#b4451f", borderRadius: 3, barThickness: "flex", maxBarThickness: 22 }] },
+      options: hbarOpts()
+    }));
+
+    charts.push(new Chart($("cTat"), {
+      type: "bar",
+      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.p2d == null ? 0 : a.p2d; }), backgroundColor: "#3d6b2e", borderRadius: 3, barThickness: "flex", maxBarThickness: 22 }] },
+      options: hbarOpts()
+    }));
+
+    mixChart("cWeight", report.mix.weight);
+    mixChart("cPay", report.mix.payment);
+    mixChart("cDtype", report.mix.delivery_type);
+  }
+
+  function mixChart(id, obj) {
+    var labels = Object.keys(obj);
+    var data = labels.map(function (k) { return obj[k]; });
+    charts.push(new Chart($(id), {
+      type: "doughnut",
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: PALETTE, borderColor: "#faf8f2", borderWidth: 2 }] },
+      options: doughnutOpts()
+    }));
+  }
+
+  // Wiring
+  $("fileInput").addEventListener("change", function (e) { handleFile(e.target.files[0]); });
+  ["fDateFrom", "fDateTo"].forEach(function (id) {
+    $(id).addEventListener("change", refilter);
+  });
+
+  // Multi-select dropdowns: open/close on the toggle, close others, and close
+  // any open menu when clicking outside. Delegated so dynamically-injected
+  // options work too.
+  document.addEventListener("click", function (e) {
+    var toggle = e.target.closest(".msel-toggle");
+    if (toggle) {
+      var m = toggle.parentNode;
+      var willOpen = !m.classList.contains("open");
+      closeAllMsel(m);
+      m.classList.toggle("open", willOpen);
+      m.querySelector(".msel-menu").hidden = !willOpen;
+      return;
+    }
+    if (e.target.closest(".msel-menu")) return;  // clicks inside stay open
+    closeAllMsel(null);
+  });
+
+  // Any checkbox toggle inside a dropdown: refresh its label and refilter.
+  document.addEventListener("change", function (e) {
+    var cb = e.target;
+    if (cb && cb.matches && cb.matches(".msel input[type=checkbox]")) {
+      mselText(cb.closest(".msel"));
+      refilter();
+    }
+  });
+
+  // Initialise each dropdown's button label (handles the default-checked
+  // Forward delivery type).
+  document.querySelectorAll(".msel").forEach(function (m) { mselText(m); });
+
+  // Per-panel search: filter the (full) destination / lane lists client-side,
+  // re-rendering from the cached report so no server round-trip is needed.
+  $("destSearch").addEventListener("input", function () {
+    if (lastReport) renderDestinations(lastReport);
+  });
+  $("laneSearch").addEventListener("input", function () {
+    if (lastReport) renderLanes(lastReport);
+  });
+
+  $("whcPick").addEventListener("change", function (e) {
+    whcSelection = e.target.value;
+    if (lastReport) { renderWhcTable(lastReport); renderWhcChart(); }
+  });
+  $("reuploadBtn").addEventListener("click", function () {
+    $("dashboard").hidden = true;
+    $("uploadZone").hidden = false;
+    $("metaStatus").textContent = "No data loaded";
+    setHint("", null);
+    $("fileInput").value = "";
+  });
+
+  var drop = $("dropArea");
+  ["dragenter", "dragover"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("drag"); });
+  });
+  ["dragleave", "drop"].forEach(function (ev) {
+    drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("drag"); });
+  });
+  drop.addEventListener("drop", function (e) {
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+  });
+})();
+  </script>
 </body>
 </html>
