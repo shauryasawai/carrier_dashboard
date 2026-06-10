@@ -16,10 +16,10 @@
 > persistent, fast) — see `CLOUD_RUN_STEP_BY_STEP.md`. This guide is for when you
 > specifically need Vercel.
 
-The repo is already prepared for Vercel: `vercel.json`, `api/index.py` (the
-entrypoint), a slimmed `requirements.txt` (pyarrow/bigquery-storage removed to
-fit Vercel's 250 MB limit), `.vercelignore`, and static files served by
-WhiteNoise at request time.
+The repo is already prepared for Vercel: `vercel.json` (which builds
+`config/wsgi.py`, the Django WSGI entrypoint), a slimmed `requirements.txt`
+(pyarrow/bigquery-storage removed to fit Vercel's 250 MB limit), `.vercelignore`,
+and static files served by WhiteNoise at request time.
 
 ---
 
@@ -110,21 +110,21 @@ Notes:
 
 ---
 
-## Step 5 — (If loads time out) upgrade the timeout
+## Step 5 — (If loads time out)
 
-On the free Hobby plan, functions stop at **10 seconds**. If "Load from
-BigQuery" fails with a timeout:
+On the free Hobby plan, functions stop at **10 seconds**, and a BigQuery load
+scans ~425 MB regardless of the window. If "Load from BigQuery" fails with a
+timeout/504:
 
-1. Upgrade the project to the **Pro** plan.
-2. Open `vercel.json` and raise the limit, then push:
+1. **First, shrink the window.** Lower `BQ_MAX_LOOKBACK_DAYS` (e.g. to `3`) and
+   redeploy. Fewer rows to download/process = better chance of finishing in 10 s.
+2. **If that's not enough, upgrade to Pro.** Pro gives a longer limit. To raise
+   it further you'd switch `vercel.json` to the `functions` schema with a
+   committed `api/index.py` entrypoint and `"maxDuration": 60` — ping me and I'll
+   wire that up. For most 3–7 day loads it isn't needed.
 
-   ```json
-   "functions": {
-     "api/index.py": { "memory": 1024, "maxDuration": 60 }
-   }
-   ```
-
-   (Leave `maxDuration` out on Hobby — values above 10 are rejected there.)
+> Honestly, if you're fighting timeouts, this is Cloud Run's sweet spot — it has
+> no 10 s cap and keeps the cache warm. See `CLOUD_RUN_STEP_BY_STEP.md`.
 
 ---
 
