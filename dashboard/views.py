@@ -12,7 +12,9 @@ from .kpi import build_report, parse_workbook
 logger = logging.getLogger(__name__)
 
 # client can re-filter without re-uploading. Single-process dev use.
-_CACHE = {"records": None}
+# "window" is the date range the loaded data covers (BigQuery load window),
+# or None for uploaded files; it persists across re-filter requests.
+_CACHE = {"records": None, "window": None}
 
 
 def login_view(request):
@@ -91,6 +93,9 @@ def _report_response(request, empty_msg):
     if not records:
         return JsonResponse({"error": empty_msg}, status=400)
     report = build_report(records, **_filter_kwargs(request))
+    # The single authoritative date range for the loaded data (BigQuery load
+    # window). None for uploaded files; the frontend falls back to pickup span.
+    report["load_window"] = _CACHE.get("window")
     return JsonResponse(report)
 
 
@@ -118,6 +123,7 @@ def process_upload(request):
                 {"error": "No data rows found in the file."}, status=400
             )
         _CACHE["records"] = records
+        _CACHE["window"] = None  # uploaded file has no BigQuery load window
 
     return _report_response(
         request, "No data loaded yet. Load from BigQuery or upload a file first."
@@ -152,5 +158,6 @@ def load_bigquery(request):
             status=400,
         )
     _CACHE["records"] = records
+    _CACHE["window"] = bq.lookback_window(lookback_days)
 
     return _report_response(request, "No data loaded.")

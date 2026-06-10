@@ -80,19 +80,24 @@ body {
 
 .wrap { position: relative; z-index: 1; max-width: 1120px; margin: 0 auto; padding: 32px; }
 
-/* Upload */
-.upload-zone { padding: 60px 0; }
+/* Upload — centred in the viewport so it fits on one screen (no scrolling). */
+.upload-zone {
+  padding: 0;
+  min-height: calc(100vh - 180px);
+  display: flex; align-items: center; justify-content: center;
+}
+.upload-zone[hidden] { display: none; }
 .upload-card {
   border: 2px dashed var(--line-strong); border-radius: 14px;
-  background: var(--card); padding: 56px 40px; text-align: center;
+  background: var(--card); padding: 34px 40px; text-align: center;
   max-width: 560px; margin: 0 auto; transition: border-color .2s, background .2s;
 }
 .upload-card.drag { border-color: var(--accent); background: var(--paper-2); }
-.upload-icon { font-size: 46px; color: var(--accent); line-height: 1; }
-.upload-card h2 { font-family: var(--display); font-weight: 500; font-size: 24px; margin: 16px 0 8px; letter-spacing: -.01em; }
-.upload-card p { color: var(--ink-soft); max-width: 380px; margin: 0 auto 22px; }
+.upload-icon { font-size: 38px; color: var(--accent); line-height: 1; }
+.upload-card h2 { font-family: var(--display); font-weight: 500; font-size: 23px; margin: 10px 0 6px; letter-spacing: -.01em; }
+.upload-card p { color: var(--ink-soft); max-width: 380px; margin: 0 auto 16px; }
 .upload-card code { font-family: var(--mono); background: var(--paper-2); padding: 1px 6px; border-radius: 4px; font-size: 13px; }
-.upload-hint { font-family: var(--mono); font-size: 13px; margin-top: 18px !important; min-height: 18px; }
+.upload-hint { font-family: var(--mono); font-size: 13px; margin-top: 12px !important; min-height: 18px; }
 .upload-hint.ok { color: var(--good); }
 .upload-hint.err { color: var(--bad); }
 
@@ -132,7 +137,7 @@ body {
 .bq-range select:focus { outline: none; border-color: var(--accent); }
 
 .upload-or {
-  position: relative; max-width: 220px; margin: 16px auto; text-align: center;
+  position: relative; max-width: 220px; margin: 12px auto; text-align: center;
 }
 .upload-or::before {
   content: ""; position: absolute; top: 50%; left: 0; right: 0;
@@ -212,6 +217,21 @@ body {
 .msel-opt input { accent-color: var(--accent); margin: 0; cursor: pointer; flex: none; }
 .msel-opt span { overflow: hidden; text-overflow: ellipsis; }
 .msel-opt:has(input:checked) { color: var(--accent-deep); font-weight: 500; }
+
+/* Data date-range banner */
+.data-range {
+  display: flex; align-items: baseline; gap: 10px;
+  margin: 0 0 18px; padding: 10px 14px;
+  background: var(--card); border: 1px solid var(--line);
+  border-left: 3px solid var(--accent); border-radius: 8px;
+}
+.data-range[hidden] { display: none; }
+.data-range-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.data-range-val { font-family: var(--sans); font-size: 14px; color: var(--ink); font-weight: 500; }
+.data-range-note { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-left: auto; }
 
 /* Stat cards */
 .stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 28px; }
@@ -442,6 +462,13 @@ body {
 
     <!-- Dashboard -->
     <section id="dashboard" class="dashboard" hidden>
+
+      <!-- Date span of the loaded data (pickup dates) vs the load window. -->
+      <div class="data-range" id="dataRange" hidden>
+        <span class="data-range-label" id="dataRangeLabel">Date range</span>
+        <span class="data-range-val" id="dataRangeVal"></span>
+        <span class="data-range-note" id="dataRangeNote"></span>
+      </div>
 
       <!-- Filter bar. Every categorical filter is a multi-select checkbox
            dropdown (.msel); leaving one empty means "all". -->
@@ -750,6 +777,7 @@ body {
     post(fd)
       .then(function (report) {
         loaded = true;
+        loadDesc = "from uploaded file";
         setHint("Loaded " + report.summary.total.toLocaleString() + " shipments.", "ok");
         $("uploadZone").hidden = true;
         $("dashboard").hidden = false;
@@ -760,6 +788,7 @@ body {
   }
 
   var lastLookback = "30";
+  var loadDesc = "";
   function loadBigQuery() {
     var btn = $("bqLoadBtn"), rbtn = $("bqReloadBtn");
     if ($("bqRange")) lastLookback = $("bqRange").value;
@@ -771,6 +800,7 @@ body {
     post(fd, window.BIGQUERY_URL)
       .then(function (report) {
         loaded = true;
+        loadDesc = "load window · last " + lastLookback + "d (by report date)";
         setHint("Loaded " + report.summary.total.toLocaleString() + " shipments from BigQuery.", "ok");
         $("uploadZone").hidden = true;
         $("dashboard").hidden = false;
@@ -884,6 +914,7 @@ body {
   function render(report) {
     lastReport = report;
     populateOptions(report.filters);
+    renderDataRange(report);
     renderStats(report.summary);
     renderFormula(report.weights);
     renderTable(report.carriers);
@@ -899,6 +930,34 @@ body {
     renderWarehouseChart(report.warehouses);
     renderDestChart(report.destinations);
     renderWhcChart();
+  }
+
+  // Show ONE authoritative date range. For BigQuery loads that's the load
+  // window the server actually queried (report.load_window); for uploaded
+  // files there's no window, so we fall back to the pickup-date span.
+  function renderDataRange(report) {
+    var box = $("dataRange"), val = $("dataRangeVal");
+    if (!box || !val) return;
+    var w = report && report.load_window;
+    var f = (report && report.filters) || {};
+    var lo, hi, label, note;
+    if (w && w.from && w.to) {
+      lo = w.from; hi = w.to; label = "Date range"; note = "last " + w.days + " days";
+    } else {
+      lo = f.date_min; hi = f.date_max; label = "Pickup dates"; note = "";
+    }
+    if (!lo && !hi) { box.hidden = true; return; }
+    var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    var fmt = function (iso) {
+      var p = (iso || "").split("-");
+      if (p.length !== 3) return iso || "?";
+      return parseInt(p[2], 10) + " " + (MON[parseInt(p[1], 10) - 1] || p[1]) + " " + p[0];
+    };
+    val.textContent = fmt(lo) + "  →  " + fmt(hi);
+    if ($("dataRangeLabel")) $("dataRangeLabel").textContent = label;
+    if ($("dataRangeNote")) $("dataRangeNote").textContent = note;
+    box.hidden = false;
   }
 
   function renderStats(s) {

@@ -4,6 +4,7 @@ import functools
 import json
 import os
 import re
+from datetime import date, timedelta
 
 from . import kpi
 
@@ -166,6 +167,24 @@ def _clamp_lookback(value, fallback) -> int:
     except (TypeError, ValueError):
         return int(fallback)
     return max(1, min(MAX_LOOKBACK_DAYS, n))
+
+
+def effective_lookback_days(requested) -> int:
+    """The actual number of days pulled after clamping (matches the SQL filter,
+    including the BQ_MAX_LOOKBACK_DAYS cap)."""
+    return _clamp_lookback(requested, default_lookback_days())
+
+
+def lookback_window(requested) -> dict:
+    """The date window the query covers: partition_date >= today - N days.
+    Returns ISO strings so the UI can show one authoritative date range."""
+    days = effective_lookback_days(requested)
+    today = date.today()
+    return {
+        "from": (today - timedelta(days=days)).isoformat(),
+        "to": today.isoformat(),
+        "days": days,
+    }
 
 
 def is_configured() -> bool:
