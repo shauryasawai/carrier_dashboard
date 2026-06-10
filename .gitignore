@@ -1,5 +1,7 @@
 .env
 .env.*
+# Cloud Run deploy settings (contains secrets) — never commit.
+env.yaml
 # Service-account keys / secrets — never commit these.
 sa-key.json
 *-key.json

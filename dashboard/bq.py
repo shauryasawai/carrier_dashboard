@@ -10,8 +10,18 @@ from . import kpi
 # --- Target table (override via env) ----------------------------------------
 
 
-# Partition column used for the lookback window (prunes partitions).
-MAX_LOOKBACK_DAYS = 366
+# Hard upper bound on the lookback window. Configurable so memory/timeout-
+# constrained hosts (e.g. Vercel, where each request re-queries because the
+# in-memory cache doesn't persist) can clamp it small, e.g. BQ_MAX_LOOKBACK_DAYS=7.
+def _max_lookback_days() -> int:
+    raw = os.environ.get("BQ_MAX_LOOKBACK_DAYS")
+    try:
+        return max(1, int(raw))
+    except (TypeError, ValueError):
+        return 366
+
+
+MAX_LOOKBACK_DAYS = _max_lookback_days()
 # Fallback window (days) used when BQ_LOOKBACK_DAYS is unset or invalid.
 DEFAULT_LOOKBACK_DAYS = 30
 

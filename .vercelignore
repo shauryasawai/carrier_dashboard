@@ -1,0 +1,15 @@
+# Keep the Vercel function bundle small and free of secrets.
+venv/
+__pycache__/
+*.pyc
+.env
+.env.*
+env.yaml
+*.json.key
+sa-key.json
+*-key.json
+db.sqlite3
+.git/
+.idea/
+.DS_Store
+uploads/

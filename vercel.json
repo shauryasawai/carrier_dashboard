@@ -1,17 +1,9 @@
 {
-  "version": 2,
-  "builds": [
-    { "src": "config/wsgi.py", "use": "@vercel/python" }
-  ],
-  "routes": [
-    {
-      "src": "/static/(.*)",
-      "dest": "/staticfiles_build/static/$1"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "config/wsgi.py"
-    }
+  "functions": {
+    "api/index.py": { "memory": 1024 }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index.py" }
   ],
   "env": {
     "DJANGO_SETTINGS_MODULE": "config.settings"

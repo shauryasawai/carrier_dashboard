@@ -35,6 +35,15 @@ STORAGES = {
     },
 }
 
+# On Vercel the filesystem is read-only and `collectstatic` doesn't run during
+# the build, so the hashed manifest won't exist. Serve static files directly
+# from the app's static dirs at request time instead (no manifest needed).
+if os.environ.get("VERCEL"):
+    STORAGES["staticfiles"]["BACKEND"] = (
+        "whitenoise.storage.CompressedStaticFilesStorage"
+    )
+    WHITENOISE_USE_FINDERS = True
+
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     # WhiteNoise serves collected static files in production (right after

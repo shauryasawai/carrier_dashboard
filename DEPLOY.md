@@ -79,8 +79,16 @@ gcloud run deploy carrier-dashboard \
   --set-env-vars "BQ_PROJECT=frido-429506" \
   --set-env-vars "BQ_DATASET=production" \
   --set-env-vars "BQ_TABLE=Clickpost_Shipment_Tracking_Report" \
+  --set-env-vars "BQ_DATE_COLUMN=partition_date" \
+  --set-env-vars "BQ_DATE_COLUMN_IS_STRING=0" \
   --set-env-vars "BQ_LOOKBACK_DAYS=30"
 ```
+
+> `BQ_DATE_COLUMN` is **required** (the lookback query filters on it).
+> `partition_date` is a real DATE equal to the date of `created_at`. For a
+> free, scale-to-zero deploy use `--min-instances 0` (you accept a cold start
+> and a cache reload after idle); `--min-instances 1` keeps it warm but bills
+> continuously and is **not** free.
 
 > The table id `frido-429506.production.Clickpost_Shipment_Tracking_Report` and
 > the column mapping are already the defaults in `dashboard/bq.py`, so the
@@ -88,10 +96,11 @@ gcloud run deploy carrier-dashboard \
 > Run the app in the **same project** (`frido-429506`) or grant its runtime
 > service account read access to that project's BigQuery.
 
-> **Data window:** the table holds ~1 year. Every load filters on the
-> `partition_date` partition with a lookback window (default 30 days, chosen on
-> the load screen: 7 / 30 / 90 / 180 / 365). This keeps each query fast and
-> well inside the BigQuery free tier. `BQ_LOOKBACK_DAYS` sets the default.
+> **Data window:** the table holds ~1 year. Every load filters on
+> `partition_date` with a lookback window (default 30 days, chosen on the load
+> screen: 7 / 15 / 30 / 45). `BQ_LOOKBACK_DAYS` sets the default. Note the
+> table isn't partitioned, so the filter limits rows returned, not bytes
+> scanned (~425 MB/load); cluster the table on `partition_date` for a real cut.
 
 > `--min-instances 1` keeps one instance warm so the cached dataset persists
 > (and avoids cold starts). `--max-instances 1` guarantees a single shared
