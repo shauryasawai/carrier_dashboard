@@ -22,8 +22,16 @@ CSRF_TRUSTED_ORIGINS = [
 INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "dashboard",
-    "django_extensions",
 ]
+
+# django_extensions is a developer convenience (shell_plus, etc.) and is not a
+# deploy dependency. Load it only when it's actually installed, so production
+# hosts (Vercel/Cloud Run, where it isn't in requirements.txt) don't crash.
+try:
+    import django_extensions  # noqa: F401
+    INSTALLED_APPS.append("django_extensions")
+except ImportError:
+    pass
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
