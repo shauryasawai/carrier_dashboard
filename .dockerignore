@@ -1,0 +1,15 @@
+venv/
+my_env/
+.venv/
+__pycache__/
+*.pyc
+.env
+.git/
+.gitignore
+staticfiles/
+*.xlsx
+*.xls
+*.csv
+.DS_Store
+.idea/
+scripts/

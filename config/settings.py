@@ -9,19 +9,37 @@ SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY")
 if not SECRET_KEY:
     raise ValueError("DJANGO_SECRET_KEY environment variable is not set.")
 
-DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() == "true"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
+# HTTPS origins Django trusts for CSRF (Cloud Run serves an https URL). Comma-
+# separated, scheme included, e.g. https://carrier-dash-xxxxxx-uc.a.run.app
+CSRF_TRUSTED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+    if o.strip()
+]
 
 INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "dashboard",
+    "django_extensions",
 ]
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# WhiteNoise: compress + hash static files at collectstatic time.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    },
+}
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # WhiteNoise serves collected static files in production (right after
+    # SecurityMiddleware, before everything else).
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

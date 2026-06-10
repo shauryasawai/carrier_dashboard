@@ -1,4 +1,11 @@
 .env
+.env.*
+# Service-account keys / secrets — never commit these.
+sa-key.json
+*-key.json
+*service-account*.json
+*credentials*.json
+*.pem
 /my_env
 /*.pyc
 /__pycache__/

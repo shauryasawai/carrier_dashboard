@@ -1,3 +1,9 @@
 Django>=5.0
 openpyxl
 python-dotenv
+gunicorn
+whitenoise
+google-cloud-bigquery
+google-cloud-bigquery-storage
+pyarrow
+google-auth

@@ -18,6 +18,7 @@ Excel serials automatically) or as raw numeric serials; both are handled.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from functools import lru_cache
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -134,6 +135,7 @@ PIN2_CIRCLE = {
 }
 
 
+@lru_cache(maxsize=None)
 def city_for_pincode(pin: str) -> str:
     """Return a readable city/region for a (string) pincode, or '' if blank."""
     if not pin:
@@ -150,6 +152,7 @@ def city_for_pincode(pin: str) -> str:
     return "PIN " + p3 + "xx"
 
 
+@lru_cache(maxsize=None)
 def warehouse_label(pin: str) -> str:
     """'City - Pincode' label used as the warehouse display name."""
     if not pin:
@@ -158,6 +161,7 @@ def warehouse_label(pin: str) -> str:
     return (city + " \u00b7 " + str(pin)) if city else str(pin)
 
 
+@lru_cache(maxsize=100_000)
 def _clean_city(text: str) -> str:
     """Normalize a free-text city name so casing/spacing variants merge.
 
@@ -255,6 +259,7 @@ WEIGHT_LIGHT_MAX = 3000     # <= 3 kg
 WEIGHT_MEDIUM_MAX = 10000   # 3 kg - 10 kg
 
 
+@lru_cache(maxsize=4096)
 def _weight_class(grams):
     if grams is None:
         return "Unknown"
@@ -359,6 +364,7 @@ PRODUCT_RULES = [
 ]
 
 
+@lru_cache(maxsize=100_000)
 def _product_category(item_name):
     """Return (category, subcategory) for a product name, or ('Others','Other')."""
     if not item_name:
@@ -388,6 +394,7 @@ _CANCELLED_STATUSES = {
 }
 
 
+@lru_cache(maxsize=None)
 def _outcome(status):
     s = (status or "").strip()
     low = s.lower()
@@ -414,6 +421,7 @@ PENDENCY_STATES = [
 _PENDENCY_SET = {s.lower() for s in PENDENCY_STATES}
 
 
+@lru_cache(maxsize=None)
 def _pendency_state(status):
     """Sub-bucket for a FWD-Pendency shipment's Latest Status."""
     s = (status or "").strip()
@@ -505,6 +513,74 @@ def _rows_from_bytes(data: bytes, filename: str = ""):
     return reader
 
 
+def build_record(get):
+    """Build one normalized record dict from a raw-field getter.
+
+    `get(logical_key)` returns the raw cell value for a logical field (a key of
+    COLUMNS) or None. This is the single source of truth for row normalization,
+    shared by the CSV/XLSX parser and the BigQuery loader (dashboard/bq.py) so
+    both produce byte-for-byte identical records. Returns None for rows with no
+    carrier (caller should skip).
+    """
+    carrier = get("carrier")
+    if carrier is None or str(carrier).strip() == "":
+        return None
+
+    pickup = _to_datetime(get("pickup_ts"))
+    ofd1 = _to_datetime(get("ofd1_ts"))
+    delivery = _to_datetime(get("delivery_ts"))
+    attempts = _to_float(get("attempts"))
+    weight = _to_float(get("weight"))
+    status = str(get("status") or "").strip()
+    payment = str(get("payment") or "").strip().upper()
+
+    # Pincodes can arrive as ints or floats (560037.0) - normalize to a clean
+    # string without decimals.
+    pickup_pin = _norm_pincode(get("pickup_pin"))
+    drop_pin = _norm_pincode(get("drop_pin"))
+
+    pickup_city = city_for_pincode(pickup_pin)
+    # Destination: prefer the explicit Drop City; fall back to a region derived
+    # from the drop pincode, then to the bare pincode.
+    drop_city = _clean_city(str(get("drop_city") or "").strip())
+    if not drop_city:
+        drop_city = city_for_pincode(drop_pin) or drop_pin
+    # Lane label only when both endpoints resolve to something readable.
+    lane = (pickup_city + " → " + drop_city) if (pickup_city and drop_city) else ""
+
+    item_name = str(get("item_names") or "").strip()
+    category, subcategory = _product_category(item_name)
+
+    return {
+        "carrier": str(carrier).strip(),
+        "account": str(get("account") or "").strip(),
+        "delivery_type": str(get("delivery_type") or "").strip(),
+        "zone": str(get("zone") or "").strip(),
+        "pickup_pin": pickup_pin,
+        "warehouse": warehouse_label(pickup_pin),
+        "city": pickup_city,
+        "drop_pin": drop_pin,
+        "drop_city": drop_city,
+        "lane": lane,
+        "payment": payment,
+        "weight": weight,
+        "weight_class": _weight_class(weight),
+        "pickup_date": pickup.date().isoformat() if pickup else "",
+        "pickup_slot": _pickup_slot(pickup),
+        "status": status,
+        "outcome": _outcome(status),
+        "pendency_state": _pendency_state(status),
+        "item_name": item_name,
+        "category": category,
+        "subcategory": subcategory,
+        "picked": pickup is not None,
+        "delivered": status.lower() == "delivered",
+        "attempts": attempts,
+        "p2o": _hours_between(pickup, ofd1),
+        "p2d": _hours_between(pickup, delivery),
+    }
+
+
 def parse_workbook(file_obj, filename: str = "") -> list[dict]:
     """Read the first worksheet/CSV into a list of normalized row dicts.
 
@@ -553,63 +629,9 @@ def parse_workbook(file_obj, filename: str = "") -> list[dict]:
     for row in rows_iter:
         if row is None:
             continue
-        carrier = cell(row, "carrier")
-        if carrier is None or str(carrier).strip() == "":
-            continue
-
-        pickup = _to_datetime(cell(row, "pickup_ts"))
-        ofd1 = _to_datetime(cell(row, "ofd1_ts"))
-        delivery = _to_datetime(cell(row, "delivery_ts"))
-        attempts = _to_float(cell(row, "attempts"))
-        weight = _to_float(cell(row, "weight"))
-        status = str(cell(row, "status") or "").strip()
-        payment = str(cell(row, "payment") or "").strip().upper()
-
-        # Pincodes can arrive as ints or floats (560037.0) - normalize to a
-        # clean string without decimals.
-        pickup_pin = _norm_pincode(cell(row, "pickup_pin"))
-        drop_pin = _norm_pincode(cell(row, "drop_pin"))
-
-        pickup_city = city_for_pincode(pickup_pin)
-        # Destination: prefer the explicit Drop City column; fall back to a
-        # region derived from the drop pincode, then to the bare pincode.
-        drop_city = _clean_city(str(cell(row, "drop_city") or "").strip())
-        if not drop_city:
-            drop_city = city_for_pincode(drop_pin) or drop_pin
-        # Lane label only when both endpoints resolve to something readable.
-        lane = (pickup_city + " → " + drop_city) if (pickup_city and drop_city) else ""
-
-        item_name = str(cell(row, "item_names") or "").strip()
-        category, subcategory = _product_category(item_name)
-
-        records.append({
-            "carrier": str(carrier).strip(),
-            "account": str(cell(row, "account") or "").strip(),
-            "delivery_type": str(cell(row, "delivery_type") or "").strip(),
-            "zone": str(cell(row, "zone") or "").strip(),
-            "pickup_pin": pickup_pin,
-            "warehouse": warehouse_label(pickup_pin),
-            "city": pickup_city,
-            "drop_pin": drop_pin,
-            "drop_city": drop_city,
-            "lane": lane,
-            "payment": payment,
-            "weight": weight,
-            "weight_class": _weight_class(weight),
-            "pickup_date": pickup.date().isoformat() if pickup else "",
-            "pickup_slot": _pickup_slot(pickup),
-            "status": status,
-            "outcome": _outcome(status),
-            "pendency_state": _pendency_state(status),
-            "item_name": item_name,
-            "category": category,
-            "subcategory": subcategory,
-            "picked": pickup is not None,
-            "delivered": status.lower() == "delivered",
-            "attempts": attempts,
-            "p2o": _hours_between(pickup, ofd1),
-            "p2d": _hours_between(pickup, delivery),
-        })
+        rec = build_record(lambda key, _row=row: cell(_row, key))
+        if rec is not None:
+            records.append(rec)
     return records
 
 
@@ -923,6 +945,64 @@ def aggregate_pendency_matrix(records, key_field="account") -> dict:
     return {"columns": active_cols, "rows": rows}
 
 
+# Filter-bar option lists (zones / accounts / warehouses / date bounds) depend
+# only on the loaded record set, not on the active filters — identical on
+# every re-filter. Cache them keyed on the records list identity to skip four
+# full-dataset passes per refresh. The strong reference pins the list's identity
+# (so id reuse can't cause a stale hit) and is replaced when new data loads.
+_FILTER_OPTIONS_CACHE = {"records": None, "value": None}
+
+
+def _filter_options(records) -> dict:
+    if _FILTER_OPTIONS_CACHE["records"] is records:
+        return _FILTER_OPTIONS_CACHE["value"]
+
+    zones = sorted({r["zone"] for r in records if r["zone"]})
+    acct_counts: dict[str, int] = {}
+    wh_counts: dict[str, int] = {}
+    wh_labels: dict[str, str] = {}
+    pickup_dates_min = None
+    pickup_dates_max = None
+    for r in records:
+        a = r["account"]
+        if a:
+            acct_counts[a] = acct_counts.get(a, 0) + 1
+        pin = r["pickup_pin"]
+        if pin:
+            wh_counts[pin] = wh_counts.get(pin, 0) + 1
+            wh_labels[pin] = r["warehouse"]
+        pd = r["pickup_date"]
+        if pd:
+            if pickup_dates_min is None or pd < pickup_dates_min:
+                pickup_dates_min = pd
+            if pickup_dates_max is None or pd > pickup_dates_max:
+                pickup_dates_max = pd
+
+    accounts = [
+        {"value": a, "label": a, "n": cnt}
+        for a, cnt in sorted(acct_counts.items(), key=lambda kv: -kv[1])
+    ]
+    warehouses_opts = [
+        {"value": pin, "label": wh_labels[pin], "n": cnt}
+        for pin, cnt in sorted(wh_counts.items(), key=lambda kv: -kv[1])
+    ]
+    if TOP_N_WAREHOUSES is not None:
+        warehouses_opts = warehouses_opts[:TOP_N_WAREHOUSES]
+
+    value = {
+        "zones": zones,
+        "accounts": accounts,
+        "warehouses": warehouses_opts,
+        "weight_classes": ["Light", "Medium", "Heavy"],
+        "pickup_slots": PICKUP_SLOTS,
+        "date_min": pickup_dates_min or "",
+        "date_max": pickup_dates_max or "",
+    }
+    _FILTER_OPTIONS_CACHE["records"] = records
+    _FILTER_OPTIONS_CACHE["value"] = value
+    return value
+
+
 def build_report(records, delivery_type="Forward", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
                  slot="all", date_from="", date_to="") -> dict:
@@ -1040,36 +1120,9 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
     _round_metrics(agg)
 
     # Filter option lists are built from the FULL record set (not the filtered
-    # rows) so selecting one value doesn't empty out the other dropdowns.
-    zones = sorted({r["zone"] for r in records if r["zone"]})
-    # Carrier-account options for the dropdown, ordered by volume.
-    acct_counts: dict[str, int] = {}
-    for r in records:
-        a = r["account"]
-        if a:
-            acct_counts[a] = acct_counts.get(a, 0) + 1
-    accounts = [
-        {"value": a, "label": a, "n": cnt}
-        for a, cnt in sorted(acct_counts.items(), key=lambda kv: -kv[1])
-    ]
-    # Pickup date range (ISO strings) to bound the date pickers.
-    pickup_dates = [r["pickup_date"] for r in records if r["pickup_date"]]
-    date_min = min(pickup_dates) if pickup_dates else ""
-    date_max = max(pickup_dates) if pickup_dates else ""
-    # Warehouse options: pincode value + city label, ordered by volume.
-    wh_counts: dict[str, int] = {}
-    wh_labels: dict[str, str] = {}
-    for r in records:
-        if r["pickup_pin"]:
-            wh_counts[r["pickup_pin"]] = wh_counts.get(r["pickup_pin"], 0) + 1
-            wh_labels[r["pickup_pin"]] = r["warehouse"]
-    warehouses_opts = [
-        {"value": pin, "label": wh_labels[pin], "n": cnt}
-        for pin, cnt in sorted(wh_counts.items(), key=lambda kv: -kv[1])
-    ]
-    # Cap the filter-bar dropdown to the same top-N as the breakdown table.
-    if TOP_N_WAREHOUSES is not None:
-        warehouses_opts = warehouses_opts[:TOP_N_WAREHOUSES]
+    # rows) so selecting one value doesn't empty out the other dropdowns. They
+    # don't change between filters, so this is cached per loaded dataset.
+    filter_opts = _filter_options(records)
 
     return {
         "summary": {
@@ -1107,14 +1160,6 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
             "payment": count_by(lambda r: r["payment"]),
             "delivery_type": count_by(lambda r: r["delivery_type"]),
         },
-        "filters": {
-            "zones": zones,
-            "accounts": accounts,
-            "warehouses": warehouses_opts,
-            "weight_classes": ["Light", "Medium", "Heavy"],
-            "pickup_slots": PICKUP_SLOTS,
-            "date_min": date_min,
-            "date_max": date_max,
-        },
+        "filters": filter_opts,
         "weights": {k: int(v * 100) for k, v in WEIGHTS.items()},
     }

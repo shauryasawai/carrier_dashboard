@@ -105,6 +105,44 @@ body {
 }
 .btn-primary:hover { background: var(--accent-deep); }
 .btn-primary:active { transform: scale(.97); }
+.btn-primary:disabled { opacity: .6; cursor: default; }
+
+.btn-secondary {
+  display: inline-block; cursor: pointer;
+  background: transparent; color: var(--ink-soft);
+  font-family: var(--sans); font-weight: 500; font-size: 13px;
+  padding: 9px 18px; border-radius: 8px; border: 1px solid var(--line-strong);
+  transition: border-color .15s, color .15s;
+}
+.btn-secondary:hover { border-color: var(--ink); color: var(--ink); }
+
+.bq-range {
+  display: flex; align-items: center; justify-content: center; gap: 10px;
+  margin: 0 auto 16px;
+}
+.bq-range label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.bq-range select {
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 7px 12px; cursor: pointer;
+}
+.bq-range select:focus { outline: none; border-color: var(--accent); }
+
+.upload-or {
+  position: relative; max-width: 220px; margin: 16px auto; text-align: center;
+}
+.upload-or::before {
+  content: ""; position: absolute; top: 50%; left: 0; right: 0;
+  height: 1px; background: var(--line); z-index: 0;
+}
+.upload-or span {
+  position: relative; z-index: 1; background: var(--card); padding: 0 12px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
 
 .btn-ghost {
   cursor: pointer; background: transparent; border: 1px solid var(--line-strong);
@@ -383,9 +421,20 @@ body {
     <section id="uploadZone" class="upload-zone">
       <div class="upload-card" id="dropArea">
         <div class="upload-icon">⤓</div>
-        <h2>Drop your shipment workbook</h2>
-        <p>Standard export format (<code>.xlsx</code> or <code>.csv</code>). Everything is processed on your machine &mdash; nothing is stored.</p>
-        <label class="btn-primary" for="fileInput">Choose file</label>
+        <h2>Load your shipment data</h2>
+        <p>Pull the latest shipments straight from BigQuery, or upload a standard export (<code>.xlsx</code> / <code>.csv</code>).</p>
+        <div class="bq-range">
+          <label for="bqRange">Date range</label>
+          <select id="bqRange">
+            <option value="7">Last 7 days</option>
+            <option value="15">Last 15 days</option>
+            <option value="30" selected>Last 30 days</option>
+            <option value="45">Last 45 days</option>
+          </select>
+        </div>
+        <button type="button" class="btn-primary" id="bqLoadBtn">Load from BigQuery</button>
+        <div class="upload-or"><span>or</span></div>
+        <label class="btn-secondary" for="fileInput">Upload a file instead</label>
         <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
         <p class="upload-hint" id="uploadHint"></p>
       </div>
@@ -472,7 +521,8 @@ body {
           <label>Pickup to</label>
           <input type="date" id="fDateTo">
         </div>
-        <button class="btn-ghost" id="reuploadBtn">↻ New file</button>
+        <button class="btn-ghost" id="bqReloadBtn">⟳ Reload BigQuery</button>
+        <button class="btn-ghost" id="reuploadBtn">↻ New source</button>
       </div>
 
       <!-- Summary stats -->
@@ -605,6 +655,7 @@ body {
 
   <script>
     window.PROCESS_URL = "{% url 'process_upload' %}";
+    window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
   </script>
@@ -645,8 +696,8 @@ body {
     charts = [];
   }
 
-  function post(formData) {
-    return fetch(window.PROCESS_URL, {
+  function post(formData, url) {
+    return fetch(url || window.PROCESS_URL, {
       method: "POST",
       headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" },
       body: formData
@@ -657,8 +708,15 @@ body {
           window.location.href = window.LOGIN_URL || "/login/";
           throw new Error("Your session has expired. Redirecting to sign in…");
         }
-        return r.json().then(function (body) {
-          if (!r.ok) throw new Error(body.error || "Request failed");
+        // Parse as text first so a non-JSON error gives a readable message.
+        return r.text().then(function (text) {
+          var body;
+          try { body = text ? JSON.parse(text) : {}; }
+          catch (e) {
+            throw new Error("Server error " + r.status + ": " +
+              (text || r.statusText || "").trim().slice(0, 160));
+          }
+          if (!r.ok) throw new Error(body.error || ("Request failed (" + r.status + ")"));
           return body;
         });
       });
@@ -701,6 +759,34 @@ body {
       .catch(function (err) { setHint(err.message, "err"); });
   }
 
+  var lastLookback = "30";
+  function loadBigQuery() {
+    var btn = $("bqLoadBtn"), rbtn = $("bqReloadBtn");
+    if ($("bqRange")) lastLookback = $("bqRange").value;
+    setHint("Loading last " + lastLookback + " days from BigQuery…", null);
+    if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
+    if (rbtn) rbtn.disabled = true;
+    var fd = currentFilters();
+    fd.append("lookback_days", lastLookback);
+    post(fd, window.BIGQUERY_URL)
+      .then(function (report) {
+        loaded = true;
+        setHint("Loaded " + report.summary.total.toLocaleString() + " shipments from BigQuery.", "ok");
+        $("uploadZone").hidden = true;
+        $("dashboard").hidden = false;
+        $("metaStatus").textContent = "BigQuery · last " + lastLookback + "d · " + report.summary.total.toLocaleString() + " rows";
+        render(report);
+      })
+      .catch(function (err) {
+        setHint(err.message, "err");
+        $("metaStatus").textContent = "Error: " + err.message;
+      })
+      .then(function () {
+        if (btn) { btn.disabled = false; btn.textContent = "Load from BigQuery"; }
+        if (rbtn) rbtn.disabled = false;
+      });
+  }
+
   function refilter() {
     if (!loaded) return;
     post(currentFilters()).then(render).catch(function (err) {
@@ -727,11 +813,11 @@ body {
       return { value: w.value, text: w.label + " (" + (w.n || 0).toLocaleString() + ")" };
     });
 
-    // Bound the date pickers to the data's pickup range (once).
-    if (!dateBoundsSet && (filters.date_min || filters.date_max)) {
+    // Cap the date pickers at the latest pickup date (no future dates), but
+    // leave the lower bound open so earlier dates can still be selected.
+    if (!dateBoundsSet && filters.date_max) {
       var from = $("fDateFrom"), to = $("fDateTo");
-      if (filters.date_min) { from.min = filters.date_min; to.min = filters.date_min; }
-      if (filters.date_max) { from.max = filters.date_max; to.max = filters.date_max; }
+      from.max = filters.date_max; to.max = filters.date_max;
       dateBoundsSet = true;
     }
   }
@@ -1327,6 +1413,8 @@ body {
 
   // Wiring
   $("fileInput").addEventListener("change", function (e) { handleFile(e.target.files[0]); });
+  if ($("bqLoadBtn")) $("bqLoadBtn").addEventListener("click", loadBigQuery);
+  if ($("bqReloadBtn")) $("bqReloadBtn").addEventListener("click", loadBigQuery);
   ["fDateFrom", "fDateTo"].forEach(function (id) {
     $(id).addEventListener("change", refilter);
   });

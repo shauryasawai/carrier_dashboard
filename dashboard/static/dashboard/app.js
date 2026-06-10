@@ -46,8 +46,25 @@
           window.location.href = window.LOGIN_URL || "/login/";
           throw new Error("Your session has expired. Redirecting to sign in…");
         }
-        return r.json().then(function (body) {
-          if (!r.ok) throw new Error(body.error || "Request failed");
+        // Read as text first so a NON-JSON error (e.g. a platform 413
+        // "Request Entity Too Large" page, or an HTML 500) gives a readable
+        // message instead of an "Unexpected token" JSON-parse crash.
+        return r.text().then(function (text) {
+          var body;
+          try {
+            body = text ? JSON.parse(text) : {};
+          } catch (e) {
+            if (r.status === 413) {
+              throw new Error(
+                "That file is too large for the server to accept. The host " +
+                "is rejecting the upload before it reaches the app (e.g. " +
+                "Vercel caps request bodies at 4.5 MB)."
+              );
+            }
+            var snippet = (text || r.statusText || "").trim().slice(0, 160);
+            throw new Error("Server error " + r.status + (snippet ? ": " + snippet : ""));
+          }
+          if (!r.ok) throw new Error(body.error || ("Request failed (" + r.status + ")"));
           return body;
         });
       });

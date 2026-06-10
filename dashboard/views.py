@@ -1,14 +1,16 @@
 import json
+import logging
 
 from django.http import JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from . import auth
+from . import auth, bq
 from .kpi import build_report, parse_workbook
 
-# The parsed records for the most recent upload, kept in memory so the
+logger = logging.getLogger(__name__)
+
 # client can re-filter without re-uploading. Single-process dev use.
 _CACHE = {"records": None}
 
@@ -61,25 +63,41 @@ def index(request):
     })
 
 
+def _filter_kwargs(request):
+    """Read the multi-select filter fields from a POST into build_report kwargs.
+
+    Each categorical filter is a multi-select checkbox dropdown, so each arrives
+    as zero or more repeated form fields. getlist() collects them; an empty list
+    falls back to the default ("all" = no constraint). Delivery type keeps its
+    "Forward" default so the initial view isn't polluted by reverse-pickup
+    carriers (see README).
+    """
+    return {
+        "delivery_type": request.POST.getlist("delivery_type") or "Forward",
+        "zone": request.POST.getlist("zone") or "all",
+        "payment": request.POST.getlist("payment") or "all",
+        "warehouse": request.POST.getlist("warehouse") or "all",
+        "account": request.POST.getlist("account") or "all",
+        "weight": request.POST.getlist("weight") or "all",
+        "slot": request.POST.getlist("slot") or "all",
+        "date_from": request.POST.get("date_from", ""),
+        "date_to": request.POST.get("date_to", ""),
+    }
+
+
+def _report_response(request, empty_msg):
+    """Build the report from the cached records using the request's filters."""
+    records = _CACHE["records"]
+    if not records:
+        return JsonResponse({"error": empty_msg}, status=400)
+    report = build_report(records, **_filter_kwargs(request))
+    return JsonResponse(report)
+
+
 @auth.team_required
 @require_POST
 def process_upload(request):
-    """Accept either a new file upload or a re-filter request on cached data."""
-    # Every categorical filter is now a multi-select checkbox dropdown, so each
-    # arrives as zero or more repeated form fields. getlist() collects them; an
-    # empty list falls back to the default ("all" = no constraint). Delivery
-    # type keeps its "Forward" default so the initial view isn't polluted by
-    # reverse-pickup carriers (see README).
-    delivery_type = request.POST.getlist("delivery_type") or "Forward"
-    zone = request.POST.getlist("zone") or "all"
-    payment = request.POST.getlist("payment") or "all"
-    warehouse = request.POST.getlist("warehouse") or "all"
-    account = request.POST.getlist("account") or "all"
-    weight = request.POST.getlist("weight") or "all"
-    slot = request.POST.getlist("slot") or "all"
-    date_from = request.POST.get("date_from", "")
-    date_to = request.POST.get("date_to", "")
-
+    """Accept a new file upload, or a re-filter request on cached data."""
     upload = request.FILES.get("file")
     if upload is not None:
         name = upload.name.lower()
@@ -101,22 +119,38 @@ def process_upload(request):
             )
         _CACHE["records"] = records
 
-    records = _CACHE["records"]
-    if records is None:
-        return JsonResponse(
-            {"error": "No file loaded yet. Upload a workbook first."}, status=400
-        )
-
-    report = build_report(
-        records,
-        delivery_type=delivery_type,
-        zone=zone,
-        payment=payment,
-        warehouse=warehouse,
-        account=account,
-        weight=weight,
-        slot=slot,
-        date_from=date_from,
-        date_to=date_to,
+    return _report_response(
+        request, "No data loaded yet. Load from BigQuery or upload a file first."
     )
-    return JsonResponse(report)
+
+
+@auth.team_required
+@require_POST
+def load_bigquery(request):
+    """Fetch a lookback window from BigQuery into the cache, then return the report."""
+    if not bq.is_configured():
+        return JsonResponse(
+            {"error": "BigQuery is not configured on the server "
+                      "(set BQ_PROJECT, BQ_DATASET and BQ_TABLE)."},
+            status=400,
+        )
+    # How many days back to pull (partition-pruned). Defaults server-side.
+    lookback = request.POST.get("lookback_days")
+    lookback_days = int(lookback) if (lookback or "").isdigit() else None
+
+    try:
+        records = bq.fetch_records(lookback_days=lookback_days)
+    except Exception as exc:  # noqa: BLE001 - surface any BQ/auth failure cleanly
+        # Log the full traceback to the server console so the real cause is
+        # visible (the client only sees the short message below).
+        logger.exception("BigQuery load failed")
+        return JsonResponse({"error": f"BigQuery load failed: {exc}"}, status=502)
+
+    if not records:
+        return JsonResponse(
+            {"error": "BigQuery returned no rows for the selected date range."},
+            status=400,
+        )
+    _CACHE["records"] = records
+
+    return _report_response(request, "No data loaded.")
