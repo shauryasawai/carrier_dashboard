@@ -87,6 +87,21 @@ def _date_is_string() -> bool:
     )
 
 
+def _probe_disabled() -> bool:
+    """Whether to skip the get_table metadata probe in _partition_column.
+
+    The probe costs one extra BigQuery API round-trip. On serverless hosts
+    (Vercel) every request is a cold process, so the lru_cache below never
+    survives between loads and that round-trip is paid on EVERY load. When the
+    target table isn't partitioned (or you've set BQ_PARTITION_COLUMN explicitly),
+    the probe can never help, so set BQ_DISABLE_PARTITION_PROBE=1 to skip it and
+    fall straight through to the configured BQ_DATE_COLUMN predicate.
+    """
+    return os.environ.get("BQ_DISABLE_PARTITION_PROBE", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 @functools.lru_cache(maxsize=8)
 def _partition_column(project: str, dataset: str, table: str) -> tuple:
     """Return (column_name, field_type) of the table's partition column, or
@@ -95,12 +110,26 @@ def _partition_column(project: str, dataset: str, table: str) -> tuple:
     scanning the whole ~1-year table.
 
     Resolution order:
-      1. BQ_PARTITION_COLUMN env (skips the metadata lookup entirely).
+      1. BQ_PARTITION_COLUMN env (skips the metadata lookup entirely). Its type
+         can be hinted via BQ_PARTITION_COLUMN_TYPE (default DATE) so even the
+         type lookup avoids a get_table call.
       2. The table's declared time/range partitioning, read once via get_table
          (cached for the process). Needs only bigquery.tables.get (included in
          the Data Viewer role); any failure falls back to (None, None).
+
+    When BQ_DISABLE_PARTITION_PROBE is set, step 2 is skipped entirely (no API
+    call): either the explicit column is returned, or (None, None) so the caller
+    uses the configured BQ_DATE_COLUMN.
     """
     explicit = os.environ.get("BQ_PARTITION_COLUMN")
+
+    # No-API fast paths: avoid the get_table round-trip when we can.
+    if explicit:
+        ptype = os.environ.get("BQ_PARTITION_COLUMN_TYPE", "DATE")
+        return (explicit, ptype)
+    if _probe_disabled():
+        return (None, None)
+
     try:
         client = _client()
         tbl = client.get_table(f"{project}.{dataset}.{table}")
@@ -275,8 +304,17 @@ def _service_account_info() -> dict | None:
     return info
 
 
+@functools.lru_cache(maxsize=1)
 def _client():
-    """Create a BigQuery client (view-only access enforced via IAM, see _SCOPES).
+    """Return a cached BigQuery client (view-only access enforced via IAM, see
+    _SCOPES).
+
+    The client (and the credentials object it wraps, which parses the PEM
+    private key) is built once per process and reused. fetch_records and the
+    partition probe both call this, so without caching the relatively expensive
+    credential/client construction happened multiple times per load. The
+    underlying credentials auto-refresh their access token, so a long-lived
+    client is safe. lru_cache(maxsize=1) gives a per-process singleton.
 
     Credentials are resolved in this order:
       1. A credentials object assembled from individual GOOGLE_SA_* env vars.
@@ -337,6 +375,32 @@ def _col_value(columns: dict, key: str, i: int):
     return col[i] if col is not None else None
 
 
+# Opt-in in-process cache of fetched records, keyed by (lookback_days, limit).
+# The dashboard scans ~half a GB per load on an unpartitioned table, so a short
+# TTL turns repeated "Load from BigQuery" clicks (and warm serverless re-hits)
+# into instant, zero-cost responses. Disabled by default (TTL 0) so a load
+# always returns fresh data unless BQ_CACHE_TTL_SECONDS is set.
+_RESULT_CACHE: dict[tuple, tuple] = {}
+
+
+def _cache_ttl() -> int:
+    raw = os.environ.get("BQ_CACHE_TTL_SECONDS")
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _page_size() -> int | None:
+    """Rows per page for the REST download. A larger page means fewer HTTP
+    round-trips when streaming a big result set (the API still caps each page's
+    byte size). None lets the client choose its default."""
+    raw = os.environ.get("BQ_PAGE_SIZE")
+    if raw and raw.isdigit() and int(raw) > 0:
+        return int(raw)
+    return 100_000
+
+
 def fetch_records(lookback_days: int | None = None,
                   limit: int | None = None) -> list[dict]:
     """Query BigQuery and return normalized record dicts (same shape as CSV parse)."""
@@ -344,19 +408,34 @@ def fetch_records(lookback_days: int | None = None,
         env_cap = os.environ.get("BQ_MAX_ROWS")
         limit = int(env_cap) if env_cap and env_cap.isdigit() else None
 
+    days = _clamp_lookback(lookback_days, default_lookback_days())
+    cache_key = (days, limit)
+    ttl = _cache_ttl()
+    if ttl:
+        import time
+        hit = _RESULT_CACHE.get(cache_key)
+        if hit is not None and (time.monotonic() - hit[0]) < ttl:
+            return hit[1]
+
     client = _client()
     sql = build_query(lookback_days=lookback_days, limit=limit)
     query_job = client.query(sql)
 
     fast = _records_from_arrow(query_job)
     if fast is not None:
-        return fast
+        records = fast
+    else:
+        # Fallback: stream rows over the REST API. Build directly off each
+        # BigQuery Row (which supports .get by alias) to avoid allocating an
+        # intermediate dict per row, and use a large page size to cut the
+        # number of HTTP round-trips for big windows.
+        records = []
+        for row in query_job.result(page_size=_page_size()):
+            rec = kpi.build_record(lambda key, _r=row: _r.get(key))
+            if rec is not None:
+                records.append(rec)
 
-    # Fallback: row-by-row over the REST API.
-    records = []
-    for row in query_job.result():
-        data = dict(row)  # BigQuery Row -> plain dict keyed by the aliases
-        rec = kpi.build_record(lambda key, _d=data: _d.get(key))
-        if rec is not None:
-            records.append(rec)
+    if ttl:
+        import time
+        _RESULT_CACHE[cache_key] = (time.monotonic(), records)
     return records
