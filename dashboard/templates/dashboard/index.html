@@ -4,30 +4,32 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Carrier Efficiency Console</title>
+  <title>Frido · Carrier Efficiency Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Archivo:wght@400;500;600&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
-  --paper: #f4f1ea;
-  --paper-2: #ebe7dc;
-  --ink: #1c1a17;
-  --ink-soft: #4a463e;
-  --ink-faint: #8a8377;
-  --line: #d8d2c4;
-  --line-strong: #c2bba9;
-  --accent: #b4451f;       /* burnt orange */
-  --accent-deep: #7a2d12;
-  --gold: #9a7b1f;
-  --good: #3d6b2e;
-  --warn: #a8741a;
-  --bad: #a8341f;
-  --card: #faf8f2;
-  --shadow: 0 1px 0 rgba(28,26,23,.04), 0 2px 8px rgba(28,26,23,.05);
+  /* Frido brand palette (matches the sign-in page) */
+  --paper: #eef7f6;        /* page tint */
+  --paper-2: #e2f1ef;      /* track / hover fill */
+  --ink: #16263a;          /* deep navy ink */
+  --ink-soft: #4b5b6b;
+  --ink-faint: #8a98a6;
+  --line: #e3ebec;
+  --line-strong: #cfe0df;
+  --accent: #0fb6a9;       /* Frido teal */
+  --accent-deep: #0a8c84;
+  --accent-dark: #076b65;
+  --gold: #f2994a;         /* warm secondary accent */
+  --good: #1f9d76;         /* teal-green (good) */
+  --warn: #e0922f;         /* amber (warn) */
+  --bad: #e5564b;          /* coral-red (bad) */
+  --card: #ffffff;
+  --shadow: 0 1px 0 rgba(16,38,58,.03), 0 8px 24px -12px rgba(16,38,58,.16);
   --mono: 'Spline Sans Mono', monospace;
-  --sans: 'Archivo', sans-serif;
-  --display: 'Fraunces', serif;
+  --sans: 'Inter', system-ui, sans-serif;
+  --display: 'Poppins', sans-serif;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -156,11 +158,51 @@ body {
 }
 .btn-ghost:hover { border-color: var(--ink); color: var(--ink); }
 
-/* Filters */
-.filters {
-  display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap;
-  padding-bottom: 22px; margin-bottom: 26px; border-bottom: 1px solid var(--line);
+/* Source toolbar (data window + load controls) */
+.toolbar {
+  display: flex; align-items: flex-end; justify-content: space-between;
+  flex-wrap: wrap; gap: 14px 20px; margin-bottom: 20px;
 }
+.toolbar-window { display: flex; flex-direction: column; }
+.toolbar-label {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+}
+.toolbar-actions { display: flex; gap: 10px; align-items: center; }
+.toolbar-actions .btn-ghost { margin-left: 0; }
+
+/* Filters — tidy responsive grid so every control aligns on a baseline. */
+.filters {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 16px 18px; align-items: end;
+  padding-bottom: 24px; margin-bottom: 26px; border-bottom: 1px solid var(--line);
+}
+.filters .filter { min-width: 0; }
+.filters .msel-toggle, .filters select, .filters input[type="date"] { width: 100%; min-width: 0; }
+
+/* Destination city-tier section + cards */
+.tier-section { margin-bottom: 28px; }
+.tier-section-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; }
+.tier-section-head h3 { font-family: var(--display); font-weight: 500; font-size: 19px; letter-spacing: -.01em; }
+.tier-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+.tier-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+}
+.tier-card::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
+.tier-card.t1::before { background: var(--good); }
+.tier-card.t2::before { background: var(--gold); }
+.tier-card.t3::before { background: var(--ink-faint); }
+.tier-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tier-name { font-family: var(--mono); font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-soft); }
+.tier-cap { font-family: var(--mono); font-size: 10.5px; color: var(--ink-faint); }
+.tier-val { font-family: var(--display); font-weight: 500; font-size: 28px; letter-spacing: -.02em; margin: 4px 0 10px; }
+.tier-val .unit { font-size: 14px; color: var(--ink-faint); font-family: var(--mono); margin-left: 6px; }
+.tier-bar { height: 6px; background: var(--paper-2); border-radius: 3px; overflow: hidden; }
+.tier-bar > span { display: block; height: 100%; border-radius: 3px; }
+.tier-card.t1 .tier-bar > span { background: var(--good); }
+.tier-card.t2 .tier-bar > span { background: var(--gold); }
+.tier-card.t3 .tier-bar > span { background: var(--ink-faint); }
 .filter label {
   display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
   text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
@@ -180,6 +222,30 @@ body {
   border-radius: 8px; padding: 7px 12px; min-width: 150px; cursor: pointer;
 }
 .filter input[type="date"]:focus { outline: none; border-color: var(--accent); }
+
+/* Data-window calendar range (single range picker, re-queries BigQuery) */
+.win-input {
+  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  background: var(--card); border: 1px solid var(--line-strong);
+  border-radius: 8px; padding: 8px 12px; min-width: 230px; cursor: pointer;
+}
+.win-input:focus { outline: none; border-color: var(--accent); }
+.win-input:disabled { opacity: .55; cursor: default; }
+.win-input::placeholder { color: var(--ink-faint); }
+.filter-window .hint-inline { color: var(--accent); }
+
+/* Theme the flatpickr popup to match the burnt-orange palette */
+.flatpickr-day.selected, .flatpickr-day.startRange, .flatpickr-day.endRange,
+.flatpickr-day.selected:hover, .flatpickr-day.startRange:hover, .flatpickr-day.endRange:hover {
+  background: var(--accent); border-color: var(--accent); color: #fff;
+}
+.flatpickr-day.inRange {
+  background: var(--paper-2); border-color: var(--paper-2);
+  box-shadow: -5px 0 0 var(--paper-2), 5px 0 0 var(--paper-2);
+}
+.flatpickr-day.today { border-color: var(--accent); }
+.flatpickr-day:hover { background: var(--paper-2); }
+.flatpickr-months .flatpickr-month, .flatpickr-current-month, .flatpickr-weekday { color: var(--ink); }
 
 /* Multi-select checkbox dropdown (.msel) */
 .filter-wide { flex: 1 1 100%; }
@@ -233,16 +299,51 @@ body {
 .data-range-val { font-family: var(--sans); font-size: 14px; color: var(--ink); font-weight: 500; }
 .data-range-note { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-left: auto; }
 
-/* Stat cards */
-.stat-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; margin-bottom: 28px; }
+/* Loading overlay (BigQuery fetch progress) */
+.loading-overlay {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(244,241,234,.88); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.loading-overlay[hidden] { display: none; }
+.loading-card {
+  width: min(420px, 86vw); background: var(--card); border: 1px solid var(--line);
+  border-radius: 16px; box-shadow: 0 24px 60px -20px rgba(28,26,23,.4);
+  padding: 36px 36px 30px; text-align: center;
+}
+.loading-logo { font-size: 36px; color: var(--accent); line-height: 1; display: block; margin-bottom: 14px; }
+.loading-title { font-family: var(--display); font-weight: 500; font-size: 22px; letter-spacing: -.01em; }
+.loading-sub { color: var(--ink-soft); font-size: 13.5px; margin: 6px 0 22px; min-height: 19px; }
+.loading-track {
+  height: 10px; background: var(--paper-2); border: 1px solid var(--line);
+  border-radius: 6px; overflow: hidden;
+}
+.loading-fill {
+  display: block; height: 100%; width: 0%;
+  background: linear-gradient(90deg, var(--accent), var(--gold));
+  border-radius: 6px; transition: width .35s ease;
+}
+.loading-pct { font-family: var(--mono); font-size: 13px; color: var(--ink-soft); margin-top: 11px; }
+.loading-overlay.error .loading-fill { background: var(--bad); }
+.loading-overlay.error .loading-title { color: var(--bad); }
+
+/* Stat cards — all in a single row (equal-width columns). Falls back to a
+   2-col grid on narrow screens so they stay readable. */
+.stat-row {
+  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
+  gap: 11px; margin-bottom: 28px;
+}
+@media (max-width: 940px) {
+  .stat-row { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); grid-auto-columns: auto; gap: 12px; }
+}
 .stat {
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-  padding: 16px 18px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  padding: 14px 14px; box-shadow: var(--shadow); position: relative; overflow: hidden;
 }
 .stat::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
 .stat-label { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
-.stat-value { font-family: var(--display); font-weight: 500; font-size: 30px; letter-spacing: -.02em; margin-top: 4px; font-optical-sizing: auto; }
-.stat-value .unit { font-size: 15px; color: var(--ink-faint); font-family: var(--mono); margin-left: 2px; }
+.stat-value { font-family: var(--display); font-weight: 500; font-size: 26px; letter-spacing: -.02em; margin-top: 4px; font-optical-sizing: auto; white-space: nowrap; }
+.stat-value .unit { font-size: 13px; color: var(--ink-faint); font-family: var(--mono); margin-left: 2px; }
 
 /* Panels */
 .panel {
@@ -311,7 +412,7 @@ body {
 .pc-head { position: relative; }
 .pc-rank {
   font-family: var(--mono); font-size: 11px; color: #fff;
-  background: var(--accent, #b4451f);
+  background: var(--accent, #0fb6a9);
   width: 20px; height: 20px; border-radius: 6px; display: inline-flex;
   align-items: center; justify-content: center; flex: none;
 }
@@ -346,6 +447,12 @@ body {
 }
 .pc-row-val i { font-style: normal; color: var(--ink-faint); font-size: 10.5px; margin-left: 5px; }
 .pc-muted .pc-row-label, .pc-muted .pc-row-val { color: var(--ink-faint); font-style: italic; }
+.pc-more[hidden] { display: none; }
+.pc-toggle {
+  cursor: pointer; background: none; border: none; padding: 5px 0 0; margin-top: 2px;
+  font-family: var(--mono); font-size: 11px; letter-spacing: .03em; color: var(--accent-deep);
+}
+.pc-toggle:hover { text-decoration: underline; }
 @media (max-width: 520px) {
   .product-grid { grid-template-columns: 1fr; padding: 14px; }
 }
@@ -365,6 +472,13 @@ body {
   font-size: 10px; letter-spacing: .02em; max-width: 64px;
   white-space: normal; line-height: 1.2; vertical-align: bottom;
 }
+
+/* Overall/total footer row (outcome matrix) */
+.score-table tfoot .total-row td {
+  border-top: 2px solid var(--line-strong); border-bottom: none;
+  font-weight: 600; background: var(--paper-2);
+}
+.score-table tfoot .total-row .carrier-name { font-family: var(--display); }
 
 /* Empty-state cell (warehouse-carrier table with no data for current filters) */
 .score-table td.empty {
@@ -413,16 +527,237 @@ body {
   .whc-controls select { min-width: 0; width: 100%; }
   .whc-note { flex-basis: 100%; }
 }
+
+/* =====================================================================
+   FRIDO BRAND SKIN + MOTION  (overrides layered on top of the base)
+   ===================================================================== */
+
+/* Page background — soft teal wash like the sign-in screen */
+.grain { display: none; }
+body {
+  background: radial-gradient(1100px 640px at 0% -6%, #d6f1ee 0%, var(--paper) 44%, #f4fbfa 100%);
+  background-attachment: fixed;
+}
+
+/* ---- Masthead: teal gradient banner with the Frido logo ---- */
+.masthead {
+  border-bottom: none; position: relative; z-index: 2; overflow: hidden;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--accent-deep) 55%, var(--accent-dark) 100%);
+  box-shadow: 0 12px 34px -18px rgba(7,107,101,.75);
+}
+.masthead::before, .masthead::after {
+  content: ""; position: absolute; border-radius: 50%; pointer-events: none;
+  background: rgba(255,255,255,.08);
+}
+.masthead::before { width: 300px; height: 300px; right: -110px; top: -150px; }
+.masthead::after  { width: 200px; height: 200px; left: 36%; bottom: -150px; background: rgba(255,255,255,.05); }
+.masthead-inner { position: relative; z-index: 1; }
+.brand-mark { display: none; }
+.brand-logo {
+  display: inline-flex; align-items: center; background: #fff;
+  padding: 9px 16px; border-radius: 13px; flex: none;
+  box-shadow: 0 8px 18px -8px rgba(7,107,101,.55);
+}
+.brand-logo img { height: 26px; width: auto; display: block; }
+.masthead h1 { color: #fff; font-family: var(--display); font-weight: 600; }
+.masthead .tagline { color: rgba(255,255,255,.82); }
+.masthead-meta { color: rgba(255,255,255,.9); }
+.user-chip {
+  background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.28);
+  color: #fff; -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.user-chip .user-dot { background: #b6f5cd; box-shadow: 0 0 0 3px rgba(182,245,205,.25); }
+.user-chip a { color: #fff; text-decoration: underline; }
+
+/* ---- Panels / cards: softer, rounder, modern ---- */
+.stat, .panel, .tier-card, .pc-card { border-radius: 16px; }
+.panel-head h3 { position: relative; padding-left: 14px; }
+.panel-head h3::before {
+  content: ""; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 5px; height: 18px; border-radius: 3px;
+  background: linear-gradient(var(--accent), var(--accent-deep));
+}
+.stat::before { background: linear-gradient(var(--accent), var(--accent-deep)); }
+.stat-value, .tier-val { color: var(--ink); font-family: var(--display); font-weight: 600; }
+.data-range { border-radius: 12px; }
+
+/* ---- Buttons: gradient + lift ---- */
+.btn-primary {
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  border-radius: 11px; box-shadow: 0 10px 22px -10px rgba(10,140,132,.7);
+  transition: transform .1s, filter .18s, box-shadow .18s;
+}
+.btn-primary:hover {
+  background: linear-gradient(135deg, var(--accent-deep), var(--accent-dark));
+  filter: brightness(1.03); box-shadow: 0 13px 26px -10px rgba(10,140,132,.8);
+}
+.btn-secondary, .btn-ghost { border-radius: 10px; transition: all .16s; }
+.btn-secondary:hover, .btn-ghost:hover { border-color: var(--accent); color: var(--accent-deep); }
+.upload-card { border-radius: 20px; box-shadow: var(--shadow); }
+.upload-card.drag { border-color: var(--accent); }
+.upload-logo { height: 30px; width: auto; display: block; margin: 0 auto 10px; }
+
+/* ---- Hover lift on cards + table rows ---- */
+.stat, .tier-card, .pc-card { transition: transform .18s ease, box-shadow .18s ease; }
+.stat:hover, .tier-card:hover, .pc-card:hover {
+  transform: translateY(-3px); box-shadow: 0 16px 32px -16px rgba(16,38,58,.30);
+}
+.panel { transition: box-shadow .2s ease; }
+.panel:hover { box-shadow: 0 16px 36px -18px rgba(16,38,58,.22); }
+.score-table tbody tr { transition: background .14s ease; }
+
+/* ---- Bars grow in (width animated from 0 by JS) ---- */
+.tier-bar > span, .score-bar > span, .pc-bar-fill, .pc-share > span {
+  transition: width .9s cubic-bezier(.22,.61,.36,1);
+}
+
+/* ---- Stat number count-up: keep on one line, tabular ---- */
+.stat-value { font-variant-numeric: tabular-nums; }
+
+/* ---- Scroll reveal ----
+   NB: no `will-change` here — it would create a persistent stacking context on
+   .filters / .stat-row and trap the filter dropdowns behind the stat cards. */
+.reveal { opacity: 0; transform: translateY(20px);
+  transition: opacity .6s ease, transform .6s cubic-bezier(.22,.61,.36,1); }
+.reveal.in-view { opacity: 1; transform: none; }
+
+/* Keep the filter bar (and its open dropdowns) above everything below it. */
+.filters { position: relative; z-index: 20; }
+.stat-row { position: relative; z-index: 1; }
+.msel.open { position: relative; z-index: 40; }
+
+/* ---- Branded loading overlay ---- */
+.loading-overlay { background: rgba(238,247,246,.92); }
+.loading-card { border-radius: 22px; box-shadow: 0 30px 70px -24px rgba(16,38,58,.45); }
+.loading-brand {
+  position: relative; width: 78px; height: 78px; margin: 0 auto 18px;
+  display: flex; align-items: center; justify-content: center;
+}
+.loading-ring {
+  position: absolute; inset: 0; border-radius: 50%;
+  border: 4px solid rgba(15,182,169,.18);
+  border-top-color: var(--accent); border-right-color: var(--accent-deep);
+  animation: frido-spin .9s linear infinite;
+}
+.loading-logo-img { width: 42px; height: auto; display: block; }
+@keyframes frido-spin { to { transform: rotate(360deg); } }
+.loading-title { font-family: var(--display); font-weight: 600; }
+.loading-fill { background: linear-gradient(90deg, var(--accent), var(--gold)); }
+
+/* ---- Dashboard entrance ---- */
+.dashboard:not([hidden]) { animation: frido-fade-up .5s ease both; }
+@keyframes frido-fade-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1 !important; transform: none !important; }
+  .tier-bar > span, .score-bar > span, .pc-bar-fill, .pc-share > span { transition: none !important; }
+  .dashboard:not([hidden]) { animation: none; }
+  .loading-ring { animation-duration: 1.6s; }
+}
+
+/* ===================== CARRIER COST ANALYSIS ===================== */
+.view-tabs {
+  display: inline-flex; gap: 4px; margin: 4px 0 26px; padding: 5px;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow);
+}
+.vtab {
+  cursor: pointer; border: none; background: transparent; color: var(--ink-soft);
+  font-family: var(--display); font-weight: 600; font-size: 14px;
+  padding: 9px 18px; border-radius: 10px; transition: all .18s;
+}
+.vtab:hover { color: var(--accent-deep); }
+.vtab.active {
+  color: #fff; background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  box-shadow: 0 8px 18px -10px rgba(10,140,132,.7);
+}
+
+.inv-chips { display: flex; flex-wrap: wrap; gap: 9px; margin-bottom: 22px; }
+.inv-chip {
+  display: inline-flex; align-items: center; gap: 9px;
+  background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+  border-radius: 10px; padding: 8px 13px; box-shadow: var(--shadow); font-size: 13px;
+}
+.inv-chip b { font-family: var(--display); font-weight: 600; }
+.inv-chip .chip-meta { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+.inv-chip .chip-amt { font-family: var(--mono); font-weight: 600; color: var(--accent-deep); }
+
+/* Category cards with product imagery */
+.prodcost-grid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px;
+}
+.prodcost-card {
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+  box-shadow: var(--shadow); overflow: hidden; display: flex; flex-direction: column;
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.prodcost-card:hover { transform: translateY(-3px); box-shadow: 0 16px 32px -16px rgba(16,38,58,.3); }
+.pcost-media {
+  position: relative; height: 132px; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, #e6f6f4, #d3eeeb); overflow: hidden;
+}
+.pcost-media img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pcost-media .pcost-icon { font-size: 52px; line-height: 1; }
+.pcost-rank {
+  position: absolute; top: 10px; left: 10px; z-index: 2;
+  font-family: var(--mono); font-size: 12px; font-weight: 600; color: #fff;
+  background: rgba(16,38,58,.55); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+  width: 24px; height: 24px; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center;
+}
+.pcost-share-badge {
+  position: absolute; top: 10px; right: 10px; z-index: 2;
+  font-family: var(--mono); font-size: 11px; color: #fff;
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+  padding: 3px 9px; border-radius: 20px; box-shadow: 0 6px 14px -6px rgba(10,140,132,.7);
+}
+.pcost-body { padding: 14px 16px 16px; display: flex; flex-direction: column; flex: 1; }
+.pcost-name { font-family: var(--display); font-weight: 600; font-size: 16px; letter-spacing: -.01em; }
+.pcost-spend { font-family: var(--display); font-weight: 600; font-size: 24px; color: var(--ink); margin: 6px 0 2px; }
+.pcost-meta { font-family: var(--mono); font-size: 11.5px; color: var(--ink-faint); margin-bottom: 10px; }
+.pcost-meta b { color: var(--accent-deep); font-weight: 600; }
+.pcost-carriers { margin-top: auto; padding-top: 10px; border-top: 1px solid var(--line); }
+.pcost-ct { font-family: var(--mono); font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); margin-bottom: 7px; }
+.pcost-crow { display: grid; grid-template-columns: 84px 1fr auto; align-items: center; gap: 8px; margin-bottom: 5px; }
+.pcost-crow .cn { font-size: 12px; color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pcost-crow .cb { height: 6px; background: var(--paper-2); border-radius: 3px; overflow: hidden; }
+.pcost-crow .cb > span { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width .9s cubic-bezier(.22,.61,.36,1); }
+.pcost-crow.cheap .cb > span { background: var(--good); }
+.pcost-crow .cv { font-family: var(--mono); font-size: 12px; text-align: right; white-space: nowrap; }
+.pcost-crow.cheap .cv { color: var(--good); font-weight: 600; }
+
+/* Cost matrix cheapest/most-expensive cells */
+.matrix-table td.cheap { color: var(--good); font-weight: 600; background: rgba(31,157,118,.10); }
+.matrix-table td.dear { color: var(--bad); font-weight: 600; }
+.matrix-table td.cost-empty { color: var(--ink-faint); }
+.inv-cheapest { color: var(--good); font-weight: 600; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
 
+  <!-- Loading overlay: shown during every BigQuery fetch (auto-load on entry
+       and each date-window change). The percentage is animated client-side
+       since the fetch is a single non-streaming request. -->
+  <div id="loadingOverlay" class="loading-overlay" hidden>
+    <div class="loading-card">
+      <div class="loading-brand">
+        <span class="loading-ring"></span>
+        <img class="loading-logo-img" src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido">
+      </div>
+      <h2 class="loading-title" id="loadingTitle">Loading Shipment Data</h2>
+      <p class="loading-sub" id="loadingSub">Please wait while we fetch your data…</p>
+      <div class="loading-track"><span class="loading-fill" id="loadingFill"></span></div>
+      <div class="loading-pct" id="loadingPct">0%</div>
+    </div>
+  </div>
+
   <header class="masthead">
     <div class="masthead-inner">
       <div class="brand">
-        <span class="brand-mark">◇</span>
+        <span class="brand-logo"><img src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido"></span>
         <div>
           <h1>Carrier Efficiency Console</h1>
           <p class="tagline">Shipment performance &amp; partner scoring</p>
@@ -437,19 +772,30 @@ body {
 
   <main class="wrap">
 
+    <!-- View switcher: Partner efficiency vs Carrier cost analysis -->
+    <div class="view-tabs" id="viewTabs">
+      <button type="button" class="vtab active" data-view="efficiency">📊 Partner efficiency</button>
+      <button type="button" class="vtab" data-view="cost">🧾 Carrier cost analysis</button>
+    </div>
+
+    <div id="viewEfficiency">
+
     <!-- Upload zone -->
     <section id="uploadZone" class="upload-zone">
       <div class="upload-card" id="dropArea">
+        <img class="upload-logo" src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido">
         <div class="upload-icon">⤓</div>
         <h2>Load your shipment data</h2>
         <p>Pull the latest shipments straight from BigQuery, or upload a standard export (<code>.xlsx</code> / <code>.csv</code>).</p>
         <div class="bq-range">
           <label for="bqRange">Date range</label>
           <select id="bqRange">
-            <option value="7">Last 7 days</option>
+            <option value="7" selected>Last 7 days</option>
             <option value="15">Last 15 days</option>
-            <option value="30" selected>Last 30 days</option>
+            <option value="30">Last 30 days</option>
             <option value="45">Last 45 days</option>
+            <option value="60">Last 60 days</option>
+            <option value="90">Last 90 days</option>
           </select>
         </div>
         <button type="button" class="btn-primary" id="bqLoadBtn">Load from BigQuery</button>
@@ -470,6 +816,19 @@ body {
         <span class="data-range-note" id="dataRangeNote"></span>
       </div>
 
+      <!-- Source toolbar: the BigQuery data window + load controls, kept apart
+           from the analytical filters below. -->
+      <div class="toolbar">
+        <div class="toolbar-window filter-window">
+          <span class="toolbar-label">Data window <span class="hint-inline">re-queries BigQuery</span></span>
+          <input type="text" id="winRange" class="win-input" placeholder="Select start → end date" aria-label="Data window date range">
+        </div>
+        <div class="toolbar-actions">
+          <button class="btn-ghost" id="bqReloadBtn">⟳ Reload BigQuery</button>
+          <button class="btn-ghost" id="reuploadBtn">↻ New source</button>
+        </div>
+      </div>
+
       <!-- Filter bar. Every categorical filter is a multi-select checkbox
            dropdown (.msel); leaving one empty means "all". -->
       <div class="filters">
@@ -480,6 +839,17 @@ body {
             <div class="msel-menu" hidden>
               <label class="msel-opt"><input type="checkbox" value="Forward" checked><span>Forward</span></label>
               <label class="msel-opt"><input type="checkbox" value="Reverse Pickup"><span>Reverse</span></label>
+            </div>
+          </div>
+        </div>
+        <div class="filter">
+          <label>City tier <span class="hint-inline">by destination</span></label>
+          <div class="msel" data-name="tier" data-all="All tiers">
+            <button type="button" class="msel-toggle"><span class="msel-text">All tiers</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden>
+              <label class="msel-opt"><input type="checkbox" value="Tier 1"><span>Tier 1 (metros)</span></label>
+              <label class="msel-opt"><input type="checkbox" value="Tier 2"><span>Tier 2 (large cities)</span></label>
+              <label class="msel-opt"><input type="checkbox" value="Tier 3"><span>Tier 3 (rest)</span></label>
             </div>
           </div>
         </div>
@@ -548,12 +918,19 @@ body {
           <label>Pickup to</label>
           <input type="date" id="fDateTo">
         </div>
-        <button class="btn-ghost" id="bqReloadBtn">⟳ Reload BigQuery</button>
-        <button class="btn-ghost" id="reuploadBtn">↻ New source</button>
       </div>
 
       <!-- Summary stats -->
       <div class="stat-row" id="statRow"></div>
+
+      <!-- Destination city-tier breakdown -->
+      <div class="tier-section">
+        <div class="tier-section-head">
+          <h3>Destination city tiers</h3>
+          <span class="panel-sub" id="tierSub"></span>
+        </div>
+        <div class="tier-row" id="tierRow"></div>
+      </div>
 
       <!-- Score table -->
       <div class="panel">
@@ -598,7 +975,7 @@ body {
         <div class="whc-controls">
           <label class="whc-pick-label" for="whcPick">Warehouse</label>
           <select id="whcPick"></select>
-          <span class="whc-note">Scores are relative <em>within</em> the selected warehouse — i.e. each partner ranked against the others picking up here.</span>
+          <span class="whc-note">Scores are relative <em>within</em> the selected warehouse — i.e. each carrier account ranked against the others picking up here.</span>
         </div>
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cWhc"></canvas></div>
         <div class="table-scroll">
@@ -615,17 +992,6 @@ body {
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cWh"></canvas></div>
         <div class="table-scroll">
           <table class="score-table" id="whTable"></table>
-        </div>
-      </div>
-
-      <!-- City breakdown (NEW) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h3>City rollup</h3>
-          <p id="citySub" class="panel-sub"></p>
-        </div>
-        <div class="table-scroll">
-          <table class="score-table" id="cityTable"></table>
         </div>
       </div>
 
@@ -674,6 +1040,89 @@ body {
       </div>
 
     </section>
+    </div><!-- /viewEfficiency -->
+
+    <!-- ============ CARRIER COST ANALYSIS ============ -->
+    <div id="viewCost" hidden>
+
+      <!-- Invoice upload (empty state) -->
+      <section id="invUpload" class="upload-zone">
+        <div class="upload-card" id="invDrop">
+          <img class="upload-logo" src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido">
+          <div class="upload-icon">🧾</div>
+          <h2>Analyse carrier invoices</h2>
+          <p>Upload one or more carrier invoices (<code>.xlsx</code> / <code>.csv</code>) — BlueDart, SkyAir or Frido Prime — and see exactly who charges what for each product category &amp; SKU.</p>
+          <label class="btn-primary" for="invFileInput">Upload invoices</label>
+          <input type="file" id="invFileInput" accept=".xlsx,.xlsm,.csv,.tsv" multiple hidden>
+          <p class="upload-hint" id="invHint"></p>
+        </div>
+      </section>
+
+      <!-- Invoice dashboard -->
+      <section id="invDash" hidden>
+        <div class="toolbar">
+          <div class="toolbar-window">
+            <span class="toolbar-label">Invoices loaded</span>
+            <span class="data-range-val" id="invFilesLine"></span>
+          </div>
+          <div class="toolbar-actions">
+            <label class="btn-ghost" for="invAddInput">＋ Add invoices</label>
+            <input type="file" id="invAddInput" accept=".xlsx,.xlsm,.csv,.tsv" multiple hidden>
+            <button type="button" class="btn-ghost" id="invReset">↻ Clear all</button>
+          </div>
+        </div>
+
+        <div id="invFileChips" class="inv-chips"></div>
+
+        <!-- Summary stats -->
+        <div class="stat-row" id="invStatRow"></div>
+
+        <!-- Category cards with product images -->
+        <div class="tier-section">
+          <div class="tier-section-head">
+            <h3>Spend by product category</h3>
+            <span class="panel-sub" id="invCatSub"></span>
+          </div>
+          <div class="prodcost-grid" id="invCatGrid"></div>
+        </div>
+
+        <!-- Charts -->
+        <div class="chart-grid">
+          <div class="panel">
+            <div class="panel-head"><h3>Spend share by category</h3></div>
+            <div class="chart-box" style="--h: 320px"><canvas id="cInvCat"></canvas></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h3>Spend by carrier</h3><span class="panel-sub">₹ billed</span></div>
+            <div class="chart-box" style="--h: 320px"><canvas id="cInvCarrier"></canvas></div>
+          </div>
+        </div>
+
+        <!-- Carrier × category cost matrix -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Cost per shipment · carrier × category</h3>
+            <p class="panel-sub">avg ₹ / shipment · greenest cell = cheapest carrier in that row</p>
+          </div>
+          <div class="table-scroll">
+            <table class="score-table matrix-table" id="invMatrix"></table>
+          </div>
+        </div>
+
+        <!-- SKU cost explorer -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>SKU cost explorer</h3>
+            <p class="panel-sub" id="invSkuSub"></p>
+            <input type="search" class="panel-search" id="invSkuSearch" placeholder="Search SKU / product…" autocomplete="off">
+          </div>
+          <div class="table-scroll">
+            <table class="score-table" id="invSkuTable"></table>
+          </div>
+        </div>
+      </section>
+    </div><!-- /viewCost -->
+
   </main>
 
   <footer class="footer">
@@ -683,8 +1132,10 @@ body {
   <script>
     window.PROCESS_URL = "{% url 'process_upload' %}";
     window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
+    window.INVOICES_URL = "{% url 'process_invoices' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
+    window.BQ_CONFIGURED = {{ bq_configured|yesno:"true,false" }};
   </script>
   <script>
     (function () {
@@ -694,8 +1145,26 @@ body {
   var loaded = false;
   var lastReport = null;       // keep the latest report for the warehouse picker
   var whcSelection = "";       // currently selected warehouse in the partner-per-warehouse panel
+  var animateMode = true;      // false on re-filter -> instant render (no count-up/grow)
+  var chartReg = {};           // live Chart.js instances, reused across re-filters
 
   var $ = function (id) { return document.getElementById(id); };
+
+  // Create a chart once, then update it in place on subsequent renders. Avoids
+  // the cost of destroying/recreating every chart on each filter change; the
+  // update is animation-free during re-filters for an instant refresh.
+  function upsertChart(id, cfg) {
+    var ch = chartReg[id];
+    if (ch) {
+      ch.data.labels = cfg.data.labels;
+      ch.data.datasets = cfg.data.datasets;
+      ch.update(animateMode ? undefined : "none");
+      return ch;
+    }
+    ch = new Chart($(id), cfg);
+    chartReg[id] = ch;
+    return ch;
+  }
 
   function fmtH(v) {
     if (v == null || isNaN(v)) return "\u2014";
@@ -721,6 +1190,56 @@ body {
   function destroyCharts() {
     charts.forEach(function (c) { try { c.destroy(); } catch (e) {} });
     charts = [];
+  }
+
+  // ---- Loading overlay / progress bar -----------------------------------
+  // The BigQuery fetch is a single non-streaming request, so there's no real
+  // byte-level progress to report. We animate the bar toward ~92% while the
+  // request is in flight (slowing as it climbs so it never looks stuck), then
+  // snap to 100% the moment the response lands.
+  var progTimer = null;
+
+  function setProgress(p) {
+    var fill = $("loadingFill"), pct = $("loadingPct");
+    if (fill) fill.style.width = p + "%";
+    if (pct) pct.textContent = Math.round(p) + "%";
+  }
+
+  function showLoading(title, sub) {
+    var ov = $("loadingOverlay");
+    if (!ov) return;
+    ov.classList.remove("error");
+    if (title != null) $("loadingTitle").textContent = title;
+    if (sub != null) $("loadingSub").textContent = sub;
+    setProgress(0);
+    ov.hidden = false;
+    clearInterval(progTimer);
+    var p = 0;
+    progTimer = setInterval(function () {
+      var step = p < 55 ? 5 : p < 75 ? 1.8 : p < 88 ? 0.6 : 0.18;
+      p = Math.min(92, p + step);
+      setProgress(p);
+    }, 130);
+  }
+
+  function finishLoading() {
+    clearInterval(progTimer);
+    setProgress(100);
+    setTimeout(function () {
+      var ov = $("loadingOverlay");
+      if (ov) ov.hidden = true;
+    }, 380);
+  }
+
+  function failLoading(msg) {
+    clearInterval(progTimer);
+    var ov = $("loadingOverlay");
+    if (!ov) return;
+    ov.classList.add("error");
+    $("loadingTitle").textContent = "Couldn’t load data";
+    $("loadingSub").textContent = msg || "Please try again.";
+    setProgress(100);
+    setTimeout(function () { if (ov) ov.hidden = true; }, 2400);
   }
 
   function post(formData, url) {
@@ -782,46 +1301,135 @@ body {
         $("uploadZone").hidden = true;
         $("dashboard").hidden = false;
         $("metaStatus").textContent = file.name + " \u00b7 " + report.summary.total.toLocaleString() + " rows";
+        resetDynamicFilters();   // rebuild zone/account/warehouse from the uploaded data
         render(report);
       })
       .catch(function (err) { setHint(err.message, "err"); });
   }
 
-  var lastLookback = "30";
+  var lastLookback = "7";
   var loadDesc = "";
-  function loadBigQuery() {
+
+  // ---- Calendar (data-window) helpers -----------------------------------
+  var winPicker = null;
+
+  // Local YYYY-MM-DD (avoid the UTC shift that toISOString() can introduce).
+  function fmtISO(d) {
+    var m = String(d.getMonth() + 1), da = String(d.getDate());
+    return d.getFullYear() + "-" + (m.length < 2 ? "0" + m : m) + "-" +
+      (da.length < 2 ? "0" + da : da);
+  }
+  function isoToday() { return fmtISO(new Date()); }
+  function isoDaysAgo(n) { var d = new Date(); d.setDate(d.getDate() - n); return fmtISO(d); }
+
+  // One calendar for the whole range: click the start date, then the end date.
+  // Selecting both ends fires a BigQuery re-fetch.
+  function initWinPicker() {
+    var el = $("winRange");
+    if (!el || typeof flatpickr === "undefined") return;
+    winPicker = flatpickr(el, {
+      mode: "range",
+      dateFormat: "Y-m-d",
+      maxDate: "today",
+      onChange: function (sel) {
+        if (sel.length === 2) loadBigQuery({ from: fmtISO(sel[0]), to: fmtISO(sel[1]) });
+      }
+    });
+  }
+
+  function setWinRange(from, to) {
+    if (winPicker) winPicker.setDate([from, to], false);  // false = don't fire onChange
+    else if ($("winRange")) $("winRange").value = (from && to) ? (from + " to " + to) : "";
+  }
+  function getWinRange() {
+    if (winPicker && winPicker.selectedDates.length === 2)
+      return [fmtISO(winPicker.selectedDates[0]), fmtISO(winPicker.selectedDates[1])];
+    return null;
+  }
+  function setWinDisabled(b) {
+    if ($("winRange")) $("winRange").disabled = b;
+  }
+  // Reflect the actually-loaded window back into the picker.
+  function syncWin(report, opts) {
+    var w = report && report.load_window;
+    if (w && w.from && w.to) setWinRange(w.from, w.to);
+    else if (opts && opts.from && opts.to) setWinRange(opts.from, opts.to);
+  }
+
+  // Fetch from BigQuery and render the dashboard. `opts` is either
+  // { from, to } for an explicit calendar range, or { lookback } for a
+  // last-N-days window. `opts.auto` marks the initial load on entry (a failure
+  // there falls back to the manual upload screen instead of a blank page).
+  function loadBigQuery(opts) {
+    if (!opts || typeof opts !== "object" || (typeof Event !== "undefined" && opts instanceof Event)) opts = {};
+    var useRange = !!(opts.from && opts.to);
+
     var btn = $("bqLoadBtn"), rbtn = $("bqReloadBtn");
-    if ($("bqRange")) lastLookback = $("bqRange").value;
-    setHint("Loading last " + lastLookback + " days from BigQuery…", null);
+    var fd = currentFilters();
+    var label;
+    if (useRange) {
+      fd.append("win_from", opts.from);
+      fd.append("win_to", opts.to);
+      label = "Fetching " + opts.from + " → " + opts.to + " from BigQuery";
+    } else {
+      lastLookback = String(opts.lookback || lastLookback || "7");
+      fd.append("lookback_days", lastLookback);
+      label = "Fetching the last " + lastLookback + " days from BigQuery";
+    }
+
+    showLoading("Loading Shipment Data", "Please wait while we fetch your data…");
+    setHint(label + "…", null);
     if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
     if (rbtn) rbtn.disabled = true;
-    var fd = currentFilters();
-    fd.append("lookback_days", lastLookback);
-    post(fd, window.BIGQUERY_URL)
+    setWinDisabled(true);
+
+    return post(fd, window.BIGQUERY_URL)
       .then(function (report) {
         loaded = true;
-        loadDesc = "load window · last " + lastLookback + "d (by report date)";
+        var desc = useRange ? (opts.from + " → " + opts.to) : ("last " + lastLookback + "d");
+        loadDesc = "load window · " + desc;
         setHint("Loaded " + report.summary.total.toLocaleString() + " shipments from BigQuery.", "ok");
         $("uploadZone").hidden = true;
         $("dashboard").hidden = false;
-        $("metaStatus").textContent = "BigQuery · last " + lastLookback + "d · " + report.summary.total.toLocaleString() + " rows";
+        $("metaStatus").textContent = "BigQuery · " + desc + " · " +
+          report.summary.total.toLocaleString() + " rows";
+        syncWin(report, opts);
+        resetDynamicFilters();   // rebuild zone/account/warehouse from the new data
         render(report);
+        finishLoading();
       })
       .catch(function (err) {
         setHint(err.message, "err");
         $("metaStatus").textContent = "Error: " + err.message;
+        if (opts.auto && !loaded) $("uploadZone").hidden = false;
+        failLoading(err.message);
       })
       .then(function () {
         if (btn) { btn.disabled = false; btn.textContent = "Load from BigQuery"; }
         if (rbtn) rbtn.disabled = false;
+        setWinDisabled(false);
       });
   }
 
+
+  // Re-filter the cached dataset. Rapid filter clicks are debounced into one
+  // request (scheduleRefilter), and a sequence token ensures only the latest
+  // response renders so a slow earlier reply can't overwrite a newer one.
+  var refilterTimer = null, refilterSeq = 0;
   function refilter() {
     if (!loaded) return;
-    post(currentFilters()).then(render).catch(function (err) {
+    var seq = ++refilterSeq;
+    post(currentFilters()).then(function (report) {
+      if (seq !== refilterSeq) return;          // superseded by a newer filter
+      render(report, { refilter: true });
+    }).catch(function (err) {
+      if (seq !== refilterSeq) return;
       $("metaStatus").textContent = "Error: " + err.message;
     });
+  }
+  function scheduleRefilter() {
+    clearTimeout(refilterTimer);
+    refilterTimer = setTimeout(refilter, 200);
   }
 
   // Each dynamic dropdown is filled independently and only the FIRST time it
@@ -829,6 +1437,25 @@ body {
   // "zones") never permanently blocks the others from filling on a later one.
   var filled = { zone: false, account: false, warehouse: false };
   var dateBoundsSet = false;
+
+  // When a NEW dataset loads (fresh BigQuery pull or file upload), the dynamic
+  // dropdowns (zone / carrier account / warehouse) and their counts must be
+  // rebuilt from the new data — otherwise they keep showing the PREVIOUS
+  // window's options, names and quantities. Only the dynamic dropdowns are
+  // cleared; static ones (delivery type, weight, payment, pickup time, tier)
+  // and their selections are left intact. Not called on client-side re-filters
+  // (the loaded record set, and thus the option lists, don't change there).
+  function resetDynamicFilters() {
+    filled = { zone: false, account: false, warehouse: false };
+    dateBoundsSet = false;
+    ["zone", "account", "warehouse"].forEach(function (name) {
+      var m = document.querySelector('.msel[data-name="' + name + '"]');
+      if (!m) return;
+      var menu = m.querySelector(".msel-menu");
+      if (menu) menu.innerHTML = "";   // drop stale options
+      mselText(m);                      // reset the button label to "All …"
+    });
+  }
 
   function populateOptions(filters) {
     filters = filters || {};
@@ -911,25 +1538,67 @@ body {
     });
   }
 
-  function render(report) {
+  // ---- Motion helpers ---------------------------------------------------
+  // Bars render with their final width inline; reset to 0 then restore so the
+  // CSS width-transition plays as a grow-in.
+  function animateBars(root) {
+    root = root || document;
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    var bars = root.querySelectorAll(".tier-bar > span, .score-bar > span, .pc-bar-fill, .pc-share > span");
+    bars.forEach(function (el) {
+      var target = el.style.width;
+      if (!target || target === "0%") return;
+      el.style.width = "0%";
+      void el.offsetWidth;            // force reflow so the transition runs
+      requestAnimationFrame(function () { el.style.width = target; });
+    });
+  }
+
+  // Reveal panels/sections as they scroll into view (one-shot per element).
+  var _revealObs = null;
+  function observeReveals() {
+    if (!("IntersectionObserver" in window)) return;
+    if (!_revealObs) {
+      _revealObs = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { e.target.classList.add("in-view"); _revealObs.unobserve(e.target); }
+        });
+      }, { threshold: 0.06, rootMargin: "0px 0px -40px 0px" });
+    }
+    var sel = "#dashboard .data-range, #dashboard .toolbar, #dashboard .filters, " +
+      "#dashboard .stat-row, #dashboard .tier-section, #dashboard .panel";
+    document.querySelectorAll(sel).forEach(function (el) {
+      if (!el.classList.contains("reveal")) { el.classList.add("reveal"); _revealObs.observe(el); }
+    });
+  }
+
+  function render(report, opts) {
+    // On a re-filter we skip the entrance animations and update charts in place
+    // (no destroy/recreate) so the refresh feels instant. A fresh dataset load
+    // (opts omitted) animates as before.
+    animateMode = !(opts && opts.refilter);
     lastReport = report;
     populateOptions(report.filters);
     renderDataRange(report);
     renderStats(report.summary);
+    renderTiers(report.summary);
     renderFormula(report.weights);
     renderTable(report.carriers);
     renderStatusMatrix(report);
     renderProducts(report);
     renderWarehouses(report);
-    renderCities(report);
     renderDestinations(report);
     renderLanes(report);
     renderWarehouseCarrierPanel(report);
-    destroyCharts();
     renderCharts(report);
     renderWarehouseChart(report.warehouses);
     renderDestChart(report.destinations);
     renderWhcChart();
+    if (animateMode) {
+      observeReveals();
+      requestAnimationFrame(function () { animateBars(); });
+    }
   }
 
   // Show ONE authoritative date range. For BigQuery loads that's the load
@@ -942,7 +1611,8 @@ body {
     var f = (report && report.filters) || {};
     var lo, hi, label, note;
     if (w && w.from && w.to) {
-      lo = w.from; hi = w.to; label = "Date range"; note = "last " + w.days + " days";
+      lo = w.from; hi = w.to; label = "Date range";
+      note = (w.days != null) ? ("last " + w.days + " days") : "";
     } else {
       lo = f.date_min; hi = f.date_max; label = "Pickup dates"; note = "";
     }
@@ -960,18 +1630,86 @@ body {
     box.hidden = false;
   }
 
+  // Format a numeric stat for display (mirrors the count-up frames).
+  function formatStat(v, kind) {
+    if (v == null || isNaN(v)) return "\u2014";
+    if (kind === "pct") return v.toFixed(1) + "%";
+    if (kind === "hours") return fmtH(v);
+    if (kind === "money") return "\u20b9" + Math.round(v).toLocaleString();
+    return Math.round(v).toLocaleString();
+  }
+
+  // Animate a stat value from 0 to its target (easeOutCubic), then settle.
+  function countUp(el, target, kind, suffix) {
+    suffix = suffix || "";
+    if (target == null || isNaN(target)) { el.innerHTML = "\u2014"; return; }
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) { el.innerHTML = formatStat(target, kind) + suffix; return; }
+    var dur = 950, start = null;
+    function frame(ts) {
+      if (start == null) start = ts;
+      var p = Math.min(1, (ts - start) / dur);
+      var eased = 1 - Math.pow(1 - p, 3);
+      el.innerHTML = formatStat(target * eased, kind) + suffix;
+      if (p < 1) requestAnimationFrame(frame);
+      else el.innerHTML = formatStat(target, kind) + suffix;
+    }
+    requestAnimationFrame(frame);
+  }
+
   function renderStats(s) {
+    // NDD = next-day-delivery partner accounts; show the count plus its share
+    // of the current (filtered) shipment set.
+    var nddSuffix = (s.ndd_pct != null)
+      ? ' <span class="unit">' + s.ndd_pct.toFixed(1) + "%</span>" : "";
+
     var cards = [
-      ["Shipments", s.total.toLocaleString(), ""],
-      ["Delivery success", fmtPct(s.success_rate), ""],
-      ["Avg pickup\u2192OFD1", fmtH(s.avg_p2o), ""],
-      ["Avg pickup\u2192delivery", fmtH(s.avg_p2d), ""],
-      ["Carriers", String(s.carriers), ""],
-      ["Warehouses", String(s.warehouses), ""]
+      { label: "Shipments", value: s.total, kind: "int" },
+      { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
+      { label: "Delivery success", value: s.success_rate, kind: "pct" },
+      { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
+      { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
+      { label: "Carriers", value: s.carriers, kind: "int" },
+      { label: "Warehouses", value: s.warehouses, kind: "int" }
     ];
     $("statRow").innerHTML = cards.map(function (c) {
-      return '<div class="stat"><div class="stat-label">' + c[0] +
-        '</div><div class="stat-value">' + c[1] + '</div></div>';
+      return '<div class="stat"><div class="stat-label">' + c.label +
+        '</div><div class="stat-value">\u2014</div></div>';
+    }).join("");
+    var els = $("statRow").querySelectorAll(".stat-value");
+    cards.forEach(function (c, i) {
+      if (animateMode) countUp(els[i], c.value, c.kind, c.suffix || "");
+      else els[i].innerHTML = formatStat(c.value, c.kind) + (c.suffix || "");
+    });
+  }
+
+  // Destination city-tier breakdown cards (Tier 1/2/3 by drop pincode).
+  function renderTiers(s) {
+    var t = (s && s.tiers) || {};
+    var total = s.total || 0;
+    var defs = [
+      ["Tier 1", "Metros", "t1"],
+      ["Tier 2", "Large cities", "t2"],
+      ["Tier 3", "Rest of India", "t3"]
+    ];
+    var classified = (t["Tier 1"] || 0) + (t["Tier 2"] || 0) + (t["Tier 3"] || 0);
+    var unknown = t["Unknown"] || 0;
+    var sub = $("tierSub");
+    if (sub) {
+      sub.textContent = classified.toLocaleString() + " of " + total.toLocaleString() +
+        " shipments classified by drop pincode" +
+        (unknown ? " · " + unknown.toLocaleString() + " unmapped" : "");
+    }
+    $("tierRow").innerHTML = defs.map(function (d) {
+      var n = t[d[0]] || 0;
+      var pct = total ? (n / total * 100) : 0;
+      return '<div class="tier-card ' + d[2] + '">' +
+        '<div class="tier-head"><span class="tier-name">' + d[0] + '</span>' +
+        '<span class="tier-cap">' + d[1] + '</span></div>' +
+        '<div class="tier-val">' + n.toLocaleString() +
+        '<span class="unit">' + pct.toFixed(1) + '%</span></div>' +
+        '<div class="tier-bar"><span style="width:' + Math.round(pct) + '%"></span></div>' +
+        '</div>';
     }).join("");
   }
 
@@ -1048,27 +1786,6 @@ body {
         "</tr>";
     }).join("");
     $("whTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
-  }
-
-  function renderCities(report) {
-    var cities = report.cities || [];
-    var minN = report.warehouse_min_n;
-    var scored = cities.filter(function (c) { return c.score != null; }).length;
-    $("citySub").textContent =
-      cities.length + " cities/regions \u00b7 " + scored + " scored (\u2265" + minN +
-      " shipments) \u00b7 ranked by volume";
-
-    var head = "<thead><tr><th></th><th>City / region</th><th>Score</th><th>Shipments</th>" +
-      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
-    var rows = cities.map(function (c, i) {
-      return "<tr>" +
-        '<td class="rank">' + (i + 1) + "</td>" +
-        '<td class="carrier-name">' + esc(c.city) + "</td>" +
-        "<td>" + scoreCellHtml(c.score, minN) + "</td>" +
-        kpiCells(c) +
-        "</tr>";
-    }).join("");
-    $("cityTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
   }
 
   // Cap how many search matches we render at once (keeps the DOM light when a
@@ -1193,7 +1910,27 @@ body {
         '<td class="num">' + r.n.toLocaleString() + "</td>" +
         cells + "</tr>";
     }).join("");
-    $("statusTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+
+    // Overall row: the true aggregate distribution across all accounts (sum of
+    // each outcome's count / total shipments), not a plain mean of the per-row
+    // percentages — so big accounts weigh proportionally.
+    var totals = {};
+    outcomes.forEach(function (o) { totals[o] = 0; });
+    matrix.forEach(function (r) {
+      outcomes.forEach(function (o) { totals[o] += (r.counts && r.counts[o]) || 0; });
+    });
+    var footCells = "";
+    outcomes.forEach(function (o) {
+      var kind = (o === "Delivered") ? "good" : "bad";
+      footCells += pctCell(totalN ? (totals[o] / totalN * 100) : null, kind);
+    });
+    var foot = "<tfoot><tr class=\"total-row\">" +
+      '<td class="rank"></td>' +
+      '<td class="carrier-name">Overall avg.</td>' +
+      '<td class="num">' + totalN.toLocaleString() + "</td>" +
+      footCells + "</tr></tfoot>";
+
+    $("statusTable").innerHTML = head + "<tbody>" + rows + "</tbody>" + foot;
   }
 
   // ---- Product breakdown ------------------------------------------------
@@ -1215,7 +1952,16 @@ body {
       " shipments \u00b7 grouped from product names";
 
     // Color cycle for category accents.
-    var ACCENTS = ["#b4451f", "#3d6b2e", "#9a7b1f", "#4a463e", "#6b8aa0", "#7a2d12"];
+    var ACCENTS = ["#0fb6a9", "#1f9d76", "#f2994a", "#5b8def", "#0a8c84", "#e5564b"];
+
+    // Show the first 3 rows of a section; tuck the rest behind a "+N more" toggle.
+    function pcRows(rowsHtml) {
+      if (rowsHtml.length <= 3) return rowsHtml.join("");
+      var n = rowsHtml.length - 3;
+      return rowsHtml.slice(0, 3).join("") +
+        '<div class="pc-more" hidden>' + rowsHtml.slice(3).join("") + "</div>" +
+        '<button type="button" class="pc-toggle">+ ' + n + " more ▾</button>";
+    }
 
     grid.innerHTML = products.map(function (c, i) {
       var accent = ACCENTS[i % ACCENTS.length];
@@ -1223,8 +1969,8 @@ body {
       var maxSub = c.subs.reduce(function (m, s) { return Math.max(m, s.n); }, 0) || 1;
       var maxAcct = (c.accounts || []).reduce(function (m, a) { return Math.max(m, a.n); }, 0) || 1;
 
-      // Subcategory rows with proportional bars.
-      var subHtml = c.subs.map(function (s) {
+      // Subcategory rows with proportional bars (top 3, rest collapsible).
+      var subRows = c.subs.map(function (s) {
         var w = Math.round(s.n / maxSub * 100);
         var sp = c.n ? (s.n / c.n * 100) : 0;
         return '<div class="pc-row">' +
@@ -1232,9 +1978,10 @@ body {
           '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '"></span></span>' +
           '<span class="pc-row-val">' + s.n.toLocaleString() + '<i>' + sp.toFixed(0) + "%</i></span>" +
           "</div>";
-      }).join("");
+      });
+      var subHtml = pcRows(subRows);
 
-      // Top carrier accounts (cap at 6, roll the rest into "others").
+      // Carrier accounts: cap at 6 + "others" rollup, then show top 3 / rest collapsible.
       var accts = (c.accounts || []).slice();
       var shown = accts.slice(0, 6);
       var rest = accts.slice(6);
@@ -1242,7 +1989,7 @@ body {
         var restN = rest.reduce(function (a, x) { return a + x.n; }, 0);
         shown.push({ account: "+" + rest.length + " others", n: restN, _muted: true });
       }
-      var acctHtml = shown.map(function (a) {
+      var acctRows = shown.map(function (a) {
         var w = Math.round(a.n / maxAcct * 100);
         var ap = c.n ? (a.n / c.n * 100) : 0;
         return '<div class="pc-row' + (a._muted ? " pc-muted" : "") + '">' +
@@ -1250,7 +1997,8 @@ body {
           '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '99"></span></span>' +
           '<span class="pc-row-val">' + a.n.toLocaleString() + '<i>' + ap.toFixed(0) + "%</i></span>" +
           "</div>";
-      }).join("");
+      });
+      var acctHtml = pcRows(acctRows);
 
       return '<div class="pc-card">' +
           '<div class="pc-head" style="--accent:' + accent + '">' +
@@ -1269,6 +2017,17 @@ body {
         "</div>";
     }).join("");
   }
+
+  // Expand/collapse the "+N more" rows inside product-breakdown cards.
+  document.addEventListener("click", function (e) {
+    var btn = e.target.closest(".pc-toggle");
+    if (!btn) return;
+    var more = btn.previousElementSibling;
+    if (!more || !more.classList.contains("pc-more")) return;
+    var opening = more.hidden;
+    more.hidden = !opening;
+    btn.innerHTML = opening ? "Show less ▴" : ("+ " + more.children.length + " more ▾");
+  });
 
   // Group the flat warehouse_carrier list into { pin: { label, rows[] } }.
   function groupWhc(report) {
@@ -1309,7 +2068,7 @@ body {
     var nWh = g.order.length;
     $("whcSub").textContent =
       nWh + " warehouse" + (nWh === 1 ? "" : "s") +
-      " \u00b7 carriers scored against each other within each (\u2265" + minN + " shipments per cell)";
+      " \u00b7 carrier accounts scored against each other within each (\u2265" + minN + " shipments per cell)";
 
     renderWhcTable(report);
   }
@@ -1324,12 +2083,12 @@ body {
       return;
     }
 
-    var head = "<thead><tr><th></th><th>Carrier</th><th>Score</th><th>Shipments</th><th>Share</th>" +
+    var head = "<thead><tr><th></th><th>Carrier account</th><th>Score</th><th>Shipments</th><th>Share</th>" +
       "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
     var rows = grp.rows.map(function (a, i) {
       return "<tr>" +
         '<td class="rank">' + (i + 1) + "</td>" +
-        '<td class="carrier-name">' + esc(a.carrier) + "</td>" +
+        '<td class="carrier-name">' + esc(a.account) + "</td>" +
         "<td>" + scoreCellHtml(a.score, minN) + "</td>" +
         '<td class="num">' + a.n.toLocaleString() + "</td>" +
         '<td class="num">' + fmtPct(a.wh_share) + "</td>" +
@@ -1345,13 +2104,12 @@ body {
 
   function renderWhcChart() {
     if (!lastReport) return;
-    if (whcChart) { try { whcChart.destroy(); } catch (e) {} whcChart = null; }
     var g = groupWhc(lastReport);
     var grp = g.groups[whcSelection];
     if (!grp) return;
-    var labels = grp.rows.map(function (a) { return a.carrier; });
+    var labels = grp.rows.map(function (a) { return a.account; });
     // Bars = score where available, else 0; colour by score band.
-    whcChart = new Chart($("cWhc"), {
+    upsertChart("cWhc", {
       type: "bar",
       data: {
         labels: labels,
@@ -1367,10 +2125,10 @@ body {
   }
 
   function scoreColor(s) {
-    if (s == null) return "#b4b2a9";
-    if (s >= 75) return "#3d6b2e";
-    if (s >= 50) return "#9a7b1f";
-    return "#b4451f";
+    if (s == null) return "#c2cdd2";
+    if (s >= 75) return "#1f9d76";
+    if (s >= 50) return "#e0922f";
+    return "#e5564b";
   }
 
   // -----------------------------------------------------------------------
@@ -1379,20 +2137,20 @@ body {
     // Top warehouses by volume, P->delivery TAT as the bar.
     var top = wh.slice(0, 12);
     var labels = top.map(function (w) { return w.warehouse || w.pickup_pin; });
-    charts.push(new Chart($("cWh"), {
+    upsertChart("cWh", {
       type: "bar",
       data: {
         labels: labels,
         datasets: [{
           data: top.map(function (w) { return w.p2d == null ? 0 : w.p2d; }),
           backgroundColor: top.map(function (w) {
-            return w.score == null ? "#b4b2a9" : "#9a7b1f";
+            return w.score == null ? "#c2cdd2" : "#f2994a";
           }),
           borderRadius: 3, barThickness: "flex", maxBarThickness: 22
         }]
       },
       options: hbarOpts()
-    }));
+    });
   }
 
   function renderDestChart(dest) {
@@ -1401,39 +2159,41 @@ body {
     if (!dest) return;
     var top = dest.slice(0, 12);
     var labels = top.map(function (d) { return d.drop_city; });
-    charts.push(new Chart($("cDest"), {
+    upsertChart("cDest", {
       type: "bar",
       data: {
         labels: labels,
         datasets: [{
           data: top.map(function (d) { return d.p2d == null ? 0 : d.p2d; }),
           backgroundColor: top.map(function (d) {
-            return d.score == null ? "#b4b2a9" : "#6b8aa0";
+            return d.score == null ? "#c2cdd2" : "#5b8def";
           }),
           borderRadius: 3, barThickness: "flex", maxBarThickness: 22
         }]
       },
       options: hbarOpts()
-    }));
+    });
   }
 
-  var INK = "#1c1a17", FAINT = "#8a8377", LINE = "rgba(28,26,23,.08)";
-  var PALETTE = ["#b4451f", "#3d6b2e", "#9a7b1f", "#4a463e", "#7a2d12", "#6b8aa0"];
+  var INK = "#16263a", FAINT = "#8a98a6", LINE = "rgba(22,38,58,.07)";
+  var PALETTE = ["#0fb6a9", "#1f9d76", "#f2994a", "#5b8def", "#0a8c84", "#e5564b"];
   var whcChart = null;
 
   function hbarOpts() {
     return {
       indexAxis: "y", responsive: true, maintainAspectRatio: false,
+      animation: { duration: 850, easing: "easeOutQuart" },
       plugins: { legend: { display: false } },
       scales: {
         x: { grid: { color: LINE }, ticks: { color: FAINT, font: { family: "Spline Sans Mono" } } },
-        y: { grid: { display: false }, ticks: { color: INK, font: { family: "Archivo", size: 12 } } }
+        y: { grid: { display: false }, ticks: { color: INK, font: { family: "Inter", size: 12 } } }
       }
     };
   }
   function doughnutOpts() {
     return {
       responsive: true, maintainAspectRatio: false,
+      animation: { duration: 850, easing: "easeOutQuart", animateRotate: true, animateScale: true },
       plugins: { legend: { position: "bottom", labels: { color: FAINT, boxWidth: 10, font: { family: "Spline Sans Mono", size: 11 } } } },
       cutout: "58%"
     };
@@ -1443,17 +2203,17 @@ body {
     var c = report.carriers;
     var labels = c.map(function (a) { return a.carrier; });
 
-    charts.push(new Chart($("cScore"), {
+    upsertChart("cScore", {
       type: "bar",
-      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.score == null ? 0 : a.score; }), backgroundColor: "#b4451f", borderRadius: 3, barThickness: "flex", maxBarThickness: 22 }] },
+      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.score == null ? 0 : a.score; }), backgroundColor: "#0fb6a9", borderRadius: 4, barThickness: "flex", maxBarThickness: 22 }] },
       options: hbarOpts()
-    }));
+    });
 
-    charts.push(new Chart($("cTat"), {
+    upsertChart("cTat", {
       type: "bar",
-      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.p2d == null ? 0 : a.p2d; }), backgroundColor: "#3d6b2e", borderRadius: 3, barThickness: "flex", maxBarThickness: 22 }] },
+      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.p2d == null ? 0 : a.p2d; }), backgroundColor: "#1f9d76", borderRadius: 4, barThickness: "flex", maxBarThickness: 22 }] },
       options: hbarOpts()
-    }));
+    });
 
     mixChart("cWeight", report.mix.weight);
     mixChart("cPay", report.mix.payment);
@@ -1463,19 +2223,29 @@ body {
   function mixChart(id, obj) {
     var labels = Object.keys(obj);
     var data = labels.map(function (k) { return obj[k]; });
-    charts.push(new Chart($(id), {
+    upsertChart(id, {
       type: "doughnut",
-      data: { labels: labels, datasets: [{ data: data, backgroundColor: PALETTE, borderColor: "#faf8f2", borderWidth: 2 }] },
+      data: { labels: labels, datasets: [{ data: data, backgroundColor: PALETTE, borderColor: "#ffffff", borderWidth: 2 }] },
       options: doughnutOpts()
-    }));
+    });
   }
 
   // Wiring
   $("fileInput").addEventListener("change", function (e) { handleFile(e.target.files[0]); });
-  if ($("bqLoadBtn")) $("bqLoadBtn").addEventListener("click", loadBigQuery);
-  if ($("bqReloadBtn")) $("bqReloadBtn").addEventListener("click", loadBigQuery);
+  // Manual "Load from BigQuery" on the upload screen uses that screen's preset.
+  if ($("bqLoadBtn")) $("bqLoadBtn").addEventListener("click", function () {
+    loadBigQuery({ lookback: $("bqRange") ? $("bqRange").value : lastLookback });
+  });
+  // Dashboard "Reload" re-pulls the current calendar window (or last lookback).
+  if ($("bqReloadBtn")) $("bqReloadBtn").addEventListener("click", function () {
+    var r = getWinRange();
+    if (r) loadBigQuery({ from: r[0], to: r[1] });
+    else loadBigQuery({ lookback: lastLookback });
+  });
+  // Single-calendar range picker; selecting both ends re-queries BigQuery.
+  initWinPicker();
   ["fDateFrom", "fDateTo"].forEach(function (id) {
-    $(id).addEventListener("change", refilter);
+    $(id).addEventListener("change", scheduleRefilter);
   });
 
   // Multi-select dropdowns: open/close on the toggle, close others, and close
@@ -1500,7 +2270,7 @@ body {
     var cb = e.target;
     if (cb && cb.matches && cb.matches(".msel input[type=checkbox]")) {
       mselText(cb.closest(".msel"));
-      refilter();
+      scheduleRefilter();
     }
   });
 
@@ -1539,6 +2309,272 @@ body {
   drop.addEventListener("drop", function (e) {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
   });
+
+  // ---- Auto-load on entry -----------------------------------------------
+  // Right after sign-in, pull the default window (last 7 days) from BigQuery
+  // and go straight to the dashboard, showing the loading bar meanwhile. If
+  // BigQuery isn't configured, just show the manual upload/load screen.
+  if (window.BQ_CONFIGURED) {
+    $("uploadZone").hidden = true;
+    var r = { from: isoDaysAgo(6), to: isoToday() };  // last 7 days inclusive
+    setWinRange(r.from, r.to);
+    loadBigQuery({ from: r.from, to: r.to, auto: true });
+  }
+
+  // ====================================================================
+  // CARRIER COST ANALYSIS (invoice upload → spend by carrier × category × SKU)
+  // ====================================================================
+  var invReport = null;
+  var invCharts = [];
+
+  function invPost(formData) {
+    return fetch(window.INVOICES_URL, {
+      method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" },
+      body: formData
+    }).then(function (r) {
+      if (r.status === 401 || r.status === 403) {
+        window.location.href = window.LOGIN_URL || "/login/";
+        throw new Error("Your session has expired.");
+      }
+      return r.text().then(function (t) {
+        var b; try { b = t ? JSON.parse(t) : {}; }
+        catch (e) { throw new Error("Server error " + r.status); }
+        if (!r.ok) throw new Error(b.error || ("Request failed (" + r.status + ")"));
+        return b;
+      });
+    });
+  }
+
+  function invSetHint(msg, kind) {
+    var el = $("invHint"); if (!el) return;
+    el.textContent = msg || ""; el.className = "upload-hint" + (kind ? " " + kind : "");
+  }
+
+  function uploadInvoices(files, append) {
+    if (!files || !files.length) return;
+    var fd = new FormData();
+    for (var i = 0; i < files.length; i++) fd.append("files", files[i]);
+    if (append) fd.append("append", "1");
+    invSetHint("Reading " + files.length + " file" + (files.length > 1 ? "s" : "") + "…", null);
+    showLoading("Reading invoices…", "Parsing " + files.length + " carrier invoice" + (files.length > 1 ? "s" : ""));
+    invPost(fd).then(function (rep) {
+      invReport = rep;
+      $("invUpload").hidden = true; $("invDash").hidden = false;
+      renderCost(rep);
+      finishLoading();
+      if (rep.warnings && rep.warnings.length) invSetHint(rep.warnings.join(" · "), "err");
+    }).catch(function (err) { invSetHint(err.message, "err"); failLoading(err.message); });
+  }
+
+  function clearInvoices() {
+    var fd = new FormData(); fd.append("reset", "1");
+    invPost(fd).then(function () {
+      invReport = null; $("invDash").hidden = true; $("invUpload").hidden = false;
+      invSetHint("", null);
+      if ($("invFileInput")) $("invFileInput").value = "";
+    }).catch(function () {});
+  }
+
+  function renderCost(rep) {
+    renderInvChips(rep.files);
+    renderInvStats(rep.summary, rep.currency);
+    renderInvCats(rep);
+    renderInvMatrix(rep);
+    renderInvSkus(rep);
+    destroyInvCharts();
+    renderInvCharts(rep);
+    $("invFilesLine").textContent = rep.files.length + " file" + (rep.files.length === 1 ? "" : "s") +
+      " · ₹" + Math.round(rep.summary.total_spend).toLocaleString() + " billed";
+    observeReveals();
+    requestAnimationFrame(function () { animateBars(); animateCostBars(); });
+  }
+
+  function renderInvChips(files) {
+    $("invFileChips").innerHTML = (files || []).map(function (f) {
+      return '<span class="inv-chip"><b>' + esc(f.carrier) + '</b><span class="chip-meta">' +
+        esc(f.name) + ' · ' + f.lines.toLocaleString() + ' lines</span> <span class="chip-amt">₹' +
+        Math.round(f.spend).toLocaleString() + '</span></span>';
+    }).join("");
+  }
+
+  function renderInvStats(s) {
+    var cards = [
+      { label: "Total billed", value: s.total_spend, kind: "money" },
+      { label: "Shipments", value: s.shipments, kind: "int" },
+      { label: "Avg cost / shipment", value: s.avg_cost, kind: "money" },
+      { label: "Categories", value: s.categories, kind: "int" },
+      { label: "Unique SKUs", value: s.skus, kind: "int" },
+      { label: "Carriers", value: s.carriers, kind: "int" }
+    ];
+    $("invStatRow").innerHTML = cards.map(function (c) {
+      return '<div class="stat"><div class="stat-label">' + c.label + '</div><div class="stat-value">—</div></div>';
+    }).join("");
+    var els = $("invStatRow").querySelectorAll(".stat-value");
+    cards.forEach(function (c, i) { countUp(els[i], c.value, c.kind, ""); });
+  }
+
+  function renderInvCats(rep) {
+    var cats = rep.categories || [];
+    $("invCatSub").textContent = cats.length + " categories · ₹" +
+      Math.round(rep.summary.total_spend).toLocaleString() + " billed across " +
+      rep.summary.shipments.toLocaleString() + " shipments";
+    var maxAvg = cats.reduce(function (m, c) {
+      c.carriers.forEach(function (x) { if (x.avg_cost) m = Math.max(m, x.avg_cost); }); return m;
+    }, 1);
+    $("invCatGrid").innerHTML = cats.map(function (c, i) {
+      var avgs = c.carriers.filter(function (x) { return x.avg_cost != null; }).map(function (x) { return x.avg_cost; });
+      var minAvg = avgs.length ? Math.min.apply(null, avgs) : null;
+      var media = c.image
+        ? '<img src="' + c.image + '" alt="' + esc(c.category) + '" loading="lazy" onerror="this.outerHTML=\'<span class=&quot;pcost-icon&quot;>' + (c.icon || '📦') + '</span>\'">'
+        : '<span class="pcost-icon">' + (c.icon || '📦') + '</span>';
+      var crows = c.carriers.map(function (x) {
+        var w = maxAvg ? Math.round((x.avg_cost || 0) / maxAvg * 100) : 0;
+        var cheap = (x.avg_cost != null && x.avg_cost === minAvg && c.carriers.length > 1);
+        return '<div class="pcost-crow' + (cheap ? ' cheap' : '') + '"><span class="cn">' + esc(x.carrier) + '</span>' +
+          '<span class="cb"><span style="width:' + w + '%"></span></span>' +
+          '<span class="cv">₹' + (x.avg_cost != null ? Math.round(x.avg_cost).toLocaleString() : '—') + '</span></div>';
+      }).join("");
+      return '<div class="prodcost-card">' +
+        '<div class="pcost-media"><span class="pcost-rank">' + (i + 1) + '</span>' +
+          '<span class="pcost-share-badge">' + c.share + '%</span>' + media + '</div>' +
+        '<div class="pcost-body">' +
+          '<div class="pcost-name">' + esc(c.category) + '</div>' +
+          '<div class="pcost-spend">₹' + Math.round(c.spend).toLocaleString() + '</div>' +
+          '<div class="pcost-meta"><b>₹' + (c.avg_cost != null ? Math.round(c.avg_cost).toLocaleString() : '—') +
+            '</b>/shipment · ' + c.shipments.toLocaleString() + ' shp · ' + c.sku_count + ' SKUs</div>' +
+          '<div class="pcost-carriers"><div class="pcost-ct">Cost / shipment by carrier</div>' + crows + '</div>' +
+        '</div></div>';
+    }).join("");
+  }
+
+  function animateCostBars() {
+    var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) return;
+    document.querySelectorAll("#invCatGrid .pcost-crow .cb > span").forEach(function (el) {
+      var t = el.style.width; if (!t) return;
+      el.style.width = "0%"; void el.offsetWidth;
+      requestAnimationFrame(function () { el.style.width = t; });
+    });
+  }
+
+  function renderInvMatrix(rep) {
+    var m = rep.matrix || { carriers: [], categories: [], cells: {} };
+    var head = "<thead><tr><th></th><th>Category</th>";
+    m.carriers.forEach(function (c) { head += "<th>" + esc(c) + "</th>"; });
+    head += "<th>Overall</th></tr></thead>";
+    var rows = (rep.categories || []).map(function (cat, i) {
+      var row = m.cells[cat.category] || {};
+      var vals = m.carriers.map(function (c) { return row[c] ? row[c].avg_cost : null; })
+        .filter(function (v) { return v != null; });
+      var mn = vals.length ? Math.min.apply(null, vals) : null;
+      var mx = vals.length ? Math.max.apply(null, vals) : null;
+      var cells = m.carriers.map(function (c) {
+        var cell = row[c];
+        if (!cell || cell.avg_cost == null) return '<td class="num cost-empty">—</td>';
+        var cls = (vals.length > 1 && cell.avg_cost === mn) ? "cheap"
+                : (vals.length > 1 && cell.avg_cost === mx) ? "dear" : "";
+        return '<td class="num ' + cls + '" title="' + cell.shipments.toLocaleString() +
+          ' shipments · ₹' + Math.round(cell.spend).toLocaleString() + ' total">₹' +
+          Math.round(cell.avg_cost).toLocaleString() + '</td>';
+      }).join("");
+      return '<tr><td class="rank">' + (i + 1) + '</td><td class="carrier-name">' + esc(cat.category) + '</td>' +
+        cells + '<td class="num">₹' + (cat.avg_cost != null ? Math.round(cat.avg_cost).toLocaleString() : '—') + '</td></tr>';
+    }).join("");
+    $("invMatrix").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  var INV_SKU_CAP = 200;
+  function renderInvSkus(rep) {
+    var all = rep.skus || [];
+    var q = (($("invSkuSearch").value) || "").trim().toLowerCase();
+    var matches = q ? all.filter(function (s) {
+      return (String(s.name || "") + " " + String(s.sku || "") + " " + String(s.category || ""))
+        .toLowerCase().indexOf(q) !== -1;
+    }) : all;
+    var shown = matches.slice(0, INV_SKU_CAP);
+    $("invSkuSub").textContent = (q
+      ? matches.length.toLocaleString() + " match" + (matches.length === 1 ? "" : "es")
+      : (rep.sku_total || all.length).toLocaleString() + " SKUs") +
+      " · ranked by spend" + (shown.length < matches.length ? " · showing " + shown.length : "");
+    var head = "<thead><tr><th></th><th>SKU / product</th><th>Category</th><th>Shipments</th>" +
+      "<th>Total ₹</th><th>Avg ₹/shp</th><th>Cheapest carrier</th></tr></thead>";
+    if (!shown.length) {
+      $("invSkuTable").innerHTML = head + '<tbody><tr><td class="empty" colspan="7">No SKU matches “' + esc(q) + '”.</td></tr></tbody>';
+      return;
+    }
+    var rows = shown.map(function (s, i) {
+      var avail = s.carriers.filter(function (x) { return x.avg_cost != null; })
+        .sort(function (a, b) { return a.avg_cost - b.avg_cost; });
+      var cheap = avail[0];
+      var cheapTxt = cheap ? '<span class="inv-cheapest">' + esc(cheap.carrier) + '</span> ₹' +
+        Math.round(cheap.avg_cost).toLocaleString() : '—';
+      var label = s.name || s.sku || "(unmapped)";
+      var skuTag = s.sku ? ' <span style="color:var(--ink-faint);font-family:var(--mono);font-size:11px">' + esc(s.sku) + '</span>' : '';
+      return '<tr><td class="rank">' + (i + 1) + '</td>' +
+        '<td class="carrier-name">' + esc(label) + skuTag + '</td>' +
+        '<td>' + esc(s.category) + '</td>' +
+        '<td class="num">' + s.shipments.toLocaleString() + '</td>' +
+        '<td class="num">₹' + Math.round(s.spend).toLocaleString() + '</td>' +
+        '<td class="num">₹' + (s.avg_cost != null ? Math.round(s.avg_cost).toLocaleString() : '—') + '</td>' +
+        '<td class="num">' + cheapTxt + '</td></tr>';
+    }).join("");
+    $("invSkuTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function destroyInvCharts() { invCharts.forEach(function (c) { try { c.destroy(); } catch (e) {} }); invCharts = []; }
+  function renderInvCharts(rep) {
+    var topCats = (rep.categories || []).slice(0, 8);
+    invCharts.push(new Chart($("cInvCat"), {
+      type: "doughnut",
+      data: {
+        labels: topCats.map(function (c) { return c.category; }),
+        datasets: [{ data: topCats.map(function (c) { return c.spend; }),
+          backgroundColor: PALETTE.concat(["#8a98a6", "#c7a4ff"]), borderColor: "#fff", borderWidth: 2 }]
+      },
+      options: doughnutOpts()
+    }));
+    var carr = rep.carriers || [];
+    invCharts.push(new Chart($("cInvCarrier"), {
+      type: "bar",
+      data: {
+        labels: carr.map(function (c) { return c.carrier; }),
+        datasets: [{ data: carr.map(function (c) { return c.spend; }),
+          backgroundColor: "#0fb6a9", borderRadius: 4, barThickness: "flex", maxBarThickness: 34 }]
+      },
+      options: hbarOpts()
+    }));
+  }
+
+  // ---- Cost-analysis wiring + tab switching ----
+  (function wireCost() {
+    var fi = $("invFileInput"), ai = $("invAddInput");
+    if (fi) fi.addEventListener("change", function (e) { uploadInvoices(e.target.files, false); });
+    if (ai) ai.addEventListener("change", function (e) { uploadInvoices(e.target.files, true); e.target.value = ""; });
+    if ($("invReset")) $("invReset").addEventListener("click", clearInvoices);
+    if ($("invSkuSearch")) $("invSkuSearch").addEventListener("input", function () { if (invReport) renderInvSkus(invReport); });
+    var d = $("invDrop");
+    if (d) {
+      ["dragenter", "dragover"].forEach(function (ev) {
+        d.addEventListener(ev, function (e) { e.preventDefault(); d.classList.add("drag"); });
+      });
+      ["dragleave", "drop"].forEach(function (ev) {
+        d.addEventListener(ev, function (e) { e.preventDefault(); d.classList.remove("drag"); });
+      });
+      d.addEventListener("drop", function (e) {
+        if (e.dataTransfer.files && e.dataTransfer.files.length) uploadInvoices(e.dataTransfer.files, false);
+      });
+    }
+    document.querySelectorAll(".vtab").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        var view = btn.getAttribute("data-view");
+        document.querySelectorAll(".vtab").forEach(function (b) { b.classList.toggle("active", b === btn); });
+        if ($("viewEfficiency")) $("viewEfficiency").hidden = (view !== "efficiency");
+        if ($("viewCost")) $("viewCost").hidden = (view !== "cost");
+        try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+      });
+    });
+  })();
 })();
   </script>
 </body>

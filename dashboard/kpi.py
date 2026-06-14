@@ -48,6 +48,10 @@ COLUMNS = {
     # Product info (used to derive category / subcategory). Optional.
     "item_names": ["Item Names", "Item Name", "Product Name"],
     "sku": ["Product SKU Codes", "SKU", "Product SKU Code"],
+    # Shipment identifiers — optional, used to join carrier invoices back to the
+    # shipment master (recover SKU/category for invoices that lack them).
+    "awb": ["AWB", "AWB Number", "AWB No", "AWB No.", "Waybill Number", "Tracking Id", "awb_number"],
+    "order_id": ["Order Number", "Order Id", "Client Order Id", "client_order_id", "Reference Number"],
 }
 
 # Fields that are required; if none of their candidate headers are present the
@@ -159,6 +163,68 @@ def warehouse_label(pin: str) -> str:
         return ""
     city = city_for_pincode(pin)
     return (city + " \u00b7 " + str(pin)) if city else str(pin)
+
+
+# ---------------------------------------------------------------------------
+# City-tier classification (by DESTINATION drop pincode).
+#
+# Standard e-commerce style India tiering keyed on the 3-digit PIN prefix:
+#   Tier 1 : the 8 major metros + their metro regions (Mumbai MMR, Delhi-NCR,
+#            Bengaluru, Hyderabad, Chennai, Kolkata, Pune, Ahmedabad).
+#   Tier 2 : state capitals & other large cities.
+#   Tier 3 : everywhere else with a resolvable pincode.
+# A blank/too-short pincode is "Unknown".
+# ---------------------------------------------------------------------------
+TIER_LEVELS = ["Tier 1", "Tier 2", "Tier 3"]
+
+TIER1_PIN3 = {
+    "400", "401", "410", "421",          # Mumbai MMR (Mumbai, Mira-Bhayandar, Navi Mumbai, Thane)
+    "110", "201", "122", "121",          # Delhi NCR (Delhi, Noida/Ghaziabad, Gurugram, Faridabad)
+    "560", "561", "562",                 # Bengaluru
+    "500", "501",                        # Hyderabad
+    "600", "601", "602", "603",          # Chennai
+    "700", "711", "712",                 # Kolkata / Howrah
+    "411", "412",                        # Pune
+    "380", "382",                        # Ahmedabad / Gandhinagar
+}
+
+TIER2_PIN3 = {
+    "302", "303", "305", "313", "324", "342",                       # Rajasthan
+    "390", "391", "360", "361", "364", "394", "395",                # Gujarat
+    "226", "227", "208", "282", "221", "250", "211", "243", "202", "273",  # UP
+    "452", "453", "462", "463", "482", "474", "456",                # MP
+    "440", "441", "422", "423", "431", "416", "413", "444",         # Maharashtra (non-metro)
+    "530", "531", "520", "521", "522", "517", "524", "506",         # AP / Telangana
+    "682", "683", "695", "673", "680", "691", "670",                # Kerala
+    "641", "642", "625", "620", "621", "636", "627", "638", "632", "605",  # TN / Puducherry
+    "160", "140", "134", "141", "142", "143", "144", "147",         # Chandigarh / Punjab
+    "492", "493", "490",                                            # Chhattisgarh
+    "800", "801", "823", "812",                                     # Bihar
+    "834", "831", "826", "827",                                     # Jharkhand
+    "751", "753", "769",                                            # Odisha
+    "781",                                                          # Assam (Guwahati)
+    "248", "249",                                                   # Uttarakhand
+    "570", "571", "575", "580", "590", "591", "577",                # Karnataka (non-metro)
+    "403",                                                          # Goa
+    "734", "713",                                                   # West Bengal (Siliguri, Durgapur/Asansol)
+    "180", "190", "171",                                            # J&K / Himachal
+}
+
+
+@lru_cache(maxsize=100_000)
+def tier_for_pincode(pin: str) -> str:
+    """Tier 1/2/3 (or 'Unknown') for a destination pincode, by 3-digit prefix."""
+    if not pin:
+        return "Unknown"
+    digits = "".join(ch for ch in str(pin) if ch.isdigit())
+    if len(digits) < 3:
+        return "Unknown"
+    p3 = digits[:3]
+    if p3 in TIER1_PIN3:
+        return "Tier 1"
+    if p3 in TIER2_PIN3:
+        return "Tier 2"
+    return "Tier 3"
 
 
 @lru_cache(maxsize=100_000)
@@ -561,6 +627,7 @@ def build_record(get):
         "city": pickup_city,
         "drop_pin": drop_pin,
         "drop_city": drop_city,
+        "tier": tier_for_pincode(drop_pin),
         "lane": lane,
         "payment": payment,
         "weight": weight,
@@ -573,6 +640,8 @@ def build_record(get):
         "item_name": item_name,
         "category": category,
         "subcategory": subcategory,
+        "awb": str(get("awb") or "").strip(),
+        "order_id": str(get("order_id") or "").strip(),
         "picked": pickup is not None,
         "delivered": status.lower() == "delivered",
         "attempts": attempts,
@@ -640,6 +709,32 @@ def _mean(values):
     return sum(clean) / len(clean) if clean else None
 
 
+# Carrier accounts treated as Next-Day-Delivery (NDD) partners, matched as
+# case-insensitive substrings of the account code:
+#   "ndd"        -> Swift_NDD, Delhivery NDD, Elasticrun_sdd&ndd, Shadofax_NDD_Large
+#   "skye"       -> SKYE Air
+#   "urbanbolt"  -> Urbanbolt (Urbane Bolt)
+#   "elasticrun" -> ElasticRun (NDD wholesale)
+#   "shadofax"/"shadowfax" -> Shadowfax (NDD wholesale)
+# Note: Swift and Delhivery are NOT matched wholesale (they also run reverse/
+# heavy/mobility accounts) — only their explicit "NDD" accounts qualify.
+NDD_ACCOUNT_KEYWORDS = (
+    "ndd", "skye", "urbanbolt", "urbane", "elasticrun", "shadofax", "shadowfax",
+)
+
+# Accounts classified as NDD by EXACT (case-insensitive) name, used where a
+# substring match would be too broad — e.g. the partner literally named "Test"
+# (matching the substring "test" would also catch words like "fastest").
+NDD_ACCOUNT_EXACT = {"test"}
+
+
+def _is_ndd(account) -> bool:
+    a = (account or "").strip().lower()
+    if a in NDD_ACCOUNT_EXACT:
+        return True
+    return any(kw in a for kw in NDD_ACCOUNT_KEYWORDS)
+
+
 def _filter_set(val):
     """Normalize a filter argument to a set of accepted values, or None for 'all'.
 
@@ -657,7 +752,7 @@ def _filter_set(val):
 
 def filter_records(records, delivery_type="Forward", zone="all", payment="all",
                    warehouse="all", account="all", weight="all",
-                   slot="all", date_from="", date_to=""):
+                   slot="all", date_from="", date_to="", tier="all"):
     # Every categorical filter supports single value, list (multi-select) or
     # "all". An empty selection (None) means no constraint on that field.
     dt_set = _filter_set(delivery_type)
@@ -667,10 +762,13 @@ def filter_records(records, delivery_type="Forward", zone="all", payment="all",
     acct_set = _filter_set(account)
     wt_set = _filter_set(weight)
     slot_set = _filter_set(slot)
+    tier_set = _filter_set(tier)
 
     out = []
     for r in records:
         if dt_set is not None and r["delivery_type"] not in dt_set:
+            continue
+        if tier_set is not None and r["tier"] not in tier_set:
             continue
         if zone_set is not None and r["zone"] not in zone_set:
             continue
@@ -843,13 +941,14 @@ LANE_MIN_N = 15
 
 
 def aggregate_warehouse_carrier(records) -> list[dict]:
-    """Warehouse x carrier matrix.
+    """Warehouse x carrier-account matrix.
 
-    One row per (pickup pincode, carrier) pair. Each row carries the warehouse
-    label, city, carrier name and the standard KPI block. Scores are computed
-    PER WAREHOUSE: within each warehouse the carriers are normalized against
-    each other, so the score answers 'which partner is best out of THIS
-    warehouse', which is exactly the comparison an ops lead wants.
+    One row per (pickup pincode, carrier account) pair. Each row carries the
+    warehouse label, city, carrier account code and the standard KPI block.
+    Scores are computed PER WAREHOUSE: within each warehouse the accounts are
+    normalized against each other, so the score answers 'which carrier account
+    is best out of THIS warehouse', which is exactly the comparison an ops lead
+    wants.
     """
     rows = []
     # Bucket records by warehouse first.
@@ -861,7 +960,7 @@ def aggregate_warehouse_carrier(records) -> list[dict]:
 
     for pin, recs in by_wh.items():
         agg = aggregate_by(
-            recs, "carrier", "carrier",
+            recs, "account", "account",
             extra_fields=[("warehouse", "warehouse"), ("city", "city")],
         )
         # Score carriers relative to each other within this warehouse.
@@ -1005,11 +1104,11 @@ def _filter_options(records) -> dict:
 
 def build_report(records, delivery_type="Forward", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
-                 slot="all", date_from="", date_to="") -> dict:
+                 slot="all", date_from="", date_to="", tier="all") -> dict:
     """Top-level entry: filter, aggregate, score, and assemble the payload."""
     rows = filter_records(records, delivery_type, zone, payment,
                           warehouse, account, weight,
-                          slot, date_from, date_to)
+                          slot, date_from, date_to, tier=tier)
     agg = attach_scores(aggregate_by_carrier(rows))
     agg.sort(key=lambda a: (a["score"] is None, -(a["score"] or 0)))
 
@@ -1034,13 +1133,6 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
     # FWD-Pendency sub-state breakdown.
     status_matrix = aggregate_status_matrix(rows, "account")
     pendency_matrix = aggregate_pendency_matrix(rows, "account")
-
-    # City-level rollup (a coarser breakdown than pincode).
-    city_agg = attach_scores(
-        aggregate_by(rows, "city", "city"), min_n=WAREHOUSE_MIN_N
-    )
-    city_agg.sort(key=lambda a: -a["n"])
-    _round_metrics(city_agg)
 
     # Destination rollup: same KPI block + scoring, grouped by the drop city
     # (where the parcel is going), ranked by volume and truncated to top-N.
@@ -1071,6 +1163,12 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
     total = len(rows)
     delivered = sum(1 for r in rows if r["delivered"])
     picked = sum(1 for r in rows if r["picked"])
+    ndd_orders = sum(1 for r in rows if _is_ndd(r["account"]))
+
+    # Destination city-tier counts (by drop pincode).
+    tier_counts = {t: 0 for t in TIER_LEVELS + ["Unknown"]}
+    for r in rows:
+        tier_counts[r.get("tier", "Unknown")] = tier_counts.get(r.get("tier", "Unknown"), 0) + 1
 
     # Business mix breakdowns.
     def count_by(key_fn):
@@ -1134,6 +1232,9 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
             "avg_p2d": _round(_mean([r["p2d"] for r in rows])),
             "carriers": len(agg),
             "warehouses": wh_total_count,
+            "ndd_orders": ndd_orders,
+            "ndd_pct": _round(ndd_orders / total * 100 if total else None),
+            "tiers": tier_counts,
         },
         "carriers": agg,
         "products": products,
@@ -1145,7 +1246,6 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
         "status_matrix": status_matrix,
         "pendency_matrix": pendency_matrix,
         "outcomes": OUTCOMES,
-        "cities": city_agg,
         "destinations": dest_agg,
         "destination_total": dest_total,
         "destination_top_n": TOP_N_DESTINATIONS,

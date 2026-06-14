@@ -6,7 +6,7 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from . import auth, bq
+from . import auth, bq, invoices
 from .kpi import build_report, parse_workbook
 
 logger = logging.getLogger(__name__)
@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 # "window" is the date range the loaded data covers (BigQuery load window),
 # or None for uploaded files; it persists across re-filter requests.
 _CACHE = {"records": None, "window": None}
+
+# Cache of the latest parsed invoice line items (Carrier Cost Analysis).
+_INVOICE_CACHE = {"items": [], "files": []}
 
 
 def login_view(request):
@@ -62,6 +65,9 @@ def logout_view(request):
 def index(request):
     return render(request, "dashboard/index.html", {
         "frido_user": request.session.get(auth.SESSION_KEY, ""),
+        # Lets the frontend auto-load the default window from BigQuery on entry
+        # (and skip the manual upload screen) only when BQ is actually set up.
+        "bq_configured": bq.is_configured(),
     })
 
 
@@ -76,6 +82,7 @@ def _filter_kwargs(request):
     """
     return {
         "delivery_type": request.POST.getlist("delivery_type") or "Forward",
+        "tier": request.POST.getlist("tier") or "all",
         "zone": request.POST.getlist("zone") or "all",
         "payment": request.POST.getlist("payment") or "all",
         "warehouse": request.POST.getlist("warehouse") or "all",
@@ -132,6 +139,70 @@ def process_upload(request):
 
 @auth.team_required
 @require_POST
+def process_invoices(request):
+    """Parse one or more carrier invoice files and return the cost-analysis report.
+
+    Accepts multiple files under the "files" field (BlueDart / SkyAir / Frido
+    Prime in v1). Each file is run through the matching adapter; recognised line
+    items are accumulated and aggregated into spend by carrier x category x SKU.
+    Sending `reset=1` with no files clears the accumulated set.
+    """
+    if request.POST.get("reset") == "1" and not request.FILES.getlist("files"):
+        _INVOICE_CACHE["items"] = []
+        _INVOICE_CACHE["files"] = []
+        return JsonResponse(invoices.build_cost_report([], []))
+
+    uploads = request.FILES.getlist("files") or request.FILES.getlist("file")
+    if not uploads:
+        # No new files: re-aggregate whatever is cached (or an empty report).
+        return JsonResponse(invoices.build_cost_report(
+            _INVOICE_CACHE["items"], _INVOICE_CACHE["files"]))
+
+    # Start fresh each upload batch unless the client asks to append.
+    if request.POST.get("append") != "1":
+        _INVOICE_CACHE["items"] = []
+        _INVOICE_CACHE["files"] = []
+
+    errors = []
+    for up in uploads:
+        name = up.name
+        if not name.lower().endswith((".xlsx", ".xlsm", ".csv", ".tsv")):
+            errors.append(f"{name}: unsupported file type")
+            continue
+        try:
+            up.seek(0)
+        except Exception:  # noqa: BLE001
+            pass
+        data = up.read() or b""
+        try:
+            items = invoices.parse_invoice(data, name)
+        except ValueError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: could not read ({exc})")
+            continue
+        spend = round(sum(i["amount"] for i in items), 1)
+        carrier = items[0]["carrier"] if items else "Unknown"
+        _INVOICE_CACHE["items"].extend(items)
+        _INVOICE_CACHE["files"].append(
+            {"name": name, "carrier": carrier, "lines": len(items), "spend": spend})
+
+    if not _INVOICE_CACHE["items"]:
+        return JsonResponse(
+            {"error": "No recognised invoice rows found. " + " · ".join(errors)
+                      if errors else "No data parsed from the uploaded file(s)."},
+            status=400,
+        )
+
+    report = invoices.build_cost_report(_INVOICE_CACHE["items"], _INVOICE_CACHE["files"])
+    if errors:
+        report["warnings"] = errors
+    return JsonResponse(report)
+
+
+@auth.team_required
+@require_POST
 def load_bigquery(request):
     """Fetch a lookback window from BigQuery into the cache, then return the report."""
     if not bq.is_configured():
@@ -140,12 +211,24 @@ def load_bigquery(request):
                       "(set BQ_PROJECT, BQ_DATASET and BQ_TABLE)."},
             status=400,
         )
-    # How many days back to pull (partition-pruned). Defaults server-side.
+    # Either an explicit calendar range (win_from/win_to, from the date pickers)
+    # or a lookback window (how many days back to pull). The range takes
+    # precedence when present.
+    win_from = (request.POST.get("win_from") or "").strip()
+    win_to = (request.POST.get("win_to") or "").strip()
+    use_range = bool(win_from or win_to)
+
     lookback = request.POST.get("lookback_days")
     lookback_days = int(lookback) if (lookback or "").isdigit() else None
 
     try:
-        records = bq.fetch_records(lookback_days=lookback_days)
+        records = bq.fetch_records(
+            lookback_days=lookback_days,
+            date_from=win_from or None,
+            date_to=win_to or None,
+        )
+    except ValueError as exc:  # bad date input -> client error, not a 502
+        return JsonResponse({"error": str(exc)}, status=400)
     except Exception as exc:  # noqa: BLE001 - surface any BQ/auth failure cleanly
         # Log the full traceback to the server console so the real cause is
         # visible (the client only sees the short message below).
@@ -158,6 +241,10 @@ def load_bigquery(request):
             status=400,
         )
     _CACHE["records"] = records
-    _CACHE["window"] = bq.lookback_window(lookback_days)
+    # The authoritative window the UI shows: the picked range, or the lookback.
+    if use_range:
+        _CACHE["window"] = {"from": win_from or None, "to": win_to or None, "days": None}
+    else:
+        _CACHE["window"] = bq.lookback_window(lookback_days)
 
     return _report_response(request, "No data loaded.")

@@ -156,34 +156,84 @@ def _column_type_lookup(tbl, field):
     return None
 
 
-def _lookback_predicate(project, dataset, table, days: int) -> str:
-    """SQL WHERE predicate constraining the query to the lookback window.
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
-    Prefers the partition column (prunes partitions) with a type-correct
-    comparison. Falls back to the configured BQ_DATE_COLUMN, casting it when
-    it's a STRING (BQ_DATE_COLUMN_IS_STRING). The cast path scans the whole
-    table, so configuring/auto-detecting a partition column is what makes the
+
+def _date_literal(value: str) -> str:
+    """Validate a YYYY-MM-DD string (from the UI date pickers) and return it as
+    a BigQuery DATE literal. Rejects anything else so user input can never be
+    interpolated as raw SQL."""
+    s = (value or "").strip()
+    if not _DATE_RE.match(s):
+        raise ValueError(f"Invalid date (expected YYYY-MM-DD): {value!r}")
+    return f"DATE '{s}'"
+
+
+def _filter_column_sql(project, dataset, table) -> tuple:
+    """Resolve the column to filter the lookback/range on.
+
+    Returns (col_sql, kind) where col_sql is the SQL expression to compare
+    (a backticked column, or a SAFE_CAST wrapper for STRING date columns ready
+    to compare against a DATE) and kind is 'TIMESTAMP' | 'DATETIME' | 'DATE'.
+
+    Prefers the partition column (prunes partitions); falls back to the
+    configured BQ_DATE_COLUMN, casting it when it's a STRING. The cast path
+    scans the whole table, so a real partition/date column is what keeps the
     query fast.
     """
-    cutoff = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)"
     part_col, part_type = _partition_column(project, dataset, table)
     if part_col:
         _check_identifier(part_col)
         ftype = (part_type or "").upper()
         if ftype == "TIMESTAMP" or part_col == "_PARTITIONTIME":
-            return f"`{part_col}` >= TIMESTAMP({cutoff})"
+            return f"`{part_col}`", "TIMESTAMP"
         if ftype == "DATETIME":
-            return f"`{part_col}` >= DATETIME({cutoff})"
-        if ftype in ("DATE", ""):  # DATE, or unknown type -> assume DATE-compatible
-            return f"`{part_col}` >= {cutoff}"
+            return f"`{part_col}`", "DATETIME"
+        if ftype in ("DATE", ""):  # DATE, or unknown -> assume DATE-compatible
+            return f"`{part_col}`", "DATE"
         # Unhandled partition type (e.g. integer range): fall through to the
         # configured column rather than risk a type mismatch.
 
     date_col = _date_column()
     _check_identifier(date_col)
     if _date_is_string():
-        return f"DATE(SAFE_CAST(`{date_col}` AS TIMESTAMP)) >= {cutoff}"
-    return f"`{date_col}` >= {cutoff}"
+        return f"DATE(SAFE_CAST(`{date_col}` AS TIMESTAMP))", "DATE"
+    return f"`{date_col}`", "DATE"
+
+
+def _coerce_date(date_expr: str, kind: str) -> str:
+    """Wrap a DATE-typed SQL expression so it can be compared against a column
+    of the given kind (TIMESTAMP/DATETIME need an explicit constructor)."""
+    if kind == "TIMESTAMP":
+        return f"TIMESTAMP({date_expr})"
+    if kind == "DATETIME":
+        return f"DATETIME({date_expr})"
+    return date_expr
+
+
+def _lookback_predicate(project, dataset, table, days: int) -> str:
+    """SQL WHERE predicate constraining the query to the last `days` days."""
+    cutoff = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)"
+    col_sql, kind = _filter_column_sql(project, dataset, table)
+    return f"{col_sql} >= {_coerce_date(cutoff, kind)}"
+
+
+def _range_predicate(project, dataset, table, date_from, date_to) -> str:
+    """SQL WHERE predicate for an explicit, inclusive [date_from, date_to]
+    calendar range (either bound may be omitted). For TIMESTAMP/DATETIME
+    columns the upper bound uses `< next_day` so the whole end day is included.
+    """
+    col_sql, kind = _filter_column_sql(project, dataset, table)
+    parts = []
+    if date_from:
+        parts.append(f"{col_sql} >= {_coerce_date(_date_literal(date_from), kind)}")
+    if date_to:
+        if kind in ("TIMESTAMP", "DATETIME"):
+            hi_next = f"DATE_ADD({_date_literal(date_to)}, INTERVAL 1 DAY)"
+            parts.append(f"{col_sql} < {_coerce_date(hi_next, kind)}")
+        else:
+            parts.append(f"{col_sql} <= {_date_literal(date_to)}")
+    return " AND ".join(parts) if parts else "TRUE"
 
 
 def default_lookback_days() -> int:
@@ -221,9 +271,13 @@ def is_configured() -> bool:
     return all(_table_ref())
 
 
-def build_query(lookback_days: int | None = None, limit: int | None = None) -> str:
-    """Compose a safe SELECT aliasing each column to its logical field name,
-    filtered to the lookback window on the partition column."""
+def build_query(lookback_days: int | None = None, limit: int | None = None,
+                date_from: str | None = None, date_to: str | None = None) -> str:
+    """Compose a safe SELECT aliasing each column to its logical field name.
+
+    Filtered either to an explicit [date_from, date_to] calendar range (when
+    either bound is given) or, otherwise, to the last `lookback_days` days.
+    """
     project, dataset, table = _table_ref()
     _check_identifier(project, dotted=True)
     _check_identifier(dataset)
@@ -235,8 +289,11 @@ def build_query(lookback_days: int | None = None, limit: int | None = None) -> s
         _check_identifier(str(column))
         select_parts.append(f"`{column}` AS `{logical}`")
 
-    days = _clamp_lookback(lookback_days, default_lookback_days())
-    where = _lookback_predicate(project, dataset, table, days)
+    if date_from or date_to:
+        where = _range_predicate(project, dataset, table, date_from, date_to)
+    else:
+        days = _clamp_lookback(lookback_days, default_lookback_days())
+        where = _lookback_predicate(project, dataset, table, days)
     sql = (
         f"SELECT {', '.join(select_parts)} "
         f"FROM `{project}.{dataset}.{table}` "
@@ -402,14 +459,22 @@ def _page_size() -> int | None:
 
 
 def fetch_records(lookback_days: int | None = None,
-                  limit: int | None = None) -> list[dict]:
-    """Query BigQuery and return normalized record dicts (same shape as CSV parse)."""
+                  limit: int | None = None,
+                  date_from: str | None = None,
+                  date_to: str | None = None) -> list[dict]:
+    """Query BigQuery and return normalized record dicts (same shape as CSV parse).
+
+    Pass date_from/date_to (YYYY-MM-DD) for an explicit calendar range;
+    otherwise the last `lookback_days` days are pulled.
+    """
     if limit is None:
         env_cap = os.environ.get("BQ_MAX_ROWS")
         limit = int(env_cap) if env_cap and env_cap.isdigit() else None
 
-    days = _clamp_lookback(lookback_days, default_lookback_days())
-    cache_key = (days, limit)
+    if date_from or date_to:
+        cache_key = ("range", date_from, date_to, limit)
+    else:
+        cache_key = (_clamp_lookback(lookback_days, default_lookback_days()), limit)
     ttl = _cache_ttl()
     if ttl:
         import time
@@ -418,7 +483,8 @@ def fetch_records(lookback_days: int | None = None,
             return hit[1]
 
     client = _client()
-    sql = build_query(lookback_days=lookback_days, limit=limit)
+    sql = build_query(lookback_days=lookback_days, limit=limit,
+                      date_from=date_from, date_to=date_to)
     query_job = client.query(sql)
 
     fast = _records_from_arrow(query_job)
