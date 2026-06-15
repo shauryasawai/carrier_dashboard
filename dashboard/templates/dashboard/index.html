@@ -171,6 +171,23 @@ body {
 .toolbar-actions { display: flex; gap: 10px; align-items: center; }
 .toolbar-actions .btn-ghost { margin-left: 0; }
 
+/* Carrier filter dropdown (Carrier cost analysis toolbar) */
+.inv-carrier-filter { display: flex; align-items: center; gap: 8px; }
+.inv-carrier-filter > span {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint);
+}
+.inv-carrier-filter select {
+  cursor: pointer; background: transparent; border: 1px solid var(--line-strong);
+  color: var(--ink-soft); font-family: var(--mono); font-size: 12px;
+  padding: 7px 30px 7px 12px; border-radius: 7px; transition: all .15s;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath fill='%238a98a6' d='M0 0l5 6 5-6z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 11px center;
+}
+.inv-carrier-filter select:hover { border-color: var(--ink); color: var(--ink); }
+.inv-carrier-filter select:focus { outline: none; border-color: var(--accent); }
+
 /* Filters — tidy responsive grid so every control aligns on a baseline. */
 .filters {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
@@ -769,6 +786,20 @@ body {
   .masthead-inner { padding: 10px 18px; }
   .wrap { padding-top: 12px; }
 }
+
+/* SKU cost explorer: fit within the panel (no horizontal scroll) */
+#invSkuTable { table-layout: fixed; width: 100%; }
+#invSkuTable th, #invSkuTable td {
+  padding: 10px 10px; overflow: hidden; text-overflow: ellipsis;
+}
+#invSkuTable th:nth-child(1), #invSkuTable td:nth-child(1) { width: 30px; }   /* rank */
+#invSkuTable th:nth-child(2), #invSkuTable td:nth-child(2) { width: 32%; white-space: normal; }  /* SKU / product */
+#invSkuTable th:nth-child(3), #invSkuTable td:nth-child(3) { width: 15%; white-space: normal; }  /* category */
+#invSkuTable th:nth-child(4), #invSkuTable td:nth-child(4) { width: 10%; white-space: nowrap; text-align: right; }
+#invSkuTable th:nth-child(5), #invSkuTable td:nth-child(5) { width: 12%; white-space: nowrap; text-align: right; }
+#invSkuTable th:nth-child(6), #invSkuTable td:nth-child(6) { width: 11%; white-space: nowrap; text-align: right; }
+#invSkuTable th:nth-child(7), #invSkuTable td:nth-child(7) { width: 17%; white-space: normal; }  /* cheapest carrier */
+#invSkuTable td:nth-child(2) span { display: inline; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
@@ -1105,6 +1136,12 @@ body {
             <span class="data-range-val" id="invFilesLine"></span>
           </div>
           <div class="toolbar-actions">
+            <label class="inv-carrier-filter">
+              <span>Carrier</span>
+              <select id="invCarrierFilter" aria-label="Filter by carrier">
+                <option value="all">All carriers</option>
+              </select>
+            </label>
             <label class="btn-ghost" for="invAddInput">＋ Add invoices / masters</label>
             <input type="file" id="invAddInput" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv" multiple hidden>
             <button type="button" class="btn-ghost" id="invReset">↻ Clear all</button>
@@ -2365,6 +2402,7 @@ body {
   // ====================================================================
   var invReport = null;
   var invCharts = [];
+  var invCarrier = "all";   // active carrier filter ("all" = every carrier)
 
   function invPost(formData) {
     return fetch(window.INVOICES_URL, {
@@ -2397,6 +2435,7 @@ body {
     if (append) fd.append("append", "1");
     invSetHint("Reading " + files.length + " file" + (files.length > 1 ? "s" : "") + "…", null);
     showLoading("Reading invoices…", "Parsing " + files.length + " carrier invoice" + (files.length > 1 ? "s" : ""));
+    invCarrier = "all";   // a fresh upload always returns the full picture
     invPost(fd).then(function (rep) {
       invReport = rep;
       $("invUpload").hidden = true; $("invDash").hidden = false;
@@ -2409,13 +2448,42 @@ body {
   function clearInvoices() {
     var fd = new FormData(); fd.append("reset", "1");
     invPost(fd).then(function () {
-      invReport = null; $("invDash").hidden = true; $("invUpload").hidden = false;
+      invReport = null; invCarrier = "all";
+      $("invDash").hidden = true; $("invUpload").hidden = false;
       invSetHint("", null);
       if ($("invFileInput")) $("invFileInput").value = "";
     }).catch(function () {});
   }
 
+  // (Re)build the carrier dropdown from the full carrier list the server always
+  // returns (rep.all_carriers), keeping the current selection if still valid.
+  function populateInvCarrierFilter(rep) {
+    var sel = $("invCarrierFilter");
+    if (!sel) return;
+    var names = rep.all_carriers || [];
+    if (invCarrier !== "all" && names.indexOf(invCarrier) === -1) invCarrier = "all";
+    var opts = '<option value="all">All carriers</option>';
+    names.forEach(function (n) {
+      opts += '<option value="' + esc(n) + '">' + esc(n) + '</option>';
+    });
+    sel.innerHTML = opts;
+    sel.value = invCarrier;
+  }
+
+  // Re-pull the cached invoice lines filtered to the active carrier and redraw.
+  function applyInvCarrierFilter() {
+    var fd = new FormData();
+    fd.append("carrier", invCarrier);
+    showLoading("Filtering…", invCarrier === "all" ? "All carriers" : invCarrier);
+    invPost(fd).then(function (rep) {
+      invReport = rep;
+      renderCost(rep);
+      finishLoading();
+    }).catch(function (err) { invSetHint(err.message, "err"); failLoading(err.message); });
+  }
+
   function renderCost(rep) {
+    populateInvCarrierFilter(rep);
     renderInvChips(rep.files);
     renderInvStats(rep.summary, rep.currency);
     renderInvCats(rep);
@@ -2593,6 +2661,10 @@ body {
     if (fi) fi.addEventListener("change", function (e) { uploadInvoices(e.target.files, false); });
     if (ai) ai.addEventListener("change", function (e) { uploadInvoices(e.target.files, true); e.target.value = ""; });
     if ($("invReset")) $("invReset").addEventListener("click", clearInvoices);
+    if ($("invCarrierFilter")) $("invCarrierFilter").addEventListener("change", function (e) {
+      invCarrier = e.target.value || "all";
+      applyInvCarrierFilter();
+    });
     if ($("invSkuSearch")) $("invSkuSearch").addEventListener("input", function () { if (invReport) renderInvSkus(invReport); });
     var d = $("invDrop");
     if (d) {

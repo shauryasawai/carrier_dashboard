@@ -30,6 +30,31 @@ def _reset_invoice_cache():
     _INVOICE_CACHE["sku2cat"] = {}
 
 
+def _invoice_report(carrier_filter=None):
+    """Build the cost report from the cached line items, optionally restricted
+    to a single carrier. The full carrier list is always returned (all_carriers)
+    so the frontend dropdown stays populated even while a filter is active."""
+    items = _INVOICE_CACHE["items"]
+
+    # Full carrier list (by spend desc) — drives the dropdown options.
+    spend_by = {}
+    for it in items:
+        spend_by[it["carrier"]] = spend_by.get(it["carrier"], 0.0) + it["amount"]
+    all_carriers = [c for c, _ in sorted(spend_by.items(), key=lambda kv: -kv[1])]
+
+    active = carrier_filter if (carrier_filter and carrier_filter != "all") else ""
+    selected = items
+    if active:
+        selected = [it for it in items if it["carrier"] == active]
+
+    report = invoices.build_cost_report(
+        selected, _INVOICE_CACHE["files"],
+        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"])
+    report["all_carriers"] = all_carriers
+    report["carrier_filter"] = active
+    return report
+
+
 def login_view(request):
     """Internal-team sign-in. GET renders the form, POST validates credentials."""
     if auth.is_authenticated(request):
@@ -161,13 +186,13 @@ def process_invoices(request):
     """
     if request.POST.get("reset") == "1" and not request.FILES.getlist("files"):
         _reset_invoice_cache()
-        return JsonResponse(invoices.build_cost_report([], []))
+        return JsonResponse(_invoice_report())
 
     uploads = request.FILES.getlist("files") or request.FILES.getlist("file")
     if not uploads:
-        return JsonResponse(invoices.build_cost_report(
-            _INVOICE_CACHE["items"], _INVOICE_CACHE["files"],
-            _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"]))
+        # No new files: a plain refresh or a carrier-filter request on the
+        # already-cached invoice lines.
+        return JsonResponse(_invoice_report(request.POST.get("carrier")))
 
     if request.POST.get("append") != "1":
         _reset_invoice_cache()
@@ -213,9 +238,9 @@ def process_invoices(request):
                   "Uploaded file(s) had no amounts — add an invoice with charges."))
         return JsonResponse({"error": msg}, status=400)
 
-    report = invoices.build_cost_report(
-        _INVOICE_CACHE["items"], _INVOICE_CACHE["files"],
-        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"])
+    # A fresh upload always shows the full (unfiltered) picture; the frontend
+    # resets its carrier dropdown to "All carriers" to match.
+    report = _invoice_report()
     if errors:
         report["warnings"] = errors
     return JsonResponse(report)
