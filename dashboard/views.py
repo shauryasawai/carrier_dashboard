@@ -16,8 +16,18 @@ logger = logging.getLogger(__name__)
 # or None for uploaded files; it persists across re-filter requests.
 _CACHE = {"records": None, "window": None}
 
-# Cache of the latest parsed invoice line items (Carrier Cost Analysis).
-_INVOICE_CACHE = {"items": [], "files": []}
+# Cache of the latest parsed invoice line items + master enrichment maps
+# (Carrier Cost Analysis). awb2cat / sku2cat come from uploaded master files
+# (weights / SKU masters) and are used to recover category/SKU on invoices that
+# don't carry them.
+_INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {}}
+
+
+def _reset_invoice_cache():
+    _INVOICE_CACHE["items"] = []
+    _INVOICE_CACHE["files"] = []
+    _INVOICE_CACHE["awb2cat"] = {}
+    _INVOICE_CACHE["sku2cat"] = {}
 
 
 def login_view(request):
@@ -140,33 +150,32 @@ def process_upload(request):
 @auth.team_required
 @require_POST
 def process_invoices(request):
-    """Parse one or more carrier invoice files and return the cost-analysis report.
+    """Parse one or more carrier invoice (or master) files and return the
+    cost-analysis report.
 
-    Accepts multiple files under the "files" field (BlueDart / SkyAir / Frido
-    Prime in v1). Each file is run through the matching adapter; recognised line
-    items are accumulated and aggregated into spend by carrier x category x SKU.
-    Sending `reset=1` with no files clears the accumulated set.
+    Each file is auto-detected: an invoice's billed lines are aggregated into
+    spend by carrier x category x SKU; a master/reference file (weights, SKU
+    master) feeds AWB/SKU -> category maps used to enrich invoices that don't
+    carry product info. `reset=1` (no files) clears everything; `append=1` adds
+    to the current set instead of replacing it.
     """
     if request.POST.get("reset") == "1" and not request.FILES.getlist("files"):
-        _INVOICE_CACHE["items"] = []
-        _INVOICE_CACHE["files"] = []
+        _reset_invoice_cache()
         return JsonResponse(invoices.build_cost_report([], []))
 
     uploads = request.FILES.getlist("files") or request.FILES.getlist("file")
     if not uploads:
-        # No new files: re-aggregate whatever is cached (or an empty report).
         return JsonResponse(invoices.build_cost_report(
-            _INVOICE_CACHE["items"], _INVOICE_CACHE["files"]))
+            _INVOICE_CACHE["items"], _INVOICE_CACHE["files"],
+            _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"]))
 
-    # Start fresh each upload batch unless the client asks to append.
     if request.POST.get("append") != "1":
-        _INVOICE_CACHE["items"] = []
-        _INVOICE_CACHE["files"] = []
+        _reset_invoice_cache()
 
     errors = []
     for up in uploads:
         name = up.name
-        if not name.lower().endswith((".xlsx", ".xlsm", ".csv", ".tsv")):
+        if not name.lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")):
             errors.append(f"{name}: unsupported file type")
             continue
         try:
@@ -175,27 +184,38 @@ def process_invoices(request):
             pass
         data = up.read() or b""
         try:
-            items = invoices.parse_invoice(data, name)
+            kind, payload = invoices.ingest(data, name)
         except ValueError as exc:
             errors.append(f"{name}: {exc}")
             continue
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{name}: could not read ({exc})")
             continue
-        spend = round(sum(i["amount"] for i in items), 1)
-        carrier = items[0]["carrier"] if items else "Unknown"
-        _INVOICE_CACHE["items"].extend(items)
-        _INVOICE_CACHE["files"].append(
-            {"name": name, "carrier": carrier, "lines": len(items), "spend": spend})
+
+        if kind == "master":
+            _INVOICE_CACHE["awb2cat"].update(payload.get("awb2cat", {}))
+            _INVOICE_CACHE["sku2cat"].update(payload.get("sku2cat", {}))
+            entries = len(payload.get("awb2cat", {})) + len(payload.get("sku2cat", {}))
+            _INVOICE_CACHE["files"].append(
+                {"name": name, "carrier": "Reference / master", "lines": entries,
+                 "spend": 0, "kind": "master"})
+        else:  # invoice
+            spend = round(sum(i["amount"] for i in payload), 1)
+            carrier = payload[0]["carrier"] if payload else "Unknown"
+            _INVOICE_CACHE["items"].extend(payload)
+            _INVOICE_CACHE["files"].append(
+                {"name": name, "carrier": carrier, "lines": len(payload),
+                 "spend": spend, "kind": "invoice"})
 
     if not _INVOICE_CACHE["items"]:
-        return JsonResponse(
-            {"error": "No recognised invoice rows found. " + " · ".join(errors)
-                      if errors else "No data parsed from the uploaded file(s)."},
-            status=400,
-        )
+        msg = ("No billed invoice lines found. "
+               + (" · ".join(errors) if errors else
+                  "Uploaded file(s) had no amounts — add an invoice with charges."))
+        return JsonResponse({"error": msg}, status=400)
 
-    report = invoices.build_cost_report(_INVOICE_CACHE["items"], _INVOICE_CACHE["files"])
+    report = invoices.build_cost_report(
+        _INVOICE_CACHE["items"], _INVOICE_CACHE["files"],
+        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"])
     if errors:
         report["warnings"] = errors
     return JsonResponse(report)

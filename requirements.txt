@@ -1,13 +1,12 @@
 Django>=5.0
 openpyxl
+pyxlsb
 python-dotenv
 gunicorn
 whitenoise
 google-cloud-bigquery
 google-auth
 # NOTE: pyarrow + google-cloud-bigquery-storage (the fast columnar download)
-# were removed to fit Vercel's 250 MB function bundle. dashboard/bq.py falls
-# back to the REST row download automatically, so nothing breaks. If you deploy
 # only to Cloud Run / Railway (no bundle limit) you can re-add them for speed:
 #   google-cloud-bigquery-storage
 #   pyarrow
