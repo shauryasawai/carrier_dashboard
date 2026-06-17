@@ -6,6 +6,7 @@ gunicorn
 whitenoise
 google-cloud-bigquery
 google-auth
+pyxlsb
 # NOTE: pyarrow + google-cloud-bigquery-storage (the fast columnar download)
 # only to Cloud Run / Railway (no bundle limit) you can re-add them for speed:
 #   google-cloud-bigquery-storage

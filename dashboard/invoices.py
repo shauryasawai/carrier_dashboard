@@ -249,6 +249,63 @@ def carrier_from_filename(filename):
     return "Unknown carrier"
 
 
+# --------------------------------------------------------------------------
+# month inference (each invoice FILE is treated as one billing period)
+# --------------------------------------------------------------------------
+_MONTHS = {
+    "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+    "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+}
+_MONTH_NAMES = ["", "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"]
+
+
+def month_from_filename(filename):
+    """Derive a (sort_key, label) billing period from an invoice file name.
+
+    Each uploaded invoice file is one period; files whose names resolve to the
+    same month/year are merged into one bucket (so several carriers' invoices
+    for May 2025 compare side by side). Recognises:
+        2025-05 / 2025_05 / 05-2025, "May 2025", "May-25", "May'25", "may2025".
+    When no month can be parsed the cleaned file name itself becomes the label
+    (sorted after all dated periods).
+    """
+    base = re.sub(r"\.(xlsx|xlsm|xlsb|csv|tsv)$", "", _s(filename), flags=re.I)
+    low = base.lower()
+    month = year = None
+
+    # Numeric YYYY-MM (year first)
+    m = re.search(r"(20\d{2})[-_/.](0?[1-9]|1[0-2])(?!\d)", low)
+    if m:
+        year, month = int(m.group(1)), int(m.group(2))
+    # Numeric MM-YYYY (month first)
+    if month is None:
+        m = re.search(r"(?<!\d)(0?[1-9]|1[0-2])[-_/.](20\d{2})", low)
+        if m:
+            month, year = int(m.group(1)), int(m.group(2))
+    # Month name (full or abbreviated) + optional trailing year
+    if month is None:
+        m = re.search(r"(?:^|[^a-z])(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*"
+                      r"[\s\-_'’]*((?:20)?\d{2})?", low)
+        if m:
+            month = _MONTHS.get(m.group(1))
+            yr = m.group(2)
+            if yr:
+                yr = int(yr)
+                year = yr if yr >= 1900 else (2000 + yr if yr <= 79 else 1900 + yr)
+    # A bare 4-digit year elsewhere in the name (e.g. "ElasticRun May FY2025")
+    if month is not None and year is None:
+        ym = re.search(r"(20\d{2})", low)
+        if ym:
+            year = int(ym.group(1))
+
+    if month:
+        if year:
+            return ("%04d-%02d" % (year, month), "%s %d" % (_MONTH_NAMES[month], year))
+        return ("0000-%02d" % month, _MONTH_NAMES[month])
+    return ("zzzz-" + low, base or "Unknown period")
+
+
 def _clean_courier(v):
     s = _s(v)
     if not s:
@@ -530,9 +587,95 @@ def _enrich(items, awb2cat, sku2cat):
     return filled
 
 
-def build_cost_report(items, files=None, awb2cat=None, sku2cat=None):
+def _attach_lanes(items, awb2lane, order2lane):
+    """Tag each invoice line with its pickup/drop pincode by joining to the
+    loaded shipment data on AWB (falling back to order id). Lines whose AWB
+    isn't in the shipment set get empty pins and drop out of the lane table."""
+    awb2lane = awb2lane or {}
+    order2lane = order2lane or {}
+    matched = 0
+    for it in items:
+        lane = None
+        awb = it.get("awb")
+        if awb and awb in awb2lane:
+            lane = awb2lane[awb]
+        if lane is None:
+            oid = (it.get("order_id") or "").strip().upper()
+            if oid and oid in order2lane:
+                lane = order2lane[oid]
+        it["pickup_pin"], it["drop_pin"] = lane if lane else ("", "")
+        if lane:
+            matched += 1
+    return matched
+
+
+def _build_lane_comparison(items):
+    """Like-for-like price comparison: per pickup->drop pincode lane, the avg
+    billed cost of each carrier, side by side. Only lanes served by 2+ carriers
+    are kept, since the whole point is to compare carriers on the SAME lane."""
+    lanes = {}
+    for i in items:
+        pin, drop = i.get("pickup_pin"), i.get("drop_pin")
+        if not (pin and drop):
+            continue
+        g = lanes.setdefault((pin, drop), {"pickup": pin, "drop": drop, "carriers": {}})
+        cc = g["carriers"].setdefault(i["carrier"], {"spend": 0.0, "shipments": 0})
+        cc["spend"] += i["amount"]
+        cc["shipments"] += i["shipments"]
+
+    rows = []
+    carrier_set = set()
+    for g in lanes.values():
+        cs = g["carriers"]
+        if len(cs) < 2:                      # need 2+ carriers to compare
+            continue
+        cells, avgs, ship = {}, {}, 0
+        for car, v in cs.items():
+            avg = round(v["spend"] / v["shipments"], 1) if v["shipments"] else None
+            cells[car] = {"avg_cost": avg, "shipments": v["shipments"],
+                          "spend": round(v["spend"], 1)}
+            if avg is not None:
+                avgs[car] = avg
+            ship += v["shipments"]
+            carrier_set.add(car)
+        if len(avgs) < 2:                    # need 2+ priced carriers
+            continue
+        cheapest = min(avgs, key=avgs.get)
+        priciest = max(avgs, key=avgs.get)
+        mn, mx = avgs[cheapest], avgs[priciest]
+        rows.append({
+            "pickup": g["pickup"], "drop": g["drop"],
+            "lane": g["pickup"] + " → " + g["drop"],
+            "shipments": ship, "carrier_count": len(cs), "cells": cells,
+            "cheapest": cheapest, "priciest": priciest,
+            "min_avg": mn, "max_avg": mx,
+            "save_pct": round((mx - mn) / mx * 100, 1) if mx else None,
+        })
+    rows.sort(key=lambda r: -r["shipments"])
+    # Carrier columns ordered by how many comparable lanes each appears in.
+    appear = {}
+    for r in rows:
+        for car in r["cells"]:
+            appear[car] = appear.get(car, 0) + 1
+    carriers_order = sorted(carrier_set, key=lambda c: -appear.get(c, 0))
+    return {
+        "carriers": carriers_order,
+        "rows": rows[:400],
+        "lane_total": len(rows),
+    }
+
+
+def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
+                      awb2lane=None, order2lane=None):
     if awb2cat or sku2cat:
         _enrich(items, awb2cat or {}, sku2cat or {})
+
+    # Join each line to its pickup/drop pincode (from the loaded shipment data)
+    # so carrier prices can be compared on the same lane.
+    lane_matched = _attach_lanes(items, awb2lane, order2lane)
+    lane_comparison = _build_lane_comparison(items)
+    lane_comparison["matched"] = lane_matched
+    lane_comparison["total_lines"] = len(items)
 
     total_spend = sum(i["amount"] for i in items)
     total_ship = sum(i["shipments"] for i in items)
@@ -610,6 +753,49 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None):
     sku_total = len(skus)
     skus = skus[:500]
 
+    # --- month-wise (per billing period) aggregation -----------------------
+    # Each invoice file is one period (see month_from_filename); files mapping
+    # to the same month/year merge. We track spend / shipments plus per-carrier
+    # and per-category spend so the UI can compare periods side by side and show
+    # month-over-month change.
+    mon = {}
+    for i in items:
+        mk = i.get("month") or "zzzz-unknown"
+        ml = i.get("month_label") or "Unknown period"
+        g = mon.setdefault(mk, {"key": mk, "label": ml, "spend": 0.0, "shipments": 0,
+                                "carriers": {}, "categories": {}})
+        g["spend"] += i["amount"]; g["shipments"] += i["shipments"]
+        g["carriers"][i["carrier"]] = g["carriers"].get(i["carrier"], 0.0) + i["amount"]
+        cat = i["category"] or "Others"
+        g["categories"][cat] = g["categories"].get(cat, 0.0) + i["amount"]
+
+    months = []
+    prev = None
+    for mk in sorted(mon.keys()):
+        g = mon[mk]
+        avg = _avg(g["spend"], g["shipments"])
+        entry = {
+            "key": mk, "label": g["label"],
+            "spend": round(g["spend"], 1), "shipments": g["shipments"], "avg_cost": avg,
+            "carriers": [{"carrier": k, "spend": round(v, 1)}
+                         for k, v in sorted(g["carriers"].items(), key=lambda kv: -kv[1])],
+            "categories": [{"category": k, "spend": round(v, 1)}
+                           for k, v in sorted(g["categories"].items(), key=lambda kv: -kv[1])],
+            "spend_delta": None, "avg_delta": None,
+        }
+        if prev is not None:
+            if prev["spend"]:
+                entry["spend_delta"] = round((entry["spend"] - prev["spend"]) / prev["spend"] * 100, 1)
+            if prev["avg_cost"] and avg is not None:
+                entry["avg_delta"] = round((avg - prev["avg_cost"]) / prev["avg_cost"] * 100, 1)
+        months.append(entry)
+        prev = entry
+
+    # Carriers / categories present across periods, ordered by total spend, so
+    # the stacked charts use a stable, meaningful series order.
+    month_carrier_order = [c["carrier"] for c in carriers]
+    month_category_order = [c["category"] for c in categories]
+
     return {
         "currency": "₹",
         "summary": {"total_spend": round(total_spend, 1), "shipments": total_ship,
@@ -617,4 +803,8 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None):
                     "categories": len(categories), "skus": sku_total, "carriers": len(carriers)},
         "carriers": carriers, "categories": categories, "matrix": matrix,
         "skus": skus, "sku_total": sku_total, "files": files or [],
+        "lane_comparison": lane_comparison,
+        "months": months,
+        "month_carriers": month_carrier_order,
+        "month_categories": month_category_order,
     }

@@ -23,6 +23,8 @@ from io import BytesIO
 
 from openpyxl import load_workbook
 
+from . import tat as tat_rules
+
 # Logical field -> list of candidate header names (first match wins). Matching
 # is case/space-insensitive, so minor header drift won't break parsing, and any
 # export that is a SUBSET of the full 151-column standard format works: missing
@@ -617,9 +619,24 @@ def build_record(get):
     item_name = str(get("item_names") or "").strip()
     category, subcategory = _product_category(item_name)
 
+    carrier_name = str(carrier).strip()
+    account_name = str(get("account") or "").strip()
+    delivered_flag = status.lower() == "delivered"
+    p2d = _hours_between(pickup, delivery)
+    # Calendar days pickup->delivery (date diff), used by day-based SLAs.
+    transit_days = (delivery.date() - pickup.date()).days if (pickup and delivery) else None
+    if transit_days is not None and transit_days < 0:
+        transit_days = None
+    # Promised-TAT (SLA) compliance: compare actual transit against the carrier's
+    # promised TAT for this lane (hours for Blue Dart, calendar days for Delhivery).
+    tat_status, promised_tat, tat_margin = tat_rules.classify(
+        carrier_name, account_name, pickup_pin, payment, drop_pin,
+        p2d, transit_days, delivered_flag,
+    )
+
     return {
-        "carrier": str(carrier).strip(),
-        "account": str(get("account") or "").strip(),
+        "carrier": carrier_name,
+        "account": account_name,
         "delivery_type": str(get("delivery_type") or "").strip(),
         "zone": str(get("zone") or "").strip(),
         "pickup_pin": pickup_pin,
@@ -643,10 +660,13 @@ def build_record(get):
         "awb": str(get("awb") or "").strip(),
         "order_id": str(get("order_id") or "").strip(),
         "picked": pickup is not None,
-        "delivered": status.lower() == "delivered",
+        "delivered": delivered_flag,
         "attempts": attempts,
         "p2o": _hours_between(pickup, ofd1),
-        "p2d": _hours_between(pickup, delivery),
+        "p2d": p2d,
+        "promised_tat": promised_tat,
+        "tat_status": tat_status,
+        "tat_margin": tat_margin,
     }
 
 
@@ -1044,6 +1064,88 @@ def aggregate_pendency_matrix(records, key_field="account") -> dict:
     return {"columns": active_cols, "rows": rows}
 
 
+# ---------------------------------------------------------------------------
+# Promised-TAT (SLA) compliance: In TAT / Out of TAT breakdown.
+#
+# Each record already carries tat_status / promised_tat / tat_margin (set in
+# build_record via dashboard/tat.py). Here we roll those up per carrier account
+# and per warehouse, plus an overall summary. The headline metric is:
+#
+#   In-TAT %     = In TAT / (In TAT + Out of TAT)   -> of delivered shipments
+#                                                      that HAVE a promised TAT
+#   coverage %   = (In + Out) / delivered           -> share of delivered rows
+#                                                      we could actually score
+#
+# "No rule" = no promised TAT for the lane (unmapped origin warehouse, or
+# destination pincode not in the carrier master). "Pending" = has a rule but
+# isn't delivered yet, so compliance can't be judged.
+# ---------------------------------------------------------------------------
+def _tat_block(counts, delivered, margins):
+    """Shared metric block from raw status counts."""
+    evaluable = counts["In TAT"] + counts["Out of TAT"]
+    return {
+        "counts": dict(counts),
+        "delivered": delivered,
+        "evaluable": evaluable,
+        "in_tat": counts["In TAT"],
+        "out_tat": counts["Out of TAT"],
+        "no_rule": counts["No rule"],
+        "pending": counts["Pending"],
+        "in_tat_pct": _round(counts["In TAT"] / evaluable * 100 if evaluable else None),
+        "out_tat_pct": _round(counts["Out of TAT"] / evaluable * 100 if evaluable else None),
+        "coverage_pct": _round(evaluable / delivered * 100 if delivered else None),
+        "avg_margin": _round(_mean(margins)),
+    }
+
+
+def aggregate_tat_matrix(records, key_field="account") -> list[dict]:
+    """Per-key (account/warehouse) promised-TAT compliance rows, ranked by volume."""
+    statuses = tat_rules.TAT_STATUSES
+    groups: dict[str, dict] = {}
+    for r in records:
+        key = r.get(key_field) or ""
+        if key == "":
+            continue
+        g = groups.get(key)
+        if g is None:
+            g = {"key": key, "delivered": 0,
+                 "counts": {s: 0 for s in statuses}, "margins": [],
+                 "warehouse": r.get("warehouse", "")}
+            groups[key] = g
+        if r["delivered"]:
+            g["delivered"] += 1
+        g["counts"][r.get("tat_status") or "No rule"] += 1
+        if r.get("tat_margin") is not None:
+            g["margins"].append(r["tat_margin"])
+
+    rows = []
+    for g in groups.values():
+        block = _tat_block(g["counts"], g["delivered"], g["margins"])
+        block[key_field] = g["key"]
+        block["n"] = sum(g["counts"].values())
+        block["warehouse"] = g["warehouse"]
+        rows.append(block)
+    rows.sort(key=lambda a: -a["n"])
+    return rows
+
+
+def tat_summary(records) -> dict:
+    """Overall promised-TAT compliance across the filtered record set."""
+    statuses = tat_rules.TAT_STATUSES
+    counts = {s: 0 for s in statuses}
+    delivered = 0
+    margins = []
+    for r in records:
+        counts[r.get("tat_status") or "No rule"] += 1
+        if r["delivered"]:
+            delivered += 1
+        if r.get("tat_margin") is not None:
+            margins.append(r["tat_margin"])
+    block = _tat_block(counts, delivered, margins)
+    block["statuses"] = statuses
+    return block
+
+
 # Filter-bar option lists (zones / accounts / warehouses / date bounds) depend
 # only on the loaded record set, not on the active filters — identical on
 # every re-filter. Cache them keyed on the records list identity to skip four
@@ -1133,6 +1235,12 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
     # FWD-Pendency sub-state breakdown.
     status_matrix = aggregate_status_matrix(rows, "account")
     pendency_matrix = aggregate_pendency_matrix(rows, "account")
+
+    # Promised-TAT (SLA) compliance counts for the current filter slice. This is
+    # computed over the already-filtered rows, so it reflects the SELECTED date
+    # range (not the whole loaded window). Surfaced as two summary cards
+    # (In TAT / Out of TAT); only lanes with a mapped rule (Blue Dart) count.
+    tat_overall = tat_summary(rows)
 
     # Destination rollup: same KPI block + scoring, grouped by the drop city
     # (where the parcel is going), ranked by volume and truncated to top-N.
@@ -1235,6 +1343,10 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
             "ndd_orders": ndd_orders,
             "ndd_pct": _round(ndd_orders / total * 100 if total else None),
             "tiers": tier_counts,
+            "tat_in": tat_overall["in_tat"],
+            "tat_out": tat_overall["out_tat"],
+            "tat_in_pct": tat_overall["in_tat_pct"],
+            "tat_out_pct": tat_overall["out_tat_pct"],
         },
         "carriers": agg,
         "products": products,

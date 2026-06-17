@@ -47,12 +47,35 @@ def _invoice_report(carrier_filter=None):
     if active:
         selected = [it for it in items if it["carrier"] == active]
 
+    awb2lane, order2lane = _lane_maps()
     report = invoices.build_cost_report(
         selected, _INVOICE_CACHE["files"],
-        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"])
+        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"],
+        awb2lane=awb2lane, order2lane=order2lane)
     report["all_carriers"] = all_carriers
     report["carrier_filter"] = active
     return report
+
+
+def _lane_maps():
+    """Build AWB -> (pickup_pin, drop_pin) and order-id -> lane maps from the
+    loaded shipment data, so invoice lines can be matched to their lane. Uses
+    the same AWB normalization as the invoice parser so keys line up."""
+    recs = _CACHE.get("records") or []
+    awb2lane, order2lane = {}, {}
+    for r in recs:
+        pin = r.get("pickup_pin") or ""
+        drop = r.get("drop_pin") or ""
+        if not (pin and drop):
+            continue
+        lane = (pin, drop)
+        awb = r.get("awb")
+        if awb:
+            awb2lane[invoices._norm_awb(awb)] = lane
+        oid = (r.get("order_id") or "").strip().upper()
+        if oid:
+            order2lane.setdefault(oid, lane)
+    return awb2lane, order2lane
 
 
 def login_view(request):
@@ -227,10 +250,16 @@ def process_invoices(request):
         else:  # invoice
             spend = round(sum(i["amount"] for i in payload), 1)
             carrier = payload[0]["carrier"] if payload else "Unknown"
+            # Each file is one billing period; tag every line with the month
+            # derived from its file name so the cost report can compare periods.
+            mkey, mlabel = invoices.month_from_filename(name)
+            for it in payload:
+                it["month"] = mkey
+                it["month_label"] = mlabel
             _INVOICE_CACHE["items"].extend(payload)
             _INVOICE_CACHE["files"].append(
                 {"name": name, "carrier": carrier, "lines": len(payload),
-                 "spend": spend, "kind": "invoice"})
+                 "spend": spend, "kind": "invoice", "month": mlabel})
 
     if not _INVOICE_CACHE["items"]:
         msg = ("No billed invoice lines found. "

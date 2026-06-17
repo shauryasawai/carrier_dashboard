@@ -190,12 +190,43 @@ body {
 
 /* Filters — tidy responsive grid so every control aligns on a baseline. */
 .filters {
-  display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  gap: 16px 18px; align-items: end;
-  padding-bottom: 24px; margin-bottom: 26px; border-bottom: 1px solid var(--line);
+  padding-bottom: 22px; margin-bottom: 24px; border-bottom: 1px solid var(--line);
 }
+.filter-primary, .filter-advanced {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px 18px; align-items: end;
+}
+.filter-advanced {
+  margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line);
+  animation: advReveal .18s ease;
+}
+@keyframes advReveal { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
 .filters .filter { min-width: 0; }
 .filters .msel-toggle, .filters select, .filters input[type="date"] { width: 100%; min-width: 0; }
+
+/* Filter actions cell: "More filters" toggle + Reset */
+.filter-actions { display: flex; align-items: center; gap: 8px; }
+.btn-more {
+  display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); border-radius: 9px;
+  padding: 8px 12px; font-family: var(--mono); font-size: 12px; color: var(--ink);
+  white-space: nowrap; transition: border-color .15s, color .15s;
+}
+.btn-more:hover { border-color: var(--ink-faint); }
+.btn-more[aria-expanded="true"] { border-color: var(--accent); color: var(--accent-deep); }
+.btn-more[aria-expanded="true"] .msel-caret { transform: rotate(180deg); }
+.btn-more .msel-caret { transition: transform .15s; font-size: 10px; }
+.more-badge {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--accent); color: #fff; font-size: 11px; font-weight: 600; line-height: 1;
+}
+.btn-reset {
+  cursor: pointer; background: none; border: none; padding: 8px 4px;
+  font-family: var(--mono); font-size: 12px; color: var(--ink-faint);
+  text-decoration: underline; text-underline-offset: 3px; white-space: nowrap;
+}
+.btn-reset:hover { color: var(--accent-deep); }
 
 /* Destination city-tier section + cards */
 .tier-section { margin-bottom: 28px; }
@@ -347,11 +378,15 @@ body {
 /* Stat cards — all in a single row (equal-width columns). Falls back to a
    2-col grid on narrow screens so they stay readable. */
 .stat-row {
-  display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr);
-  gap: 11px; margin-bottom: 28px;
+  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px; margin-bottom: 28px;
 }
-@media (max-width: 940px) {
-  .stat-row { grid-auto-flow: row; grid-template-columns: repeat(2, 1fr); grid-auto-columns: auto; gap: 12px; }
+/* 9 cards: 5-wide => 2 rows; 3-wide => 3 rows; 2-wide on phones. */
+@media (max-width: 1180px) {
+  .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 640px) {
+  .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 }
 .stat {
   background: var(--card); border: 1px solid var(--line); border-radius: 12px;
@@ -673,6 +708,13 @@ body {
 }
 
 /* ===================== CARRIER COST ANALYSIS ===================== */
+/* Month-wise analysis */
+.mom-delta { font-family: var(--mono); font-size: 12px; font-weight: 600; }
+.mom-delta.up { color: #e5564b; }      /* spend/cost rose */
+.mom-delta.down { color: #1f9d76; }    /* spend/cost fell */
+.mom-delta.flat { color: var(--ink-faint); }
+.stat .mom-delta { display: block; margin-top: 3px; }
+#invMonthTable td.num .mom-delta { margin-left: 6px; }
 .view-tabs {
   display: inline-flex; gap: 4px; margin: 4px 0 26px; padding: 5px;
   background: var(--card); border: 1px solid var(--line); border-radius: 14px;
@@ -774,7 +816,8 @@ body {
 .toolbar-label { margin-bottom: 3px; }
 
 /* Filters: tighter grid + controls */
-.filters { gap: 9px 14px; padding-bottom: 12px; margin-bottom: 14px; }
+.filters { padding-bottom: 12px; margin-bottom: 14px; }
+.filter-primary, .filter-advanced { gap: 9px 14px; }
 .filter label { margin-bottom: 3px; font-size: 10px; }
 .filter select, .filter input[type="date"], .msel-toggle, .win-input { padding: 6px 10px; }
 
@@ -902,91 +945,106 @@ body {
       <!-- Filter bar. Every categorical filter is a multi-select checkbox
            dropdown (.msel); leaving one empty means "all". -->
       <div class="filters">
-        <div class="filter">
-          <label>Delivery type</label>
-          <div class="msel" data-name="delivery_type" data-all="All types">
-            <button type="button" class="msel-toggle"><span class="msel-text">Forward</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden>
-              <label class="msel-opt"><input type="checkbox" value="Forward" checked><span>Forward</span></label>
-              <label class="msel-opt"><input type="checkbox" value="Reverse Pickup"><span>Reverse</span></label>
+        <!-- Primary filters: the few people change most often. -->
+        <div class="filter-primary">
+          <div class="filter">
+            <label>Delivery type</label>
+            <div class="msel" data-name="delivery_type" data-all="All types">
+              <button type="button" class="msel-toggle"><span class="msel-text">Forward</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden>
+                <label class="msel-opt"><input type="checkbox" value="Forward" checked><span>Forward</span></label>
+                <label class="msel-opt"><input type="checkbox" value="Reverse Pickup"><span>Reverse</span></label>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="filter">
-          <label>City tier <span class="hint-inline">by destination</span></label>
-          <div class="msel" data-name="tier" data-all="All tiers">
-            <button type="button" class="msel-toggle"><span class="msel-text">All tiers</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden>
-              <label class="msel-opt"><input type="checkbox" value="Tier 1"><span>Tier 1 (metros)</span></label>
-              <label class="msel-opt"><input type="checkbox" value="Tier 2"><span>Tier 2 (large cities)</span></label>
-              <label class="msel-opt"><input type="checkbox" value="Tier 3"><span>Tier 3 (rest)</span></label>
+          <div class="filter">
+            <label>Carrier account</label>
+            <div class="msel" data-name="account" data-all="All accounts">
+              <button type="button" class="msel-toggle"><span class="msel-text">All accounts</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden></div>
             </div>
           </div>
-        </div>
-        <div class="filter">
-          <label>Warehouse</label>
-          <div class="msel" data-name="warehouse" data-all="All warehouses">
-            <button type="button" class="msel-toggle"><span class="msel-text">All warehouses</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden></div>
-          </div>
-        </div>
-        <div class="filter">
-          <label>Carrier account</label>
-          <div class="msel" data-name="account" data-all="All accounts">
-            <button type="button" class="msel-toggle"><span class="msel-text">All accounts</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden></div>
-          </div>
-        </div>
-        <div class="filter">
-          <label>Zone</label>
-          <div class="msel" data-name="zone" data-all="All zones">
-            <button type="button" class="msel-toggle"><span class="msel-text">All zones</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden></div>
-          </div>
-        </div>
-        <div class="filter">
-          <label>Weight</label>
-          <div class="msel" data-name="weight" data-all="All weights">
-            <button type="button" class="msel-toggle"><span class="msel-text">All weights</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden>
-              <label class="msel-opt"><input type="checkbox" value="Light"><span>Light (0&ndash;3kg)</span></label>
-              <label class="msel-opt"><input type="checkbox" value="Medium"><span>Medium (3&ndash;10kg)</span></label>
-              <label class="msel-opt"><input type="checkbox" value="Heavy"><span>Heavy (10kg+)</span></label>
+          <div class="filter">
+            <label>Warehouse</label>
+            <div class="msel" data-name="warehouse" data-all="All warehouses">
+              <button type="button" class="msel-toggle"><span class="msel-text">All warehouses</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden></div>
             </div>
           </div>
-        </div>
-        <div class="filter">
-          <label>Payment</label>
-          <div class="msel" data-name="payment" data-all="All">
-            <button type="button" class="msel-toggle"><span class="msel-text">All</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden>
-              <label class="msel-opt"><input type="checkbox" value="PREPAID"><span>Prepaid</span></label>
-              <label class="msel-opt"><input type="checkbox" value="COD"><span>COD</span></label>
+          <div class="filter">
+            <label>Payment</label>
+            <div class="msel" data-name="payment" data-all="All">
+              <button type="button" class="msel-toggle"><span class="msel-text">All</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden>
+                <label class="msel-opt"><input type="checkbox" value="PREPAID"><span>Prepaid</span></label>
+                <label class="msel-opt"><input type="checkbox" value="COD"><span>COD</span></label>
+              </div>
             </div>
           </div>
-        </div>
-        <div class="filter">
-          <label>Pickup time</label>
-          <div class="msel" data-name="slot" data-all="All times">
-            <button type="button" class="msel-toggle"><span class="msel-text">All times</span><span class="msel-caret">▾</span></button>
-            <div class="msel-menu" hidden>
-              <label class="msel-opt"><input type="checkbox" value="Before 12pm"><span>Before 12pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="12&ndash;1pm"><span>12&ndash;1pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="1&ndash;2pm"><span>1&ndash;2pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="2&ndash;3pm"><span>2&ndash;3pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="3&ndash;4pm"><span>3&ndash;4pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="4&ndash;5pm"><span>4&ndash;5pm</span></label>
-              <label class="msel-opt"><input type="checkbox" value="After 5pm"><span>After 5pm</span></label>
-            </div>
+          <div class="filter filter-actions">
+            <button type="button" class="btn-more" id="moreFiltersBtn" aria-expanded="false">
+              <span class="btn-more-label">More filters</span>
+              <span class="more-badge" id="advCount" hidden>0</span>
+              <span class="msel-caret">▾</span>
+            </button>
+            <button type="button" class="btn-reset" id="resetFiltersBtn" title="Reset all filters">Reset</button>
           </div>
         </div>
-        <div class="filter">
-          <label>Pickup from</label>
-          <input type="date" id="fDateFrom">
-        </div>
-        <div class="filter">
-          <label>Pickup to</label>
-          <input type="date" id="fDateTo">
+
+        <!-- Advanced filters: collapsed by default to keep the bar calm. -->
+        <div class="filter-advanced" id="advFilters" hidden>
+          <div class="filter">
+            <label>City tier <span class="hint-inline">by destination</span></label>
+            <div class="msel" data-name="tier" data-all="All tiers">
+              <button type="button" class="msel-toggle"><span class="msel-text">All tiers</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden>
+                <label class="msel-opt"><input type="checkbox" value="Tier 1"><span>Tier 1 (metros)</span></label>
+                <label class="msel-opt"><input type="checkbox" value="Tier 2"><span>Tier 2 (large cities)</span></label>
+                <label class="msel-opt"><input type="checkbox" value="Tier 3"><span>Tier 3 (rest)</span></label>
+              </div>
+            </div>
+          </div>
+          <div class="filter">
+            <label>Zone</label>
+            <div class="msel" data-name="zone" data-all="All zones">
+              <button type="button" class="msel-toggle"><span class="msel-text">All zones</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden></div>
+            </div>
+          </div>
+          <div class="filter">
+            <label>Weight</label>
+            <div class="msel" data-name="weight" data-all="All weights">
+              <button type="button" class="msel-toggle"><span class="msel-text">All weights</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden>
+                <label class="msel-opt"><input type="checkbox" value="Light"><span>Light (0&ndash;3kg)</span></label>
+                <label class="msel-opt"><input type="checkbox" value="Medium"><span>Medium (3&ndash;10kg)</span></label>
+                <label class="msel-opt"><input type="checkbox" value="Heavy"><span>Heavy (10kg+)</span></label>
+              </div>
+            </div>
+          </div>
+          <div class="filter">
+            <label>Pickup time</label>
+            <div class="msel" data-name="slot" data-all="All times">
+              <button type="button" class="msel-toggle"><span class="msel-text">All times</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden>
+                <label class="msel-opt"><input type="checkbox" value="Before 12pm"><span>Before 12pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="12&ndash;1pm"><span>12&ndash;1pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="1&ndash;2pm"><span>1&ndash;2pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="2&ndash;3pm"><span>2&ndash;3pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="3&ndash;4pm"><span>3&ndash;4pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="4&ndash;5pm"><span>4&ndash;5pm</span></label>
+                <label class="msel-opt"><input type="checkbox" value="After 5pm"><span>After 5pm</span></label>
+              </div>
+            </div>
+          </div>
+          <div class="filter">
+            <label>Pickup from</label>
+            <input type="date" id="fDateFrom">
+          </div>
+          <div class="filter">
+            <label>Pickup to</label>
+            <input type="date" id="fDateTo">
+          </div>
         </div>
       </div>
 
@@ -1174,6 +1232,53 @@ body {
           </div>
         </div>
 
+        <!-- ===== Month-wise analysis (each invoice file = one period) ===== -->
+        <div class="tier-section" id="invMonthsSection" hidden>
+          <div class="tier-section-head">
+            <h3>Month-wise analysis</h3>
+            <span class="panel-sub" id="invMonthsSub"></span>
+          </div>
+
+          <!-- per-month summary cards with MoM change -->
+          <div class="stat-row" id="invMonthCards"></div>
+
+          <div class="chart-grid">
+            <div class="panel">
+              <div class="panel-head">
+                <h3>Avg cost / shipment by month</h3>
+                <span class="panel-sub">avg ₹ / shipment</span>
+              </div>
+              <div class="chart-box" style="--h: 320px"><canvas id="cMonthTrend"></canvas></div>
+            </div>
+            <div class="panel">
+              <div class="panel-head">
+                <h3>Spend by carrier per month</h3>
+                <span class="panel-sub">stacked ₹ billed</span>
+              </div>
+              <div class="chart-box" style="--h: 320px"><canvas id="cMonthCarrier"></canvas></div>
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Spend by category per month</h3>
+              <span class="panel-sub">stacked ₹ billed · top categories</span>
+            </div>
+            <div class="chart-box" style="--h: 340px"><canvas id="cMonthCategory"></canvas></div>
+          </div>
+
+          <!-- month-over-month comparison table -->
+          <div class="panel">
+            <div class="panel-head">
+              <h3>Month-over-month comparison</h3>
+              <p class="panel-sub">Δ vs previous period · green = cheaper / lower spend</p>
+            </div>
+            <div class="table-scroll">
+              <table class="score-table" id="invMonthTable"></table>
+            </div>
+          </div>
+        </div>
+
         <!-- Carrier × category cost matrix -->
         <div class="panel">
           <div class="panel-head">
@@ -1182,6 +1287,18 @@ body {
           </div>
           <div class="table-scroll">
             <table class="score-table matrix-table" id="invMatrix"></table>
+          </div>
+        </div>
+
+        <!-- Like-for-like price comparison: same pickup→drop lane, carriers side by side -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Lane price comparison · same pickup &rarr; drop</h3>
+            <p class="panel-sub" id="invLaneSub"></p>
+            <input type="search" class="panel-search" id="invLaneSearch" placeholder="Search pincode (pickup or drop)…" autocomplete="off">
+          </div>
+          <div class="table-scroll">
+            <table class="score-table matrix-table" id="invLaneTable"></table>
           </div>
         </div>
 
@@ -1739,17 +1856,22 @@ body {
     var nddSuffix = (s.ndd_pct != null)
       ? ' <span class="unit">' + s.ndd_pct.toFixed(1) + "%</span>" : "";
 
+    // In-TAT / Out-of-TAT order counts for the selected date range (only lanes
+    // with a mapped promised-TAT rule are counted).
     var cards = [
       { label: "Shipments", value: s.total, kind: "int" },
-      { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
       { label: "Delivery success", value: s.success_rate, kind: "pct" },
+      { label: "In TAT", value: s.tat_in, kind: "int", accent: "var(--good)" },
+      { label: "Out of TAT", value: s.tat_out, kind: "int", accent: "var(--bad)" },
+      { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
       { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
       { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
       { label: "Carriers", value: s.carriers, kind: "int" },
       { label: "Warehouses", value: s.warehouses, kind: "int" }
     ];
     $("statRow").innerHTML = cards.map(function (c) {
-      return '<div class="stat"><div class="stat-label">' + c.label +
+      var style = c.accent ? ' style="--accent:' + c.accent + '"' : "";
+      return '<div class="stat"' + style + '><div class="stat-label">' + c.label +
         '</div><div class="stat-value">\u2014</div></div>';
     }).join("");
     var els = $("statRow").querySelectorAll(".stat-value");
@@ -2321,8 +2443,49 @@ body {
   // Single-calendar range picker; selecting both ends re-queries BigQuery.
   initWinPicker();
   ["fDateFrom", "fDateTo"].forEach(function (id) {
-    $(id).addEventListener("change", scheduleRefilter);
+    $(id).addEventListener("change", function () { updateAdvCount(); scheduleRefilter(); });
   });
+
+  // ---- Filter bar: "More filters" toggle, active-count badge, Reset --------
+  // Count how many ADVANCED filters are active (checked boxes + dates set) and
+  // show it on the toggle so collapsed filters are never silently applied.
+  function updateAdvCount() {
+    var adv = $("advFilters");
+    if (!adv) return;
+    var n = adv.querySelectorAll(".msel input[type=checkbox]:checked").length;
+    if ($("fDateFrom") && $("fDateFrom").value) n++;
+    if ($("fDateTo") && $("fDateTo").value) n++;
+    var badge = $("advCount");
+    if (badge) {
+      if (n > 0) { badge.textContent = n; badge.hidden = false; }
+      else { badge.hidden = true; }
+    }
+  }
+  if ($("moreFiltersBtn")) {
+    $("moreFiltersBtn").addEventListener("click", function () {
+      var adv = $("advFilters");
+      var willOpen = adv.hidden;
+      adv.hidden = !willOpen;
+      this.setAttribute("aria-expanded", willOpen ? "true" : "false");
+    });
+  }
+  if ($("resetFiltersBtn")) {
+    $("resetFiltersBtn").addEventListener("click", function () {
+      // Reset every dropdown to its default; delivery type returns to Forward.
+      document.querySelectorAll(".msel").forEach(function (m) {
+        var isDelivery = m.getAttribute("data-name") === "delivery_type";
+        m.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
+          cb.checked = isDelivery && cb.value === "Forward";
+        });
+        mselText(m);
+      });
+      if ($("fDateFrom")) $("fDateFrom").value = "";
+      if ($("fDateTo")) $("fDateTo").value = "";
+      updateAdvCount();
+      scheduleRefilter();
+    });
+  }
+  updateAdvCount();
 
   // Multi-select dropdowns: open/close on the toggle, close others, and close
   // any open menu when clicking outside. Delegated so dynamically-injected
@@ -2346,6 +2509,7 @@ body {
     var cb = e.target;
     if (cb && cb.matches && cb.matches(".msel input[type=checkbox]")) {
       mselText(cb.closest(".msel"));
+      updateAdvCount();
       scheduleRefilter();
     }
   });
@@ -2488,9 +2652,11 @@ body {
     renderInvStats(rep.summary, rep.currency);
     renderInvCats(rep);
     renderInvMatrix(rep);
+    renderInvLanes(rep);
     renderInvSkus(rep);
     destroyInvCharts();
     renderInvCharts(rep);
+    renderInvMonths(rep);
     $("invFilesLine").textContent = rep.files.length + " file" + (rep.files.length === 1 ? "" : "s") +
       " · ₹" + Math.round(rep.summary.total_spend).toLocaleString() + " billed";
     observeReveals();
@@ -2593,6 +2759,65 @@ body {
     $("invMatrix").innerHTML = head + "<tbody>" + rows + "</tbody>";
   }
 
+  // Like-for-like lane price comparison: same pickup→drop pincode, every
+  // carrier's avg ₹/shipment side by side. Cheapest cell green, priciest red.
+  var INV_LANE_CAP = 200;
+  function renderInvLanes(rep) {
+    var lc = rep.lane_comparison || { carriers: [], rows: [], lane_total: 0, matched: 0, total_lines: 0 };
+    var carriers = lc.carriers || [];
+    var all = lc.rows || [];
+    var q = (($("invLaneSearch") && $("invLaneSearch").value) || "").trim().toLowerCase();
+    var matches = q ? all.filter(function (r) {
+      return (r.pickup + " " + r.drop).toLowerCase().indexOf(q) !== -1;
+    }) : all;
+    var shown = matches.slice(0, INV_LANE_CAP);
+
+    var sub = $("invLaneSub");
+    if (sub) {
+      if (!carriers.length) {
+        sub.textContent = (lc.matched ? "" : "No invoice lines matched the loaded shipment data by AWB — ") +
+          "no lanes have 2+ carriers to compare yet. Load shipment data and invoices from overlapping carriers/dates.";
+      } else {
+        sub.textContent = (q
+          ? matches.length.toLocaleString() + " lane" + (matches.length === 1 ? "" : "s") + " match"
+          : lc.lane_total.toLocaleString() + " comparable lanes (2+ carriers)") +
+          " · " + (lc.matched || 0).toLocaleString() + " of " + (lc.total_lines || 0).toLocaleString() +
+          " invoice lines matched to a lane · avg ₹/shipment, greenest = cheapest" +
+          (shown.length < matches.length ? " · showing " + shown.length : "");
+      }
+    }
+
+    var head = "<thead><tr><th></th><th>Lane (pickup → drop)</th><th>Shipments</th>";
+    carriers.forEach(function (c) { head += "<th>" + esc(c) + "</th>"; });
+    head += "<th>Max save</th></tr></thead>";
+
+    if (!shown.length) {
+      var msg = carriers.length ? ('No lanes match “' + esc(q) + '”.')
+        : "Nothing to compare yet.";
+      $("invLaneTable").innerHTML = head + '<tbody><tr><td class="empty" colspan="' +
+        (carriers.length + 4) + '">' + msg + "</td></tr></tbody>";
+      return;
+    }
+
+    var rows = shown.map(function (r, i) {
+      var cells = carriers.map(function (c) {
+        var cell = r.cells[c];
+        if (!cell || cell.avg_cost == null) return '<td class="num cost-empty">—</td>';
+        var cls = (c === r.cheapest) ? "cheap" : (c === r.priciest) ? "dear" : "";
+        return '<td class="num ' + cls + '" title="' + cell.shipments.toLocaleString() +
+          ' shipments · ₹' + Math.round(cell.spend).toLocaleString() + ' total">₹' +
+          Math.round(cell.avg_cost).toLocaleString() + "</td>";
+      }).join("");
+      var save = (r.save_pct != null) ? r.save_pct.toFixed(0) + "%" : "—";
+      return '<tr><td class="rank">' + (i + 1) + '</td>' +
+        '<td class="carrier-name" style="font-family:var(--mono)">' + esc(r.lane) + "</td>" +
+        '<td class="num">' + r.shipments.toLocaleString() + "</td>" +
+        cells +
+        '<td class="num">' + save + "</td></tr>";
+    }).join("");
+    $("invLaneTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
   var INV_SKU_CAP = 200;
   function renderInvSkus(rep) {
     var all = rep.skus || [];
@@ -2655,6 +2880,168 @@ body {
     }));
   }
 
+  // ---- Month-wise analysis (each invoice file = one billing period) -------
+  var MONTH_PALETTE = ["#0fb6a9", "#5b8def", "#f2994a", "#1f9d76", "#e5564b",
+                       "#9b6bd6", "#0a8c84", "#d6a419", "#8a98a6", "#c45c8a"];
+
+  function momSpan(delta, invert) {
+    // delta is a % change. For spend/cost, a rise is "bad" (red). invert flips it.
+    if (delta == null) return '<span class="mom-delta flat">—</span>';
+    var up = delta > 0, down = delta < 0;
+    var cls = (Math.abs(delta) < 0.05) ? "flat" : (up ? "up" : "down");
+    var arrow = (Math.abs(delta) < 0.05) ? "" : (up ? "▲ " : "▼ ");
+    return '<span class="mom-delta ' + cls + '">' + arrow +
+      (delta > 0 ? "+" : "") + delta.toFixed(1) + "%</span>";
+  }
+
+  function renderInvMonths(rep) {
+    var months = rep.months || [];
+    var sec = $("invMonthsSection");
+    if (!sec) return;
+    if (!months.length) { sec.hidden = true; return; }
+    sec.hidden = false;
+
+    var multi = months.length > 1;
+    $("invMonthsSub").textContent = months.length + " period" + (multi ? "s" : "") +
+      " · each uploaded invoice file is treated as one month" +
+      (multi ? "" : " · add invoices from other months to compare");
+
+    // --- per-month summary cards (spend + MoM change) ---
+    $("invMonthCards").innerHTML = months.map(function (m) {
+      var avg = m.avg_cost != null ? "₹" + Math.round(m.avg_cost).toLocaleString() : "—";
+      return '<div class="stat">' +
+        '<div class="stat-label">' + esc(m.label) + '</div>' +
+        '<div class="stat-value">₹' + Math.round(m.spend).toLocaleString() + '</div>' +
+        momSpan(m.spend_delta) +
+        '<div class="stat-label" style="margin-top:8px">' + m.shipments.toLocaleString() +
+          ' shp · ' + avg + '/shp</div>' +
+        '</div>';
+    }).join("");
+
+    var labels = months.map(function (m) { return m.label; });
+
+    // --- avg cost / shipment by month ---
+    invCharts.push(new Chart($("cMonthTrend"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: [
+          { label: "Avg ₹/shipment",
+            data: months.map(function (m) { return m.avg_cost; }),
+            backgroundColor: "#f2994a", borderRadius: 4, maxBarThickness: 60 }
+        ]
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        animation: { duration: 850, easing: "easeOutQuart" },
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { display: false },
+          tooltip: { callbacks: { label: function (c) {
+            var v = c.parsed.y;
+            return "Avg ₹/shipment: ₹" + (v == null ? "—" : Math.round(v).toLocaleString());
+          } } }
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { color: INK, font: { family: "Inter", size: 12 } } },
+          y: { beginAtZero: true, grid: { color: LINE },
+               ticks: { color: FAINT, font: { family: "Spline Sans Mono" },
+                        callback: function (v) { return "₹" + Number(v).toLocaleString(); } } }
+        }
+      }
+    }));
+
+    // --- stacked spend by carrier per month ---
+    var carrierNames = rep.month_carriers || [];
+    invCharts.push(new Chart($("cMonthCarrier"), {
+      type: "bar",
+      data: {
+        labels: labels,
+        datasets: carrierNames.map(function (name, i) {
+          return {
+            label: name,
+            data: months.map(function (m) {
+              var hit = (m.carriers || []).filter(function (c) { return c.carrier === name; })[0];
+              return hit ? hit.spend : 0;
+            }),
+            backgroundColor: MONTH_PALETTE[i % MONTH_PALETTE.length],
+            borderRadius: 3, maxBarThickness: 60
+          };
+        })
+      },
+      options: stackedMonthOpts()
+    }));
+
+    // --- stacked spend by category per month (top 8 + Other) ---
+    var catOrder = (rep.month_categories || []).slice(0, 8);
+    var catSet = {}; catOrder.forEach(function (c) { catSet[c] = true; });
+    function catSpend(m, name) {
+      var hit = (m.categories || []).filter(function (c) { return c.category === name; })[0];
+      return hit ? hit.spend : 0;
+    }
+    var catDatasets = catOrder.map(function (name, i) {
+      return { label: name, data: months.map(function (m) { return catSpend(m, name); }),
+               backgroundColor: MONTH_PALETTE[i % MONTH_PALETTE.length], borderRadius: 3, maxBarThickness: 60 };
+    });
+    var hasOther = months.some(function (m) {
+      return (m.categories || []).some(function (c) { return !catSet[c.category]; });
+    });
+    if (hasOther) {
+      catDatasets.push({ label: "Other", borderRadius: 3, maxBarThickness: 60,
+        backgroundColor: "#c2cbd4",
+        data: months.map(function (m) {
+          return (m.categories || []).reduce(function (s, c) {
+            return s + (catSet[c.category] ? 0 : c.spend); }, 0);
+        }) });
+    }
+    invCharts.push(new Chart($("cMonthCategory"), {
+      type: "bar", data: { labels: labels, datasets: catDatasets }, options: stackedMonthOpts()
+    }));
+
+    // --- month-over-month comparison table ---
+    var head = "<thead><tr><th>Period</th><th>Files</th><th>Shipments</th>" +
+      "<th>Total ₹</th><th>MoM spend</th><th>Avg ₹/shp</th><th>MoM avg</th><th>Top carrier</th></tr></thead>";
+    var fileCounts = {};
+    (rep.files || []).forEach(function (f) {
+      if (f.kind === "master") return;
+      var k = f.month || "Unknown period";
+      fileCounts[k] = (fileCounts[k] || 0) + 1;
+    });
+    var rows = months.map(function (m) {
+      var topC = (m.carriers || [])[0];
+      var topTxt = topC ? esc(topC.carrier) + " · ₹" + Math.round(topC.spend).toLocaleString() : "—";
+      return '<tr><td class="carrier-name">' + esc(m.label) + '</td>' +
+        '<td class="num">' + (fileCounts[m.label] || 1) + '</td>' +
+        '<td class="num">' + m.shipments.toLocaleString() + '</td>' +
+        '<td class="num">₹' + Math.round(m.spend).toLocaleString() + '</td>' +
+        '<td class="num">' + momSpan(m.spend_delta) + '</td>' +
+        '<td class="num">₹' + (m.avg_cost != null ? Math.round(m.avg_cost).toLocaleString() : "—") + '</td>' +
+        '<td class="num">' + momSpan(m.avg_delta) + '</td>' +
+        '<td>' + topTxt + '</td></tr>';
+    }).join("");
+    $("invMonthTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+  }
+
+  function stackedMonthOpts() {
+    return {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 850, easing: "easeOutQuart" },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { labels: { color: FAINT, boxWidth: 12, font: { family: "Spline Sans Mono", size: 11 } } },
+        tooltip: { callbacks: { label: function (c) {
+          return c.dataset.label + ": ₹" + Math.round(c.parsed.y).toLocaleString();
+        } } }
+      },
+      scales: {
+        x: { stacked: true, grid: { display: false }, ticks: { color: INK, font: { family: "Inter", size: 12 } } },
+        y: { stacked: true, grid: { color: LINE },
+             ticks: { color: FAINT, font: { family: "Spline Sans Mono" },
+                      callback: function (v) { return "₹" + Number(v).toLocaleString(); } } }
+      }
+    };
+  }
+
   // ---- Cost-analysis wiring + tab switching ----
   (function wireCost() {
     var fi = $("invFileInput"), ai = $("invAddInput");
@@ -2666,6 +3053,7 @@ body {
       applyInvCarrierFilter();
     });
     if ($("invSkuSearch")) $("invSkuSearch").addEventListener("input", function () { if (invReport) renderInvSkus(invReport); });
+    if ($("invLaneSearch")) $("invLaneSearch").addEventListener("input", function () { if (invReport) renderInvLanes(invReport); });
     var d = $("invDrop");
     if (d) {
       ["dragenter", "dragover"].forEach(function (ev) {
