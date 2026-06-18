@@ -97,8 +97,19 @@ _CARRIERS = [
         "unit": "days", "payment_split": False, "default_tat": 3,
     },
     {
-        # GoSwift, all forward categories (GoSwift Forward, Swift_NDD, Swift
-        # Mobility). Reverse accounts are excluded. SLA from Swift_TAT_lanes;
+        # Swift NDD (GoSwift next-day). More specific than generic GoSwift, so
+        # it must come first: matched when carrier is Swift/GoSwift AND the
+        # account contains "ndd". Every serviceable lane promises 1 day; lanes
+        # not in the NDD master are "No rule" (not an NDD lane).
+        "name": "Swift NDD", "file": "swift_ndd_tat.json.gz",
+        "carrier_contains": ["swift", "goswift"], "account_contains": ["ndd"],
+        "exclude_contains": ["reverse", "revers"],
+        "unit": "days", "payment_split": False,
+    },
+    {
+        # GoSwift, remaining forward categories (GoSwift Forward, Swift
+        # Mobility) after Swift NDD is peeled off above. Reverse excluded.
+        # SLA from Swift_TAT_lanes;
         # lanes missing there fall back to the B2C city-matrix (default_file)
         # so far fewer GoSwift lanes end up "No rule".
         "name": "GoSwift", "file": "swift_tat.json.gz",
@@ -115,6 +126,15 @@ _CARRIERS = [
         # pincode (SDD or NDD) promises 1 day from pickup.
         "name": "Elastic Run", "file": "er_tat.json.gz",
         "carrier_contains": None, "account_contains": ["elasticrun", "elastic run"],
+        "exclude_contains": ["reverse", "revers", "rvp"],
+        "unit": "days", "payment_split": False, "warehouse_agnostic": True,
+    },
+    {
+        # Skye Air, drone SAME-DAY delivery. Account-matched ("skye"); like
+        # Elastic Run it is destination-based (warehouse_agnostic). Every
+        # serviceable pincode promises 0 days (delivered the same calendar day).
+        "name": "Skye Air", "file": "skye_tat.json.gz",
+        "carrier_contains": None, "account_contains": ["skye", "sky air"],
         "exclude_contains": ["reverse", "revers", "rvp"],
         "unit": "days", "payment_split": False, "warehouse_agnostic": True,
     },
@@ -221,14 +241,147 @@ def _lookup_tat(lookup, ent, pickup_pin, payment, drop_pin):
     return table.get(drop)
 
 
+# ---------------------------------------------------------------------------
+# User SLA overrides. The dashboard's SLA editor can REPLACE a carrier's entire
+# promised-TAT table at runtime, either by typing rows or uploading a file of
+# (Warehouse, Pincode, TAT). Overrides live in memory and are persisted
+# best-effort to data/overrides/<key>.json.gz so they survive a restart.
+# Shape: {carrier_key: {"unit": str, "rows": [{warehouse,pincode,tat}],
+#                       "lookup": {WAREHOUSE: {pincode: tat}}}}.
+# A warehouse of "ANY" matches every origin.
+# ---------------------------------------------------------------------------
+_OVERRIDE_DIR = os.path.join(_DATA_DIR, "overrides")
+_OVERRIDES: dict = {}
+_OVERRIDES_LOADED = False
+
+
+def carrier_key(name: str) -> str:
+    """Stable filesystem-safe key for a carrier name."""
+    return "".join(c if c.isalnum() else "_" for c in str(name).lower()).strip("_")
+
+
+def _ensure_overrides_loaded():
+    global _OVERRIDES_LOADED
+    if _OVERRIDES_LOADED:
+        return
+    _OVERRIDES_LOADED = True
+    try:
+        files = os.listdir(_OVERRIDE_DIR)
+    except OSError:
+        return
+    for fn in files:
+        if not fn.endswith(".json.gz"):
+            continue
+        try:
+            with gzip.open(os.path.join(_OVERRIDE_DIR, fn), "rb") as fh:
+                _OVERRIDES[fn[:-len(".json.gz")]] = json.loads(fh.read().decode("utf-8"))
+        except (OSError, ValueError):
+            continue
+
+
+def _norm_tat(v):
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return None
+    return int(f) if f == int(f) else f
+
+
+def _override_lookup_from_rows(rows):
+    """Build ({origin_pin: {dest_pin: tat}}, cleaned_rows) from raw rows of
+    (origin_pin, pincode, tat). origin_pin is the exact pickup/warehouse pincode
+    (6 digits) or 'ANY' to apply to every origin."""
+    lk, clean = {}, []
+    for row in rows:
+        raw = str(row.get("origin_pin") or "ANY").strip().upper()
+        if raw in ("", "ANY"):
+            origin = "ANY"
+        else:
+            d = "".join(ch for ch in raw if ch.isdigit())
+            origin = d if len(d) == 6 else None
+        pin = "".join(ch for ch in str(row.get("pincode") or "") if ch.isdigit())
+        tat = _norm_tat(row.get("tat"))
+        if origin is None or len(pin) != 6 or tat is None:
+            continue
+        lk.setdefault(origin, {})[pin] = tat
+        clean.append({"origin_pin": origin, "pincode": pin, "tat": tat})
+    return lk, clean
+
+
+def set_override(name: str, rows) -> int:
+    """Replace a carrier's SLA with (warehouse, pincode, tat) rows. Returns count."""
+    ent = next((e for e in _CARRIERS if e["name"] == name), None)
+    if ent is None:
+        raise ValueError("Unknown carrier: " + str(name))
+    _ensure_overrides_loaded()
+    key = carrier_key(name)
+    lk, clean = _override_lookup_from_rows(rows)
+    _OVERRIDES[key] = {"unit": ent["unit"], "rows": clean, "lookup": lk}
+    try:
+        os.makedirs(_OVERRIDE_DIR, exist_ok=True)
+        with gzip.open(os.path.join(_OVERRIDE_DIR, key + ".json.gz"), "wb") as fh:
+            fh.write(json.dumps(_OVERRIDES[key], separators=(",", ":")).encode("utf-8"))
+    except OSError:
+        pass  # in-memory override still applies for this process
+    return len(clean)
+
+
+def clear_override(name: str):
+    """Drop a carrier's override and revert to the built-in SLA."""
+    _ensure_overrides_loaded()
+    key = carrier_key(name)
+    _OVERRIDES.pop(key, None)
+    try:
+        os.remove(os.path.join(_OVERRIDE_DIR, key + ".json.gz"))
+    except OSError:
+        pass
+
+
+def get_override_rows(name: str) -> list:
+    _ensure_overrides_loaded()
+    ov = _OVERRIDES.get(carrier_key(name))
+    return list(ov["rows"]) if ov else []
+
+
+def _override_for(entry_idx: int):
+    _ensure_overrides_loaded()
+    return _OVERRIDES.get(carrier_key(_CARRIERS[entry_idx]["name"]))
+
+
+def carriers_meta() -> list:
+    """Per-carrier info for the SLA editor: name, key, unit, override state."""
+    _ensure_overrides_loaded()
+    out = []
+    for e in _CARRIERS:
+        ov = _OVERRIDES.get(carrier_key(e["name"]))
+        out.append({
+            "name": e["name"], "key": carrier_key(e["name"]), "unit": e["unit"],
+            "has_override": ov is not None,
+            "rule_count": len(ov["rows"]) if ov else 0,
+        })
+    return out
+
+
 def _promised(entry_idx: int, pickup_pin: str, payment: str, drop_pin: str):
     """Promised TAT (in the carrier's unit) for this lane, or None.
 
-    Tries the carrier's primary lookup first; if that has no rule for the lane
-    and the carrier declares a `default_file` (a secondary warehouse-keyed days
-    matrix), that is consulted as a fallback before giving up.
+    If a user override exists for the carrier it REPLACES the built-in SLA
+    entirely. Otherwise tries the primary lookup, then a `default_file` matrix.
     """
     ent = _CARRIERS[entry_idx]
+
+    ov = _override_for(entry_idx)
+    if ov is not None:
+        lk = ov["lookup"]
+        drop = "".join(ch for ch in str(drop_pin or "") if ch.isdigit())
+        pk = "".join(ch for ch in str(pickup_pin or "") if ch.isdigit())
+        # Match the exact pickup pincode, then any "ANY"-origin rules.
+        for w in (pk, "ANY"):
+            node = lk.get(w)
+            if node and drop in node:
+                return node[drop]
+        return None  # replace mode: lanes not in the override are unscored
+
     val = _lookup_tat(_load_lookup(ent["file"]), ent, pickup_pin, payment, drop_pin)
     if val is not None:
         return val
@@ -304,11 +457,14 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
         return ("No rule", None, None)
 
     promised = _promised(idx, pickup_pin, payment, drop_pin)
-    if promised is None:
+    # Built-in fallbacks (default TAT, city-to-city) apply only when the carrier
+    # is NOT under a user override; an override replaces the SLA entirely.
+    overridden = _override_for(idx) is not None
+    if promised is None and not overridden:
         # No per-lane rule; fall back to the carrier's default TAT if it has one
         # (e.g. Delhivery NDD -> 3 days), otherwise the lane is unscored.
         promised = _CARRIERS[idx].get("default_tat")
-    if promised is None:
+    if promised is None and not overridden:
         # Still nothing: try the city-to-city lane table (e.g. GoSwift) so a
         # pickup that never resolved to a warehouse can still be scored.
         promised = _city_promised(idx, pickup_city, drop_city)

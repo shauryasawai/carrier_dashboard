@@ -209,6 +209,21 @@ body {
 }
 .filter-row .filter { min-width: 0; }
 .filter-row .filter-actions { display: flex; align-items: center; }
+
+/* SLA editor panel */
+.sla-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.sla-controls { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 4px 0 8px; }
+.sla-carrier { display: flex; flex-direction: column; font-size: 11px; color: var(--ink-faint); gap: 4px; }
+.sla-carrier select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; min-width: 180px; }
+.sla-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+.sla-hint { margin: 0 0 10px; }
+.sla-hint code { background: var(--bg-soft, #eef2f5); padding: 0 4px; border-radius: 4px; }
+.sla-table { width: 100%; border-collapse: collapse; }
+.sla-table th, .sla-table td { text-align: left; padding: 5px 8px; border-bottom: 1px solid var(--line); }
+.sla-table th { font-size: 10px; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); }
+.sla-table input { width: 100%; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; font: inherit; box-sizing: border-box; }
+.sla-table .sla-del { border: none; background: none; color: var(--bad); cursor: pointer; font-size: 15px; line-height: 1; }
+.sla-table td.sla-delcell { width: 34px; text-align: center; }
 .filter-advanced {
   margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line);
   animation: advReveal .18s ease;
@@ -1051,6 +1066,34 @@ body {
       <!-- Summary stats -->
       <div class="stat-row" id="statRow"></div>
 
+      <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
+      <div class="panel sla-panel">
+        <div class="panel-head sla-head">
+          <div>
+            <h3>SLA rules</h3>
+            <p class="panel-sub" id="slaStatus"></p>
+          </div>
+          <button type="button" class="btn-ghost" id="slaToggle" aria-expanded="false">Edit SLA</button>
+        </div>
+        <div id="slaBody" hidden>
+          <div class="sla-controls">
+            <label class="sla-carrier">Carrier
+              <select id="slaCarrier"></select>
+            </label>
+            <span class="sla-actions">
+              <input type="file" id="slaUpload" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
+              <label class="btn-ghost" for="slaUpload">⬆ Upload file</label>
+              <button type="button" class="btn-ghost" id="slaAddRow">＋ Add row</button>
+              <button type="button" class="btn-ghost" id="slaClear">Revert to built-in</button>
+              <button type="button" class="btn-secondary" id="slaSave">Save SLA</button>
+            </span>
+          </div>
+          <div class="table-scroll">
+            <table class="sla-table" id="slaTable"></table>
+          </div>
+        </div>
+      </div>
+
       <!-- Destination city-tier breakdown -->
       <div class="tier-section">
         <div class="tier-section-head">
@@ -1327,6 +1370,7 @@ body {
     window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
     window.INVOICES_URL = "{% url 'process_invoices' %}";
     window.EXPORT_URL = "{% url 'export_shipments' %}";
+    window.SLA_URL = "{% url 'sla_config' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
     window.BQ_CONFIGURED = {{ bq_configured|yesno:"true,false" }};
@@ -2474,6 +2518,114 @@ body {
     else loadBigQuery({ lookback: lastLookback });
   });
   if ($("exportBtn")) $("exportBtn").addEventListener("click", function () { exportShipments(); });
+
+  // ---- SLA editor: view / replace a carrier's promised-TAT table ----------
+  var slaCarriers = [];
+  function slaMeta(name) {
+    for (var i = 0; i < slaCarriers.length; i++) if (slaCarriers[i].name === name) return slaCarriers[i];
+    return null;
+  }
+  function slaCurrent() { var s = $("slaCarrier"); return s ? s.value : ""; }
+  function slaUnit() { var m = slaMeta(slaCurrent()); return m ? m.unit : "days"; }
+  function renderSlaStatus() {
+    var el = $("slaStatus"); if (!el) return;
+    var m = slaMeta(slaCurrent());
+    if (!m) { el.textContent = ""; return; }
+    el.textContent = m.has_override ? ("Custom · " + m.rule_count + " rules") : "Built-in";
+  }
+  function slaRowHtml(r) {
+    r = r || { origin_pin: "ANY", pincode: "", tat: "" };
+    function esc(v) { return String(v == null ? "" : v).replace(/"/g, "&quot;"); }
+    return '<tr>' +
+      '<td><input class="sla-org" value="' + esc(r.origin_pin) + '" placeholder="ANY"></td>' +
+      '<td><input class="sla-pin" value="' + esc(r.pincode) + '" inputmode="numeric"></td>' +
+      '<td><input class="sla-tat" value="' + esc(r.tat) + '" inputmode="decimal"></td>' +
+      '<td class="sla-delcell"><button type="button" class="sla-del" title="Delete row">✕</button></td></tr>';
+  }
+  function renderSlaTable(rows) {
+    if (!$("slaTable")) return;
+    var head = '<thead><tr><th>Warehouse Pincode</th><th>Drop Pincode</th><th>TAT (' +
+      slaUnit() + ')</th><th></th></tr></thead>';
+    $("slaTable").innerHTML = head + '<tbody>' + (rows || []).map(slaRowHtml).join("") + '</tbody>';
+  }
+  function collectSlaRows() {
+    var out = [];
+    $("slaTable").querySelectorAll("tbody tr").forEach(function (tr) {
+      var org = tr.querySelector(".sla-org").value.trim();
+      var pin = tr.querySelector(".sla-pin").value.trim();
+      var tat = tr.querySelector(".sla-tat").value.trim();
+      if (pin === "" && tat === "") return;
+      out.push({ origin_pin: org || "ANY", pincode: pin, tat: tat });
+    });
+    return out;
+  }
+  function applySlaResult(b, msg) {
+    if (b.carriers) slaCarriers = b.carriers;
+    renderSlaStatus();
+    if (b.rows) renderSlaTable(b.rows);
+    if (b.report) render(b.report);
+    if (msg) setHint(msg, "ok");
+  }
+  function slaLoad(name) {
+    var fd = new FormData(); fd.append("action", "get"); fd.append("carrier", name);
+    post(fd, window.SLA_URL).then(function (b) {
+      if (b.carriers) slaCarriers = b.carriers;
+      renderSlaStatus(); renderSlaTable(b.rows || []);
+    }).catch(function (e) { setHint(e.message, "err"); });
+  }
+  function slaAction(extra, msg, btn) {
+    var lbl = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Working…"; }
+    var fd = currentFilters();           // include active filters so the report matches
+    fd.append("carrier", slaCurrent());
+    Object.keys(extra).forEach(function (k) { fd.append(k, extra[k]); });
+    return post(fd, window.SLA_URL)
+      .then(function (b) { applySlaResult(b, msg); })
+      .catch(function (e) { setHint(e.message, "err"); })
+      .finally(function () { if (btn) { btn.disabled = false; btn.textContent = lbl; } });
+  }
+  if ($("slaCarrier")) {
+    post((function () { var f = new FormData(); f.append("action", "list"); return f; })(), window.SLA_URL)
+      .then(function (b) {
+        slaCarriers = b.carriers || [];
+        $("slaCarrier").innerHTML = slaCarriers.map(function (c) {
+          return '<option value="' + c.name + '">' + c.name + '</option>';
+        }).join("");
+        renderSlaStatus();
+        if (slaCarriers.length) slaLoad(slaCarriers[0].name);
+      }).catch(function () {});
+    $("slaToggle").addEventListener("click", function () {
+      var body = $("slaBody"); var open = body.hidden; body.hidden = !open;
+      this.setAttribute("aria-expanded", open ? "true" : "false");
+      this.textContent = open ? "Hide SLA editor" : "Edit SLA";
+    });
+    $("slaCarrier").addEventListener("change", function () { slaLoad(this.value); });
+    $("slaAddRow").addEventListener("click", function () {
+      var tb = $("slaTable").querySelector("tbody");
+      if (!tb) { renderSlaTable([]); tb = $("slaTable").querySelector("tbody"); }
+      tb.insertAdjacentHTML("beforeend", slaRowHtml());
+    });
+    $("slaTable").addEventListener("click", function (e) {
+      var del = e.target.closest(".sla-del"); if (del) del.closest("tr").remove();
+    });
+    $("slaSave").addEventListener("click", function () {
+      slaAction({ action: "save", rows: JSON.stringify(collectSlaRows()) },
+        "SLA saved for " + slaCurrent() + ".", this);
+    });
+    $("slaClear").addEventListener("click", function () {
+      slaAction({ action: "clear" }, "Reverted " + slaCurrent() + " to built-in SLA.", this);
+    });
+    $("slaUpload").addEventListener("change", function () {
+      var f = this.files && this.files[0]; if (!f) return;
+      var self = this;
+      var fd = currentFilters();
+      fd.append("carrier", slaCurrent()); fd.append("action", "upload"); fd.append("file", f);
+      post(fd, window.SLA_URL)
+        .then(function (b) { applySlaResult(b, "Uploaded SLA for " + slaCurrent() + "."); })
+        .catch(function (e) { setHint(e.message, "err"); })
+        .finally(function () { self.value = ""; });
+    });
+  }
   // Single-calendar range picker; selecting both ends re-queries BigQuery.
   initWinPicker();
   ["fDateFrom", "fDateTo"].forEach(function (id) {

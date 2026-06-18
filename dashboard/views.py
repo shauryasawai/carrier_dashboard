@@ -8,8 +8,8 @@ from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
-from . import auth, bq, invoices
-from .kpi import build_report, filter_records, parse_workbook
+from . import auth, bq, invoices, tat
+from .kpi import build_report, filter_records, parse_workbook, reclassify
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +208,119 @@ def export_shipments(request):
     resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
     resp["Content-Disposition"] = f'attachment; filename="shipments{suffix}.csv"'
     return resp
+
+
+def _sla_header_index(header):
+    """Locate the Warehouse-pincode / (destination) Pincode / TAT columns by
+    (loose) header name. The origin column is the warehouse/pickup pincode."""
+    h = [str(c or "").strip().lower() for c in (header or [])]
+
+    def find(names, exclude=()):
+        for i, c in enumerate(h):
+            if i in exclude:
+                continue
+            if any(n in c for n in names):
+                return i
+        return None
+
+    origin = find(["warehouse pin", "pickup pin", "origin pin",
+                   "warehouse", "origin", "hub"])
+    excl = {origin} if origin is not None else set()
+    dest = find(["destination pin", "drop pin", "delivery pin", "dest pin"], exclude=excl)
+    if dest is None:
+        dest = find(["pincode", "pin code", "pin"], exclude=excl)
+    return {
+        "origin_pin": origin,
+        "pincode": dest,
+        "tat": find(["tat", "days", "threshold", "sla"]),
+    }
+
+
+def _parse_sla_rows(upload):
+    """Parse an uploaded SLA file into [{warehouse, pincode, tat}] rows.
+
+    Accepts .xlsx/.xlsm/.csv/.tsv with columns Warehouse pincode, Pincode, TAT
+    (warehouse pincode optional -> defaults to 'ANY')."""
+    name = (upload.name or "").lower()
+    data = upload.read()
+    records = []
+
+    if name.endswith((".xlsx", ".xlsm")):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True, read_only=True)
+        it = wb[wb.sheetnames[0]].iter_rows(values_only=True)
+        rows = list(it)
+    elif name.endswith((".csv", ".tsv")):
+        text = data.decode("utf-8", "replace")
+        delim = "\t" if name.endswith(".tsv") else ","
+        rows = list(csv.reader(io.StringIO(text), delimiter=delim))
+    else:
+        raise ValueError("Upload a .xlsx or .csv with Warehouse, Pincode, TAT columns.")
+
+    if not rows:
+        raise ValueError("The file is empty.")
+    idx = _sla_header_index(rows[0])
+    if idx["pincode"] is None or idx["tat"] is None:
+        raise ValueError("Could not find 'Pincode' and 'TAT' columns in the header.")
+
+    def cell(r, key):
+        i = idx.get(key)
+        return r[i] if (i is not None and i < len(r)) else None
+
+    for r in rows[1:]:
+        if not r:
+            continue
+        pin, tat = cell(r, "pincode"), cell(r, "tat")
+        if pin is None or tat is None:
+            continue
+        records.append({"origin_pin": cell(r, "origin_pin") or "ANY",
+                        "pincode": pin, "tat": tat})
+    if not records:
+        raise ValueError("No valid rows found (need Pincode + TAT in each row).")
+    return records
+
+
+@auth.team_required
+@require_POST
+def sla_config(request):
+    """View/replace a carrier's promised-TAT (SLA) table.
+
+    actions: list | get | save (rows JSON) | upload (file) | clear.
+    A save/upload/clear re-scores the loaded data and returns a fresh report."""
+    action = request.POST.get("action", "get")
+    carrier = (request.POST.get("carrier") or "").strip()
+
+    if action == "list":
+        return JsonResponse({"carriers": tat.carriers_meta()})
+    if action == "get":
+        return JsonResponse({"carrier": carrier, "carriers": tat.carriers_meta(),
+                             "rows": tat.get_override_rows(carrier)})
+
+    try:
+        if action == "clear":
+            tat.clear_override(carrier)
+        elif action == "save":
+            rows = json.loads(request.POST.get("rows", "[]"))
+            tat.set_override(carrier, rows)
+        elif action == "upload":
+            upload = request.FILES.get("file")
+            if upload is None:
+                return JsonResponse({"error": "No file uploaded."}, status=400)
+            tat.set_override(carrier, _parse_sla_rows(upload))
+        else:
+            return JsonResponse({"error": "Unknown action."}, status=400)
+    except ValueError as exc:
+        return JsonResponse({"error": str(exc)}, status=400)
+
+    out = {"ok": True, "carrier": carrier, "carriers": tat.carriers_meta(),
+           "rows": tat.get_override_rows(carrier)}
+    records = _CACHE["records"]
+    if records:
+        reclassify(records)
+        report = build_report(records, **_filter_kwargs(request))
+        report["load_window"] = _CACHE.get("window")
+        out["report"] = report
+    return JsonResponse(out)
 
 
 @auth.team_required

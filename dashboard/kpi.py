@@ -689,6 +689,12 @@ def build_record(get):
         "promised_tat": promised_tat,
         "tat_status": tat_status,
         "tat_margin": tat_margin,
+        # Raw inputs kept so TAT can be recomputed in place (reclassify) when the
+        # user changes a carrier's SLA, without re-querying BigQuery.
+        "transit_days": transit_days,
+        "age_hours": age_hours,
+        "age_days": age_days,
+        "ofd1_days": ofd1_days,
     }
 
 
@@ -1244,6 +1250,25 @@ def _filter_options(records) -> dict:
     _FILTER_OPTIONS_CACHE["records"] = records
     _FILTER_OPTIONS_CACHE["value"] = value
     return value
+
+
+def reclassify(records) -> None:
+    """Recompute tat_status / promised_tat / tat_margin in place for every
+    record, using the inputs stored on each row. Called after the user changes
+    a carrier's SLA (override) so the dashboard re-scores without re-querying."""
+    for r in records:
+        outcome = r.get("outcome")
+        status, promised, margin = tat_rules.classify(
+            r.get("carrier"), r.get("account"), r.get("pickup_pin"),
+            r.get("payment"), r.get("drop_pin"),
+            r.get("p2d"), r.get("transit_days"), r.get("delivered"),
+            age_hours=r.get("age_hours"), age_days=r.get("age_days"),
+            forward_pending=(outcome == "FWD Pendency"),
+            rto=(outcome == "RTO"),
+            ofd1_hours=r.get("p2o"), ofd1_days=r.get("ofd1_days"),
+            pickup_city=r.get("city"), drop_city=r.get("drop_city"),
+        )
+        r["tat_status"], r["promised_tat"], r["tat_margin"] = status, promised, margin
 
 
 def build_report(records, delivery_type="all", zone="all", payment="all",
