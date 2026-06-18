@@ -1,13 +1,15 @@
+import csv
+import io
 import json
 import logging
 
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.urls import reverse
 from django.views.decorators.http import require_POST
 
 from . import auth, bq, invoices
-from .kpi import build_report, parse_workbook
+from .kpi import build_report, filter_records, parse_workbook
 
 logger = logging.getLogger(__name__)
 
@@ -134,12 +136,12 @@ def _filter_kwargs(request):
 
     Each categorical filter is a multi-select checkbox dropdown, so each arrives
     as zero or more repeated form fields. getlist() collects them; an empty list
-    falls back to the default ("all" = no constraint). Delivery type keeps its
-    "Forward" default so the initial view isn't polluted by reverse-pickup
-    carriers (see README).
+    falls back to the default ("all" = no constraint). Delivery type also
+    defaults to "all" so both forward and reverse-pickup shipments are visible
+    unless the user narrows it.
     """
     return {
-        "delivery_type": request.POST.getlist("delivery_type") or "Forward",
+        "delivery_type": request.POST.getlist("delivery_type") or "all",
         "tier": request.POST.getlist("tier") or "all",
         "zone": request.POST.getlist("zone") or "all",
         "payment": request.POST.getlist("payment") or "all",
@@ -162,6 +164,50 @@ def _report_response(request, empty_msg):
     # window). None for uploaded files; the frontend falls back to pickup span.
     report["load_window"] = _CACHE.get("window")
     return JsonResponse(report)
+
+
+# Columns written to the shipment-level CSV export, in order: (record key, header).
+_EXPORT_FIELDS = [
+    ("awb", "AWB"), ("order_id", "Order ID"),
+    ("carrier", "Carrier"), ("account", "Account"),
+    ("delivery_type", "Delivery type"),
+    ("pickup_pin", "Pickup pincode"), ("warehouse", "Warehouse"), ("city", "Pickup city"),
+    ("drop_pin", "Drop pincode"), ("drop_city", "Drop city"), ("tier", "City tier"),
+    ("payment", "Payment"), ("pickup_date", "Pickup date"),
+    ("status", "Latest status"), ("outcome", "Outcome"), ("delivered", "Delivered"),
+    ("p2o", "Pickup->OFD1 (hrs)"), ("p2d", "Pickup->Delivery (hrs)"),
+    ("promised_tat", "Promised TAT"), ("tat_status", "TAT status"), ("tat_margin", "TAT margin"),
+]
+
+
+@auth.team_required
+@require_POST
+def export_shipments(request):
+    """Download the currently-filtered shipments as CSV so the summary cards
+    (Shipments / In TAT / Out of TAT) can be traced to the underlying rows.
+
+    Honours every active filter (same as the report). An optional `tat_status`
+    multi-value field limits the export to one or more compliance buckets
+    ("In TAT", "Out of TAT", "No rule", "Pending")."""
+    records = _CACHE["records"]
+    if not records:
+        return JsonResponse({"error": "Load data first, then export."}, status=400)
+
+    rows = filter_records(records, **_filter_kwargs(request))
+    status_sel = set(request.POST.getlist("tat_status"))
+    if status_sel:
+        rows = [r for r in rows if (r.get("tat_status") or "No rule") in status_sel]
+
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([label for _, label in _EXPORT_FIELDS])
+    for r in rows:
+        writer.writerow([r.get(key, "") for key, _ in _EXPORT_FIELDS])
+
+    suffix = ("_" + "_".join(sorted(status_sel)).replace(" ", "")) if status_sel else ""
+    resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+    resp["Content-Disposition"] = f'attachment; filename="shipments{suffix}.csv"'
+    return resp
 
 
 @auth.team_required

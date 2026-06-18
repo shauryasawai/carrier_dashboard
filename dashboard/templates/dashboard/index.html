@@ -196,6 +196,19 @@ body {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px 18px; align-items: end;
 }
+/* Filters in two usability rows. Row 1 (primary, most-changed): carrier
+   account + warehouse + payment + Reset. Row 2 (secondary, finer slices):
+   tier, zone, weight, pickup time, and the date range. */
+.filter-row {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  gap: 12px 14px; align-items: end;
+}
+.filter-row--secondary {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  margin-top: 14px; padding-top: 16px; border-top: 1px dashed var(--line);
+}
+.filter-row .filter { min-width: 0; }
+.filter-row .filter-actions { display: flex; align-items: center; }
 .filter-advanced {
   margin-top: 16px; padding-top: 16px; border-top: 1px dashed var(--line);
   animation: advReveal .18s ease;
@@ -937,6 +950,7 @@ body {
           <input type="text" id="winRange" class="win-input" placeholder="Select start → end date" aria-label="Data window date range">
         </div>
         <div class="toolbar-actions">
+          <button class="btn-ghost" id="exportBtn">⬇ Export shipments</button>
           <button class="btn-ghost" id="bqReloadBtn">⟳ Reload BigQuery</button>
           <button class="btn-ghost" id="reuploadBtn">↻ New source</button>
         </div>
@@ -945,18 +959,8 @@ body {
       <!-- Filter bar. Every categorical filter is a multi-select checkbox
            dropdown (.msel); leaving one empty means "all". -->
       <div class="filters">
-        <!-- Primary filters: the few people change most often. -->
-        <div class="filter-primary">
-          <div class="filter">
-            <label>Delivery type</label>
-            <div class="msel" data-name="delivery_type" data-all="All types">
-              <button type="button" class="msel-toggle"><span class="msel-text">Forward</span><span class="msel-caret">▾</span></button>
-              <div class="msel-menu" hidden>
-                <label class="msel-opt"><input type="checkbox" value="Forward" checked><span>Forward</span></label>
-                <label class="msel-opt"><input type="checkbox" value="Reverse Pickup"><span>Reverse</span></label>
-              </div>
-            </div>
-          </div>
+        <!-- All filters in a single row. -->
+        <div class="filter-row">
           <div class="filter">
             <label>Carrier account</label>
             <div class="msel" data-name="account" data-all="All accounts">
@@ -982,17 +986,13 @@ body {
             </div>
           </div>
           <div class="filter filter-actions">
-            <button type="button" class="btn-more" id="moreFiltersBtn" aria-expanded="false">
-              <span class="btn-more-label">More filters</span>
-              <span class="more-badge" id="advCount" hidden>0</span>
-              <span class="msel-caret">▾</span>
-            </button>
+            <label>&nbsp;</label>
             <button type="button" class="btn-reset" id="resetFiltersBtn" title="Reset all filters">Reset</button>
           </div>
         </div>
 
-        <!-- Advanced filters: collapsed by default to keep the bar calm. -->
-        <div class="filter-advanced" id="advFilters" hidden>
+        <!-- Secondary filters: finer slices, used less often. -->
+        <div class="filter-row filter-row--secondary">
           <div class="filter">
             <label>City tier <span class="hint-inline">by destination</span></label>
             <div class="msel" data-name="tier" data-all="All tiers">
@@ -1326,6 +1326,7 @@ body {
     window.PROCESS_URL = "{% url 'process_upload' %}";
     window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
     window.INVOICES_URL = "{% url 'process_invoices' %}";
+    window.EXPORT_URL = "{% url 'export_shipments' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
     window.BQ_CONFIGURED = {{ bq_configured|yesno:"true,false" }};
@@ -1475,6 +1476,37 @@ body {
     fd.append("date_from", $("fDateFrom").value);
     fd.append("date_to", $("fDateTo").value);
     return fd;
+  }
+
+  // Download the current filter slice as a row-level CSV (one row per shipment,
+  // incl. the TAT status column) so the summary cards can be traced to source.
+  // Pass a tat_status (e.g. "Out of TAT") to export just that bucket.
+  function exportShipments(status) {
+    if (!loaded) { setHint("Load data first, then export.", "err"); return; }
+    var fd = currentFilters();
+    if (status) fd.append("tat_status", status);
+    var btn = $("exportBtn"); var label = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "Preparing…"; }
+    fetch(window.EXPORT_URL, {
+      method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" },
+      body: fd
+    })
+      .then(function (r) {
+        if (r.status === 401 || r.status === 403) { window.location.href = window.LOGIN_URL || "/login/"; throw new Error("Session expired."); }
+        if (!r.ok) return r.text().then(function (t) { throw new Error("Export failed (" + r.status + ")"); });
+        return r.blob();
+      })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "shipments" + (status ? "_" + status.replace(/ /g, "") : "") + ".csv";
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+      })
+      .catch(function (e) { setHint(e.message || "Export failed.", "err"); })
+      .finally(function () { if (btn) { btn.disabled = false; btn.textContent = label; } });
   }
 
   function handleFile(file) {
@@ -1863,6 +1895,7 @@ body {
       { label: "Delivery success", value: s.success_rate, kind: "pct" },
       { label: "In TAT", value: s.tat_in, kind: "int", accent: "var(--good)" },
       { label: "Out of TAT", value: s.tat_out, kind: "int", accent: "var(--bad)" },
+      { label: "RTO", value: s.rto_pct, kind: "pct", accent: "var(--bad)" },
       { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
       { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
       { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
@@ -2440,6 +2473,7 @@ body {
     if (r) loadBigQuery({ from: r[0], to: r[1] });
     else loadBigQuery({ lookback: lastLookback });
   });
+  if ($("exportBtn")) $("exportBtn").addEventListener("click", function () { exportShipments(); });
   // Single-calendar range picker; selecting both ends re-queries BigQuery.
   initWinPicker();
   ["fDateFrom", "fDateTo"].forEach(function (id) {
@@ -2471,11 +2505,11 @@ body {
   }
   if ($("resetFiltersBtn")) {
     $("resetFiltersBtn").addEventListener("click", function () {
-      // Reset every dropdown to its default; delivery type returns to Forward.
+      // Reset every dropdown to its default: all options cleared = no
+      // constraint, so both forward and reverse-pickup shipments are shown.
       document.querySelectorAll(".msel").forEach(function (m) {
-        var isDelivery = m.getAttribute("data-name") === "delivery_type";
         m.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
-          cb.checked = isDelivery && cb.value === "Forward";
+          cb.checked = false;
         });
         mselText(m);
       });

@@ -29,6 +29,19 @@ DELHIVERY NDD (express)    - unit = days
     warehouse -> {dest_pincode: tat_days}. NDD-serviceable pincodes = 1 day;
     longer lanes use the EXPRESS TAT (days). Source: the DLV NDD pincode +
     "NDD +1 & 2" files. Covers Pune (CAH), Bangalore (BLR), Gurugram (GGN).
+    Any matched Delhivery NDD lane NOT in the lookup falls back to a 3-day
+    promise (default_tat=3) rather than "No rule".
+
+ELASTIC RUN (SDD/NDD)      - unit = days, DESTINATION-based
+    Matched by ACCOUNT containing "elasticrun" (the carrier column is generic,
+    the account code carries the identity). Hyperlocal same-day/next-day, so the
+    promised TAT is a property of the DROP pincode, not the pickup hub: the
+    lookup is a FLAT {dest_pincode: tat_days} map (warehouse_agnostic=True, the
+    pickup->warehouse step is skipped). Every serviceable pincode (SDD or NDD)
+    promises 1 day from pickup (it's a next-day account). Covers all 10 ER cities
+    (Bangalore, Mumbai, Delhi, Pune, Kolkata, Hyderabad, Surat, Jaipur,
+    Ahmedabad, Chennai) plus the intercity lanes. Source: the ER UPDATED
+    PINCODE MASTER file.
 
 Add a carrier: drop its consolidated gz in data/ and add an entry to _CARRIERS.
 """
@@ -48,10 +61,24 @@ TAT_STATUSES = ["In TAT", "Out of TAT", "No rule", "Pending"]
 
 # ---------------------------------------------------------------------------
 # Carrier registration. First matching entry wins. A shipment matches an entry
-# when its carrier name contains any `carrier_contains` token AND, if
-# `account_contains` is set, its account contains one of those tokens too.
-#   unit          : "hours" or "days" (how the lookup's TAT values are read)
-#   payment_split : lookup is warehouse -> payment -> {pin: tat} (else warehouse -> {pin: tat})
+# when its carrier name contains any `carrier_contains` token (skipped if that
+# is None) AND, if `account_contains` is set, its account contains one of those
+# tokens too. At least one of the two must be set.
+#   unit               : "hours" or "days" (how the lookup's TAT values are read)
+#   payment_split      : lookup is warehouse -> payment -> {pin: tat} (else warehouse -> {pin: tat})
+#   warehouse_agnostic : lookup is a FLAT {dest_pin: tat} keyed by drop pincode
+#                        only; the pickup->warehouse step is skipped (for
+#                        hyperlocal carriers whose SLA depends on destination).
+#   default_tat        : fallback promised TAT (in the carrier's unit) applied
+#                        when the lookup has no rule for a lane, so a matched
+#                        carrier's unmapped lanes are still scored instead of
+#                        falling to "No rule".
+#   default_file       : a secondary warehouse-keyed {pin: tat} lookup consulted
+#                        when the primary lookup misses a lane (e.g. GoSwift's
+#                        B2C city matrix), before falling through to No rule.
+#   city_default_file  : last-resort {pickup_city: {drop_city: tat}} lookup used
+#                        when even the pincode lookups miss (e.g. a pickup that
+#                        never resolved to a warehouse hub). Keyed on city names.
 # ---------------------------------------------------------------------------
 _CARRIERS = [
     {
@@ -61,18 +88,35 @@ _CARRIERS = [
         "unit": "hours", "payment_split": True,
     },
     {
+        # Delhivery NDD (express). Lanes in the lookup use the EXPRESS TAT
+        # (days); any matched Delhivery NDD lane NOT in the lookup falls back to
+        # a 3-day promise (3 calendar days from pickup) instead of "No rule".
         "name": "Delhivery NDD", "file": "dlv_tat.json.gz",
         "carrier_contains": ["delhivery"], "account_contains": ["ndd"],
         "exclude_contains": ["reverse"],
-        "unit": "days", "payment_split": False,
+        "unit": "days", "payment_split": False, "default_tat": 3,
     },
     {
         # GoSwift, all forward categories (GoSwift Forward, Swift_NDD, Swift
-        # Mobility). Reverse accounts are excluded. SLA from Swift_TAT_lanes.
+        # Mobility). Reverse accounts are excluded. SLA from Swift_TAT_lanes;
+        # lanes missing there fall back to the B2C city-matrix (default_file)
+        # so far fewer GoSwift lanes end up "No rule".
         "name": "GoSwift", "file": "swift_tat.json.gz",
         "carrier_contains": ["swift", "goswift"], "account_contains": None,
         "exclude_contains": ["reverse", "revers"],
         "unit": "days", "payment_split": False,
+        "default_file": "swift_default_tat.json.gz",
+        "city_default_file": "swift_city_tat.json.gz",
+    },
+    {
+        # Elastic Run, SDD/NDD next-day account. Identified by the ACCOUNT code
+        # (carrier column is generic), so carrier_contains is None and the match
+        # is account-only. SLA from the ER pincode master: every serviceable
+        # pincode (SDD or NDD) promises 1 day from pickup.
+        "name": "Elastic Run", "file": "er_tat.json.gz",
+        "carrier_contains": None, "account_contains": ["elasticrun", "elastic run"],
+        "exclude_contains": ["reverse", "revers", "rvp"],
+        "unit": "days", "payment_split": False, "warehouse_agnostic": True,
     },
 ]
 
@@ -96,10 +140,15 @@ def _match_carrier(carrier: str, account: str):
     cl = (carrier or "").strip().lower()
     al = (account or "").strip().lower()
     for idx, ent in enumerate(_CARRIERS):
-        if not any(tok in cl for tok in ent["carrier_contains"]):
-            continue
+        car_toks = ent.get("carrier_contains")
         acc_toks = ent.get("account_contains")
+        # A carrier-name match is required only when carrier_contains is set;
+        # otherwise the entry is matched purely on its account tokens.
+        if car_toks and not any(tok in cl for tok in car_toks):
+            continue
         if acc_toks and not any(tok in al for tok in acc_toks):
+            continue
+        if not car_toks and not acc_toks:
             continue
         excl = ent.get("exclude_contains")
         if excl and any(tok in cl or tok in al for tok in excl):
@@ -148,37 +197,107 @@ def warehouse_for_pin(pin: str) -> str:
     return WAREHOUSE_PREFIX.get(digits[:3], "")
 
 
-def _promised(entry_idx: int, pickup_pin: str, payment: str, drop_pin: str):
-    """Promised TAT (in the carrier's unit) for this lane, or None."""
-    ent = _CARRIERS[entry_idx]
-    lookup = _load_lookup(ent["file"])
-    wh = warehouse_for_pin(pickup_pin)
-    wh_node = lookup.get(wh)
-    if not wh_node:
+def _lookup_tat(lookup, ent, pickup_pin, payment, drop_pin):
+    """Resolve a promised TAT from one consolidated lookup, or None."""
+    if not lookup:
         return None
-
-    if ent["payment_split"]:
-        pay = (payment or "").strip().upper()
-        table = wh_node.get(pay) or wh_node.get("PREPAID")
-        if table is None:
-            table = next(iter(wh_node.values()), None)
+    if ent.get("warehouse_agnostic"):
+        # Flat {dest_pin: tat} keyed by drop pincode; pickup hub is irrelevant.
+        table = lookup
     else:
-        table = wh_node
+        wh_node = lookup.get(warehouse_for_pin(pickup_pin))
+        if not wh_node:
+            return None
+        if ent.get("payment_split"):
+            pay = (payment or "").strip().upper()
+            table = wh_node.get(pay) or wh_node.get("PREPAID")
+            if table is None:
+                table = next(iter(wh_node.values()), None)
+        else:
+            table = wh_node
     if not table:
         return None
-
     drop = "".join(ch for ch in str(drop_pin or "") if ch.isdigit())
     return table.get(drop)
 
 
+def _promised(entry_idx: int, pickup_pin: str, payment: str, drop_pin: str):
+    """Promised TAT (in the carrier's unit) for this lane, or None.
+
+    Tries the carrier's primary lookup first; if that has no rule for the lane
+    and the carrier declares a `default_file` (a secondary warehouse-keyed days
+    matrix), that is consulted as a fallback before giving up.
+    """
+    ent = _CARRIERS[entry_idx]
+    val = _lookup_tat(_load_lookup(ent["file"]), ent, pickup_pin, payment, drop_pin)
+    if val is not None:
+        return val
+
+    dfile = ent.get("default_file")
+    if dfile:
+        # The default matrix is plain warehouse -> {pin: tat} (no payment split,
+        # not destination-only), regardless of the primary lookup's shape.
+        plain = {"unit": ent["unit"]}
+        return _lookup_tat(_load_lookup(dfile), plain, pickup_pin, payment, drop_pin)
+    return None
+
+
+# City-name normalisation for the city-to-city fallback. Pickup cities resolved
+# from a pincode (e.g. "Bengaluru", "Howrah") are aliased to the names the lane
+# table uses ("BANGALORE", "KOLKATA", NCR hubs -> "DELHI").
+_PICKUP_CITY_ALIAS = {
+    "BENGALURU": "BANGALORE", "BENGALURU (RURAL)": "BANGALORE",
+    "GURUGRAM": "DELHI", "GURGAON": "DELHI", "NOIDA": "DELHI",
+    "GHAZIABAD": "DELHI", "FARIDABAD": "DELHI", "NCR": "DELHI",
+    "HOWRAH": "KOLKATA",
+    "THANE": "MUMBAI", "NAVI MUMBAI": "MUMBAI", "BHIWANDI": "MUMBAI",
+}
+
+
+def _norm_city(s: str) -> str:
+    return " ".join(str(s or "").strip().upper().split())
+
+
+def _city_promised(entry_idx: int, pickup_city: str, drop_city: str):
+    """Last-resort TAT from a {pickup_city: {drop_city: tat}} lane table."""
+    ent = _CARRIERS[entry_idx]
+    cfile = ent.get("city_default_file")
+    if not cfile or not pickup_city or not drop_city:
+        return None
+    pu = _norm_city(pickup_city)
+    pu = _PICKUP_CITY_ALIAS.get(pu, pu)
+    node = _load_lookup(cfile).get(pu)
+    if not node:
+        return None
+    return node.get(_norm_city(drop_city))
+
+
 def classify(carrier, account, pickup_pin, payment, drop_pin,
-             p2d_hours, transit_days, delivered):
+             p2d_hours, transit_days, delivered,
+             age_hours=None, age_days=None, forward_pending=False,
+             rto=False, ofd1_hours=None, ofd1_days=None,
+             pickup_city=None, drop_city=None):
     """Return (tat_status, promised, margin).
 
     `promised` is in the matched carrier's unit (hours or days). `margin` is
     promised - actual in that same unit (positive => on time / early).
       - hours carriers compare elapsed pickup->delivery hours (p2d_hours)
       - days  carriers compare calendar days (transit_days)
+
+    Late forward pendency (all carriers): an undelivered shipment that is still
+    an active forward-pendency (in-transit / out-for-delivery / delayed, i.e.
+    NOT delivered, RTO or cancelled) and whose elapsed age since pickup has
+    ALREADY exceeded the promised TAT is a confirmed breach -> "Out of TAT",
+    even though it hasn't been delivered yet. `age_hours` / `age_days` are the
+    pickup->now elapsed time (hours for hour-based carriers, calendar days for
+    day-based ones) and `forward_pending` marks active forward pendency.
+    Undelivered shipments still inside the promised window stay "Pending".
+
+    RTO (all carriers): a returned shipment never reaches the customer, but the
+    carrier DID attempt delivery, so its TAT is judged on pickup->OFD1 (first
+    out-for-delivery attempt) vs the promise: In TAT if the first attempt was on
+    time, else Out of TAT. `ofd1_hours` / `ofd1_days` carry that elapsed time;
+    if it's missing the RTO is left "Pending" (can't be judged).
     """
     idx = _match_carrier(carrier or "", account or "")
     if idx is None:
@@ -186,13 +305,37 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
 
     promised = _promised(idx, pickup_pin, payment, drop_pin)
     if promised is None:
+        # No per-lane rule; fall back to the carrier's default TAT if it has one
+        # (e.g. Delhivery NDD -> 3 days), otherwise the lane is unscored.
+        promised = _CARRIERS[idx].get("default_tat")
+    if promised is None:
+        # Still nothing: try the city-to-city lane table (e.g. GoSwift) so a
+        # pickup that never resolved to a warehouse can still be scored.
+        promised = _city_promised(idx, pickup_city, drop_city)
+    if promised is None:
         return ("No rule", None, None)
 
     unit = _CARRIERS[idx]["unit"]
     actual = p2d_hours if unit == "hours" else transit_days
-    if not delivered or actual is None:
+    if delivered and actual is not None:
+        margin = promised - actual
+        status = "In TAT" if actual <= promised else "Out of TAT"
+        return (status, promised, margin)
+
+    # RTO: returned, never delivered. Score the carrier on its first delivery
+    # attempt (pickup->OFD1) vs the promise instead of leaving it unscored.
+    if rto:
+        ofd = ofd1_hours if unit == "hours" else ofd1_days
+        if ofd is not None:
+            status = "In TAT" if ofd <= promised else "Out of TAT"
+            return (status, promised, promised - ofd)
         return ("Pending", promised, None)
 
-    margin = promised - actual
-    status = "In TAT" if actual <= promised else "Out of TAT"
-    return (status, promised, margin)
+    # Not yet delivered. If it's active forward pendency already past its SLA,
+    # the breach is certain regardless of eventual delivery -> Out of TAT.
+    if forward_pending:
+        elapsed = age_hours if unit == "hours" else age_days
+        if elapsed is not None and elapsed > promised:
+            return ("Out of TAT", promised, promised - elapsed)
+
+    return ("Pending", promised, None)

@@ -211,8 +211,6 @@ TIER2_PIN3 = {
     "734", "713",                                                   # West Bengal (Siliguri, Durgapur/Asansol)
     "180", "190", "171",                                            # J&K / Himachal
 }
-
-
 @lru_cache(maxsize=100_000)
 def tier_for_pincode(pin: str) -> str:
     """Tier 1/2/3 (or 'Unknown') for a destination pincode, by 3-digit prefix."""
@@ -622,16 +620,40 @@ def build_record(get):
     carrier_name = str(carrier).strip()
     account_name = str(get("account") or "").strip()
     delivered_flag = status.lower() == "delivered"
+    outcome = _outcome(status)
     p2d = _hours_between(pickup, delivery)
     # Calendar days pickup->delivery (date diff), used by day-based SLAs.
     transit_days = (delivery.date() - pickup.date()).days if (pickup and delivery) else None
     if transit_days is not None and transit_days < 0:
         transit_days = None
+    # Elapsed AGE of an undelivered shipment (pickup -> now), so an active
+    # forward-pendency shipment that has already blown past its promised TAT can
+    # be flagged Out of TAT before it is ever delivered. Same units as transit:
+    # hours for hour-based carriers, calendar days for day-based ones.
+    now = datetime.now()
+    age_hours = _hours_between(pickup, now)
+    age_days = (now.date() - pickup.date()).days if pickup else None
+    if age_days is not None and age_days < 0:
+        age_days = None
+    forward_pending = outcome == "FWD Pendency"
+    # First out-for-delivery attempt timing (pickup->OFD1), used to score RTO
+    # shipments: they were attempted but returned, so judge the carrier on when
+    # it first tried, not on a delivery that never happened.
+    is_rto = outcome == "RTO"
+    p2o = _hours_between(pickup, ofd1)
+    ofd1_days = (ofd1.date() - pickup.date()).days if (pickup and ofd1) else None
+    if ofd1_days is not None and ofd1_days < 0:
+        ofd1_days = None
     # Promised-TAT (SLA) compliance: compare actual transit against the carrier's
     # promised TAT for this lane (hours for Blue Dart, calendar days for Delhivery).
+    # Late forward pendency past its SLA is counted as Out of TAT for all carriers;
+    # RTO is scored on pickup->OFD1 vs the same promise.
     tat_status, promised_tat, tat_margin = tat_rules.classify(
         carrier_name, account_name, pickup_pin, payment, drop_pin,
         p2d, transit_days, delivered_flag,
+        age_hours=age_hours, age_days=age_days, forward_pending=forward_pending,
+        rto=is_rto, ofd1_hours=p2o, ofd1_days=ofd1_days,
+        pickup_city=pickup_city, drop_city=drop_city,
     )
 
     return {
@@ -652,7 +674,7 @@ def build_record(get):
         "pickup_date": pickup.date().isoformat() if pickup else "",
         "pickup_slot": _pickup_slot(pickup),
         "status": status,
-        "outcome": _outcome(status),
+        "outcome": outcome,
         "pendency_state": _pendency_state(status),
         "item_name": item_name,
         "category": category,
@@ -770,7 +792,7 @@ def _filter_set(val):
     return {val}
 
 
-def filter_records(records, delivery_type="Forward", zone="all", payment="all",
+def filter_records(records, delivery_type="all", zone="all", payment="all",
                    warehouse="all", account="all", weight="all",
                    slot="all", date_from="", date_to="", tier="all"):
     # Every categorical filter supports single value, list (multi-select) or
@@ -1071,18 +1093,22 @@ def aggregate_pendency_matrix(records, key_field="account") -> dict:
 # build_record via dashboard/tat.py). Here we roll those up per carrier account
 # and per warehouse, plus an overall summary. The headline metric is:
 #
-#   In-TAT %     = In TAT / (In TAT + Out of TAT)   -> of delivered shipments
+#   In-TAT %     = In TAT / (In TAT + Out of TAT)   -> of shipments with a
+#                                                      determinable SLA outcome
+#   coverage %   = (In + Out + Pending) / total      -> share of all shipments
 #                                                      that HAVE a promised TAT
-#   coverage %   = (In + Out) / delivered           -> share of delivered rows
-#                                                      we could actually score
 #
+# "Out of TAT" now also includes active forward-pendency shipments whose age
+# has already passed the promised TAT (a confirmed breach before delivery).
 # "No rule" = no promised TAT for the lane (unmapped origin warehouse, or
-# destination pincode not in the carrier master). "Pending" = has a rule but
-# isn't delivered yet, so compliance can't be judged.
+# destination pincode not in the carrier master). "Pending" = has a rule, not
+# delivered yet, and still inside the promised window.
 # ---------------------------------------------------------------------------
 def _tat_block(counts, delivered, margins):
     """Shared metric block from raw status counts."""
     evaluable = counts["In TAT"] + counts["Out of TAT"]
+    has_rule = evaluable + counts["Pending"]   # everything except "No rule"
+    total = has_rule + counts["No rule"]
     return {
         "counts": dict(counts),
         "delivered": delivered,
@@ -1093,7 +1119,10 @@ def _tat_block(counts, delivered, margins):
         "pending": counts["Pending"],
         "in_tat_pct": _round(counts["In TAT"] / evaluable * 100 if evaluable else None),
         "out_tat_pct": _round(counts["Out of TAT"] / evaluable * 100 if evaluable else None),
-        "coverage_pct": _round(evaluable / delivered * 100 if delivered else None),
+        # Share of all shipments that carry an SLA rule (master coverage of
+        # volume); independent of delivery, so it stays <=100% even though
+        # Out of TAT can now include undelivered breaches.
+        "coverage_pct": _round(has_rule / total * 100 if total else None),
         "avg_margin": _round(_mean(margins)),
     }
 
@@ -1134,15 +1163,28 @@ def tat_summary(records) -> dict:
     statuses = tat_rules.TAT_STATUSES
     counts = {s: 0 for s in statuses}
     delivered = 0
+    # Out of TAT splits into two kinds: shipments that were DELIVERED but later
+    # than promised ("delivered late"), and active forward-pendency shipments
+    # not yet delivered whose age already passed the promise ("pending breach").
+    out_delivered = 0
+    out_pending = 0
     margins = []
     for r in records:
-        counts[r.get("tat_status") or "No rule"] += 1
+        st = r.get("tat_status") or "No rule"
+        counts[st] += 1
+        if st == "Out of TAT":
+            if r["delivered"]:
+                out_delivered += 1
+            else:
+                out_pending += 1
         if r["delivered"]:
             delivered += 1
         if r.get("tat_margin") is not None:
             margins.append(r["tat_margin"])
     block = _tat_block(counts, delivered, margins)
     block["statuses"] = statuses
+    block["out_delivered"] = out_delivered
+    block["out_pending"] = out_pending
     return block
 
 
@@ -1204,7 +1246,7 @@ def _filter_options(records) -> dict:
     return value
 
 
-def build_report(records, delivery_type="Forward", zone="all", payment="all",
+def build_report(records, delivery_type="all", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
                  slot="all", date_from="", date_to="", tier="all") -> dict:
     """Top-level entry: filter, aggregate, score, and assemble the payload."""
@@ -1272,6 +1314,7 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
     delivered = sum(1 for r in rows if r["delivered"])
     picked = sum(1 for r in rows if r["picked"])
     ndd_orders = sum(1 for r in rows if _is_ndd(r["account"]))
+    rto = sum(1 for r in rows if r.get("outcome") == "RTO")
 
     # Destination city-tier counts (by drop pincode).
     tier_counts = {t: 0 for t in TIER_LEVELS + ["Unknown"]}
@@ -1347,6 +1390,11 @@ def build_report(records, delivery_type="Forward", zone="all", payment="all",
             "tat_out": tat_overall["out_tat"],
             "tat_in_pct": tat_overall["in_tat_pct"],
             "tat_out_pct": tat_overall["out_tat_pct"],
+            # Out of TAT split: delivered-but-late vs not-yet-delivered breach.
+            "tat_out_delivered": tat_overall["out_delivered"],
+            "tat_out_pending": tat_overall["out_pending"],
+            "rto": rto,
+            "rto_pct": _round(rto / total * 100 if total else None),
         },
         "carriers": agg,
         "products": products,
