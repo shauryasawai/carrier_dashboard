@@ -26,7 +26,11 @@
   --warn: #e0922f;         /* amber (warn) */
   --bad: #e5564b;          /* coral-red (bad) */
   --card: #ffffff;
-  --shadow: 0 1px 0 rgba(16,38,58,.03), 0 8px 24px -12px rgba(16,38,58,.16);
+  --paper-3: #f4faf9;      /* soft tint for grouped sections */
+  --shadow: 0 1px 2px rgba(16,38,58,.04), 0 6px 18px -10px rgba(16,38,58,.14);
+  --shadow-hover: 0 2px 4px rgba(16,38,58,.05), 0 16px 36px -14px rgba(16,38,58,.26);
+  --good-soft: #e8f6f0;    /* tinted fills for accent cards */
+  --bad-soft: #fdecea;
   --mono: 'Spline Sans Mono', monospace;
   --sans: 'Inter', system-ui, sans-serif;
   --display: 'Poppins', sans-serif;
@@ -417,13 +421,31 @@ body {
   .stat-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 }
 .stat {
-  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-  padding: 14px 14px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+  padding: 15px 16px; box-shadow: var(--shadow); position: relative; overflow: hidden;
+  transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease;
 }
-.stat::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--accent); }
-.stat-label { font-family: var(--mono); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-faint); }
-.stat-value { font-family: var(--display); font-weight: 500; font-size: 26px; letter-spacing: -.02em; margin-top: 4px; font-optical-sizing: auto; white-space: nowrap; }
-.stat-value .unit { font-size: 13px; color: var(--ink-faint); font-family: var(--mono); margin-left: 2px; }
+.stat:hover { transform: translateY(-2px); box-shadow: var(--shadow-hover); border-color: var(--line-strong); }
+.stat::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px;
+  background: var(--accent); border-radius: 14px 0 0 14px; }
+.stat-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); }
+.stat-value { font-family: var(--display); font-weight: 600; font-size: 27px; letter-spacing: -.02em; margin-top: 5px; font-optical-sizing: auto; white-space: nowrap; color: var(--ink); }
+.stat-value .unit { font-size: 13px; color: var(--ink-faint); font-family: var(--mono); margin-left: 3px; font-weight: 400; }
+
+/* Grouped KPI sections (Headline / Operations) */
+.kpi-group { margin-bottom: 18px; }
+.kpi-label {
+  font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 0 2px 9px; display: flex; align-items: center; gap: 10px;
+}
+.kpi-label::after { content: ''; flex: 1; height: 1px; background: var(--line); }
+/* Headline KPIs read a touch bigger; tinted accent cards for the SLA signals. */
+.stat-row--primary .stat-value { font-size: 30px; }
+.stat-row--primary .stat { padding: 17px 18px; }
+.stat--good { background: linear-gradient(180deg, var(--good-soft) 0%, var(--card) 46%); }
+.stat--good::before { background: var(--good); }
+.stat--bad { background: linear-gradient(180deg, var(--bad-soft) 0%, var(--card) 46%); }
+.stat--bad::before { background: var(--bad); }
 
 /* Panels */
 .panel {
@@ -702,7 +724,13 @@ body {
 .reveal.in-view { opacity: 1; transform: none; }
 
 /* Keep the filter bar (and its open dropdowns) above everything below it. */
-.filters { position: relative; z-index: 20; }
+.filters {
+  position: sticky; top: 0; z-index: 30;
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 94%, transparent);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  padding-top: 14px; box-shadow: 0 10px 18px -16px rgba(16,38,58,.5);
+}
 .stat-row { position: relative; z-index: 1; }
 .msel.open { position: relative; z-index: 40; }
 
@@ -1063,8 +1091,15 @@ body {
         </div>
       </div>
 
-      <!-- Summary stats -->
-      <div class="stat-row" id="statRow"></div>
+      <!-- Summary stats, grouped: headline KPIs then operational detail -->
+      <div class="kpi-group">
+        <div class="kpi-label">Headline</div>
+        <div class="stat-row stat-row--primary" id="statRow"></div>
+      </div>
+      <div class="kpi-group">
+        <div class="kpi-label">Operations</div>
+        <div class="stat-row stat-row--ops" id="statRow2"></div>
+      </div>
 
       <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
       <div class="panel sla-panel">
@@ -1934,24 +1969,32 @@ body {
 
     // In-TAT / Out-of-TAT order counts for the selected date range (only lanes
     // with a mapped promised-TAT rule are counted).
-    var cards = [
+    var headline = [
       { label: "Shipments", value: s.total, kind: "int" },
-      { label: "Delivery success", value: s.success_rate, kind: "pct" },
-      { label: "In TAT", value: s.tat_in, kind: "int", accent: "var(--good)" },
-      { label: "Out of TAT", value: s.tat_out, kind: "int", accent: "var(--bad)" },
-      { label: "RTO", value: s.rto_pct, kind: "pct", accent: "var(--bad)" },
+      { label: "Delivery success", value: s.success_rate, kind: "pct", tone: "good" },
+      { label: "In TAT", value: s.tat_in, kind: "int", tone: "good" },
+      { label: "Out of TAT", value: s.tat_out, kind: "int", tone: "bad" },
+      { label: "RTO", value: s.rto_pct, kind: "pct", tone: "bad" }
+    ];
+    var ops = [
       { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
       { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
       { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
       { label: "Carriers", value: s.carriers, kind: "int" },
       { label: "Warehouses", value: s.warehouses, kind: "int" }
     ];
-    $("statRow").innerHTML = cards.map(function (c) {
-      var style = c.accent ? ' style="--accent:' + c.accent + '"' : "";
-      return '<div class="stat"' + style + '><div class="stat-label">' + c.label +
+    fillStatGroup($("statRow"), headline);
+    fillStatGroup($("statRow2"), ops);
+  }
+
+  function fillStatGroup(container, cards) {
+    if (!container) return;
+    container.innerHTML = cards.map(function (c) {
+      var cls = "stat" + (c.tone ? " stat--" + c.tone : "");
+      return '<div class="' + cls + '"><div class="stat-label">' + c.label +
         '</div><div class="stat-value">\u2014</div></div>';
     }).join("");
-    var els = $("statRow").querySelectorAll(".stat-value");
+    var els = container.querySelectorAll(".stat-value");
     cards.forEach(function (c, i) {
       if (animateMode) countUp(els[i], c.value, c.kind, c.suffix || "");
       else els[i].innerHTML = formatStat(c.value, c.kind) + (c.suffix || "");
