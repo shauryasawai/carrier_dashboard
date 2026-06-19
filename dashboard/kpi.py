@@ -595,6 +595,7 @@ def build_record(get):
     pickup = _to_datetime(get("pickup_ts"))
     ofd1 = _to_datetime(get("ofd1_ts"))
     delivery = _to_datetime(get("delivery_ts"))
+    edd = _to_datetime(get("edd_ts"))   # carrier's committed expected delivery date
     attempts = _to_float(get("attempts"))
     weight = _to_float(get("weight"))
     status = str(get("status") or "").strip()
@@ -644,6 +645,11 @@ def build_record(get):
     ofd1_days = (ofd1.date() - pickup.date()).days if (pickup and ofd1) else None
     if ofd1_days is not None and ofd1_days < 0:
         ofd1_days = None
+    # Carrier's committed transit window: days from pickup to its expected
+    # delivery date. The universal SLA scores delivery vs this (delivered <= EDD).
+    edd_days = (edd.date() - pickup.date()).days if (pickup and edd) else None
+    if edd_days is not None and edd_days < 0:
+        edd_days = None
     # Promised-TAT (SLA) compliance: compare actual transit against the carrier's
     # promised TAT for this lane (hours for Blue Dart, calendar days for Delhivery).
     # Late forward pendency past its SLA is counted as Out of TAT for all carriers;
@@ -653,7 +659,7 @@ def build_record(get):
         p2d, transit_days, delivered_flag,
         age_hours=age_hours, age_days=age_days, forward_pending=forward_pending,
         rto=is_rto, ofd1_hours=p2o, ofd1_days=ofd1_days,
-        pickup_city=pickup_city, drop_city=drop_city,
+        pickup_city=pickup_city, drop_city=drop_city, edd_days=edd_days,
     )
 
     return {
@@ -695,6 +701,7 @@ def build_record(get):
         "age_hours": age_hours,
         "age_days": age_days,
         "ofd1_days": ofd1_days,
+        "edd_days": edd_days,
     }
 
 
@@ -1267,6 +1274,7 @@ def reclassify(records) -> None:
             rto=(outcome == "RTO"),
             ofd1_hours=r.get("p2o"), ofd1_days=r.get("ofd1_days"),
             pickup_city=r.get("city"), drop_city=r.get("drop_city"),
+            edd_days=r.get("edd_days"),
         )
         r["tat_status"], r["promised_tat"], r["tat_margin"] = status, promised, margin
 

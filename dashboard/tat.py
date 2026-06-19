@@ -6,14 +6,18 @@ destination pincode) pair, the promised transit time. We consolidate those
 masters into compact lookups (``data/<carrier>_tat.json.gz``) and use them to
 label each delivered shipment:
 
-    In TAT      - delivered within the promised TAT
-    Out of TAT  - delivered, but slower than the promised TAT
-    No rule     - no promised TAT for this lane (origin/dest not mapped)
-    Pending     - not yet delivered, so compliance can't be evaluated
+Compliance is measured, for every carrier, against that carrier's OWN committed
+delivery date (EDD = expected_delivery_date_by_courier_partner):
 
-Two SLA "units" are supported, because carriers express TAT differently:
-    hours  - compare elapsed pickup->delivery hours (``p2d``) vs promised hours
-    days   - compare calendar days (delivery date - pickup date) vs promised days
+    In TAT      - delivered on/before the committed EDD
+    Out of TAT  - delivered after the EDD (or already past EDD while undelivered)
+    No rule     - shipment carrier isn't a tracked carrier
+    Pending     - not delivered yet and still within the EDD window
+
+When a shipment has no EDD (e.g. Skye Air) or its carrier is under a manual SLA
+override, scoring falls back to the carrier's committed-TAT lookup files
+(pickup->OFD1, or pickup->delivery for measure_on="delivery"); those use either
+hours or calendar days per the carrier's unit.
 
 ---------------------------------------------------------------------------
 Carriers wired up
@@ -24,14 +28,12 @@ BLUE DART (Surface, B2C)   - unit = hours
     (origin TWH / Talegaon); surface transit is typically 3-8 days. Replaces
     the earlier Apex-Air ~24h lookup, which mis-scored surface volume.
 
-DELHIVERY NDD (express)    - unit = days
+DELHIVERY NDD              - unit = days, scored pickup->DELIVERY (NSL basis)
     Matched by carrier name "Delhivery" AND account containing "NDD" (so
-    Surface / Reverse / heavy Delhivery accounts are NOT caught). Lookup keyed
-    warehouse -> {dest_pincode: tat_days}. NDD-serviceable pincodes = 1 day;
-    longer lanes use the EXPRESS TAT (days). Source: the DLV NDD pincode +
-    "NDD +1 & 2" files. Covers Pune (CAH), Bangalore (BLR), Gurugram (GGN).
-    Any matched Delhivery NDD lane NOT in the lookup falls back to a 3-day
-    promise (default_tat=3) rather than "No rule".
+    Surface / Reverse / heavy Delhivery accounts are NOT caught). SLA = the
+    PITCHED per-lane EXPRESS TAT (days), keyed warehouse -> {dest_pincode: days}
+    from "NDD +1 & 2 for PUNE & BLR" + "DLV NDD Pin Codes" gap-fill. EDD is
+    ignored (Delhivery pads it). Lanes off the master fall back to 3 days.
 
 ELASTIC RUN (SDD/NDD)      - unit = days, DESTINATION-based
     Matched by ACCOUNT containing "elasticrun" (the carrier column is generic,
@@ -80,6 +82,21 @@ TAT_STATUSES = ["In TAT", "Out of TAT", "No rule", "Pending"]
 #   city_default_file  : last-resort {pickup_city: {drop_city: tat}} lookup used
 #                        when even the pincode lookups miss (e.g. a pickup that
 #                        never resolved to a warehouse hub). Keyed on city names.
+#   measure_on         : "ofd1" (default) scores pickup->first-attempt (OFD1);
+#                        "delivery" scores pickup->delivery (e.g. Delhivery NDD,
+#                        to match its NSL on-time metric).
+#   ignore_edd         : skip the universal committed-EDD basis for this carrier
+#                        and use its lookup files instead (e.g. Delhivery NDD,
+#                        whose courier EDD is padded ~100%; its zone SLA tracks
+#                        NSL ~90%).
+#   ofd1_grace_hours   : (OFD1 basis) also In TAT if OFD1 is within this many
+#                        elapsed hours of pickup, in addition to the promised
+#                        rule (e.g. Skye Air: same day OR within 15h).
+#   tat_offset_days    : add N days to every promised TAT for this carrier
+#                        (e.g. Shadowfax "test" held to NDD+1 -> +1).
+# NOTE: In TAT is scored against the carrier's committed EDD by default; the
+# lookup files (pickup->OFD1, or ->delivery for measure_on="delivery") are the
+# fallback when EDD is missing, overridden, or ignore_edd is set (see classify()).
 # ---------------------------------------------------------------------------
 _CARRIERS = [
     {
@@ -93,23 +110,30 @@ _CARRIERS = [
         "unit": "hours", "payment_split": False, "warehouse_agnostic": True,
     },
     {
-        # Delhivery NDD (express). Lanes in the lookup use the EXPRESS TAT
-        # (days); any matched Delhivery NDD lane NOT in the lookup falls back to
-        # a 3-day promise (3 calendar days from pickup) instead of "No rule".
+        # Delhivery NDD. SLA = Delhivery's PITCHED per-lane EXPRESS TAT (days),
+        # keyed warehouse -> {dest_pincode: days}, from "NDD +1 & 2 for PUNE &
+        # BLR" (authoritative) + "DLV NDD Pin Codes" (next-day gap-fill). Scored
+        # pickup->DELIVERY. EDD is ignored here because Delhivery pads it (~3d vs
+        # ~1.7d actual -> a meaningless ~100%); the pitched lane TAT is the
+        # contractual commitment. Lanes off the master fall back to 3 days.
         "name": "Delhivery NDD", "file": "dlv_tat.json.gz",
         "carrier_contains": ["delhivery"], "account_contains": ["ndd"],
         "exclude_contains": ["reverse"],
-        "unit": "days", "payment_split": False, "default_tat": 3,
+        "unit": "days", "payment_split": False,
+        "default_tat": 3, "measure_on": "delivery", "ignore_edd": True,
     },
     {
-        # Swift NDD (GoSwift next-day). More specific than generic GoSwift, so
-        # it must come first: matched when carrier is Swift/GoSwift AND the
-        # account contains "ndd". Every serviceable lane promises 1 day; lanes
-        # not in the NDD master are "No rule" (not an NDD lane).
+        # Swift NDD (GoSwift next-day). Matched before generic GoSwift (carrier
+        # Swift/GoSwift AND account contains "ndd"). SLA = pitched zone-committed
+        # TAT (A=1, B=2, C=3, D=4 days) keyed warehouse -> {dest_pincode: days}
+        # from "NDD-GoSwift.xlsx". Scored pickup->DELIVERY; EDD ignored because
+        # GoSwift pads it (~6d vs ~2.1d actual -> a meaningless ~98%). Lanes off
+        # the master fall back to 3 days.
         "name": "Swift NDD", "file": "swift_ndd_tat.json.gz",
         "carrier_contains": ["swift", "goswift"], "account_contains": ["ndd"],
         "exclude_contains": ["reverse", "revers"],
         "unit": "days", "payment_split": False,
+        "default_tat": 3, "measure_on": "delivery", "ignore_edd": True,
     },
     {
         # GoSwift, remaining forward categories (GoSwift Forward, Swift
@@ -125,23 +149,51 @@ _CARRIERS = [
         "city_default_file": "swift_city_tat.json.gz",
     },
     {
-        # Elastic Run, SDD/NDD next-day account. Identified by the ACCOUNT code
-        # (carrier column is generic), so carrier_contains is None and the match
-        # is account-only. SLA from the ER pincode master: every serviceable
-        # pincode (SDD or NDD) promises 1 day from pickup.
+        # Elastic Run, SDD/NDD next-day account (account-matched; carrier is
+        # generic). SLA from the ER pincode master: every serviceable pincode
+        # promises 1 day (next day) from pickup. Scored pickup->DELIVERY; EDD
+        # ignored because ER pads it (~2d vs ~1.3d actual). Non-serviceable
+        # pincodes -> No rule (not an ER lane).
         "name": "Elastic Run", "file": "er_tat.json.gz",
         "carrier_contains": None, "account_contains": ["elasticrun", "elastic run"],
         "exclude_contains": ["reverse", "revers", "rvp"],
         "unit": "days", "payment_split": False, "warehouse_agnostic": True,
+        "measure_on": "delivery", "ignore_edd": True,
     },
     {
-        # Skye Air, drone SAME-DAY delivery. Account-matched ("skye"); like
-        # Elastic Run it is destination-based (warehouse_agnostic). Every
-        # serviceable pincode promises 0 days (delivered the same calendar day).
+        # Skye Air, drone SAME-DAY delivery (account-matched; destination-based).
+        # SLA: OFD1 the same calendar day as pickup, OR within 15 elapsed hours
+        # of pickup (ofd1_grace_hours). Scored pickup->OFD1. (Customer order_date
+        # is date-only ~2 days before pickup, so "order received" is taken as
+        # Skye's handover = pickup.)
         "name": "Skye Air", "file": "skye_tat.json.gz",
         "carrier_contains": None, "account_contains": ["skye", "sky air"],
         "exclude_contains": ["reverse", "revers", "rvp"],
         "unit": "days", "payment_split": False, "warehouse_agnostic": True,
+        "ofd1_grace_hours": 15,
+    },
+    {
+        # Shadowfax LARGE (3kg+; account "Shadofax_NDD_Large"). Pitched per-lane
+        # TAT (NDD=1, NDD+1=2, NDD+2=3 days) keyed warehouse -> {dest_pin: days}
+        # from "Shadowfax Large 3kg+". Must precede the general Shadowfax entry.
+        "name": "Shadowfax Large", "file": "shadowfax_large_tat.json.gz",
+        "carrier_contains": ["shadowfax", "shadofax"], "account_contains": ["large"],
+        "exclude_contains": ["reverse", "revers", "rvp"],
+        "unit": "days", "payment_split": False,
+        "default_tat": 3, "measure_on": "delivery", "ignore_edd": True,
+    },
+    {
+        # Shadowfax Prime/Small (the "test" account, ~1.4kg avg). Pitched per-lane
+        # TAT (days; 0 = same-day intracity) from "Shadowfax Prime Small upto
+        # 1kg", keyed warehouse -> {dest_pin: days}. Held to NDD+1 (tat_offset
+        # +1d) since "test" parcels exceed the <=1kg Prime band. Catches all
+        # other Shadowfax accounts.
+        "name": "Shadowfax", "file": "shadowfax_small_tat.json.gz",
+        "carrier_contains": ["shadowfax", "shadofax"], "account_contains": None,
+        "exclude_contains": ["reverse", "revers", "rvp"],
+        "unit": "days", "payment_split": False,
+        "default_tat": 3, "measure_on": "delivery", "ignore_edd": True,
+        "tat_offset_days": 1,
     },
 ]
 
@@ -434,32 +486,40 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
              p2d_hours, transit_days, delivered,
              age_hours=None, age_days=None, forward_pending=False,
              rto=False, ofd1_hours=None, ofd1_days=None,
-             pickup_city=None, drop_city=None):
+             pickup_city=None, drop_city=None, edd_days=None):
     """Return (tat_status, promised, margin).
 
-    `promised` is in the matched carrier's unit (hours or days). `margin` is
-    promised - actual in that same unit (positive => on time / early).
-      - hours carriers compare elapsed pickup->delivery hours (p2d_hours)
-      - days  carriers compare calendar days (transit_days)
+    UNIVERSAL basis (default): score against the carrier's OWN committed
+    delivery date (EDD). When `edd_days` (calendar days pickup->EDD) is present
+    and the carrier is not under a manual override, In TAT = delivered within
+    that window (transit_days <= edd_days); RTO uses the first attempt (OFD1)
+    vs EDD; an undelivered shipment already past EDD is an "Out of TAT" breach;
+    otherwise "Pending".
 
-    Late forward pendency (all carriers): an undelivered shipment that is still
-    an active forward-pendency (in-transit / out-for-delivery / delayed, i.e.
-    NOT delivered, RTO or cancelled) and whose elapsed age since pickup has
-    ALREADY exceeded the promised TAT is a confirmed breach -> "Out of TAT",
-    even though it hasn't been delivered yet. `age_hours` / `age_days` are the
-    pickup->now elapsed time (hours for hour-based carriers, calendar days for
-    day-based ones) and `forward_pending` marks active forward pendency.
-    Undelivered shipments still inside the promised window stay "Pending".
-
-    RTO (all carriers): a returned shipment never reaches the customer, but the
-    carrier DID attempt delivery, so its TAT is judged on pickup->OFD1 (first
-    out-for-delivery attempt) vs the promise: In TAT if the first attempt was on
-    time, else Out of TAT. `ofd1_hours` / `ofd1_days` carry that elapsed time;
-    if it's missing the RTO is left "Pending" (can't be judged).
+    FALLBACK (no EDD, e.g. Skye Air, or a manual override): the carrier's
+    committed-TAT lookup is used instead, measured pickup->OFD1 by default or
+    pickup->delivery for carriers with measure_on="delivery". `promised` is in
+    the carrier's unit (hours or days); `margin` is promised - actual.
     """
     idx = _match_carrier(carrier or "", account or "")
     if idx is None:
         return ("No rule", None, None)
+
+    # Universal SLA: score against the carrier's OWN committed delivery date
+    # (EDD). `edd_days` = calendar days pickup->EDD; In TAT when the actual
+    # transit is within that. A manual override (SLA editor) takes precedence;
+    # shipments with no EDD (e.g. Skye Air) fall through to the lookup logic.
+    if (edd_days is not None and _override_for(idx) is None
+            and not _CARRIERS[idx].get("ignore_edd")):
+        if delivered and transit_days is not None:
+            return ("In TAT" if transit_days <= edd_days else "Out of TAT",
+                    edd_days, edd_days - transit_days)
+        if rto and ofd1_days is not None:
+            return ("In TAT" if ofd1_days <= edd_days else "Out of TAT",
+                    edd_days, edd_days - ofd1_days)
+        if forward_pending and age_days is not None and age_days > edd_days:
+            return ("Out of TAT", edd_days, edd_days - age_days)
+        return ("Pending", edd_days, None)
 
     promised = _promised(idx, pickup_pin, payment, drop_pin)
     # Built-in fallbacks (default TAT, city-to-city) apply only when the carrier
@@ -476,27 +536,49 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
     if promised is None:
         return ("No rule", None, None)
 
-    unit = _CARRIERS[idx]["unit"]
-    actual = p2d_hours if unit == "hours" else transit_days
-    if delivered and actual is not None:
-        margin = promised - actual
-        status = "In TAT" if actual <= promised else "Out of TAT"
-        return (status, promised, margin)
+    # Optional per-carrier offset added to the promised TAT (e.g. Shadowfax
+    # "test" parcels run ~1.4kg, above the <=1kg Prime band, so they're held to
+    # NDD+1 -> tat_offset_days=1).
+    offset = _CARRIERS[idx].get("tat_offset_days")
+    if offset:
+        promised += offset
 
-    # RTO: returned, never delivered. Score the carrier on its first delivery
-    # attempt (pickup->OFD1) vs the promise instead of leaving it unscored.
-    if rto:
-        ofd = ofd1_hours if unit == "hours" else ofd1_days
-        if ofd is not None:
-            status = "In TAT" if ofd <= promised else "Out of TAT"
-            return (status, promised, promised - ofd)
+    unit = _CARRIERS[idx]["unit"]
+    basis = _CARRIERS[idx].get("measure_on", "ofd1")
+
+    if basis == "delivery":
+        # Score pickup -> DELIVERY (e.g. Delhivery NDD, to track its NSL metric).
+        actual = p2d_hours if unit == "hours" else transit_days
+        if delivered and actual is not None:
+            return ("In TAT" if actual <= promised else "Out of TAT",
+                    promised, promised - actual)
+        # Returned (never delivered): judge on the first attempt (OFD1).
+        if rto:
+            ofd = ofd1_hours if unit == "hours" else ofd1_days
+            if ofd is not None:
+                return ("In TAT" if ofd <= promised else "Out of TAT",
+                        promised, promised - ofd)
+            return ("Pending", promised, None)
+        # Not delivered yet: a forward-pendency already past its SLA is a breach.
+        if forward_pending:
+            elapsed = age_hours if unit == "hours" else age_days
+            if elapsed is not None and elapsed > promised:
+                return ("Out of TAT", promised, promised - elapsed)
         return ("Pending", promised, None)
 
-    # Not yet delivered. If it's active forward pendency already past its SLA,
-    # the breach is certain regardless of eventual delivery -> Out of TAT.
+    # Default basis: pickup -> OFD1 (first out-for-delivery attempt). A shipment
+    # is scored as soon as it was attempted (whether it ends Delivered or RTO),
+    # using OFD1 elapsed time (hours or calendar days per the carrier's unit).
+    actual = ofd1_hours if unit == "hours" else ofd1_days
+    if actual is not None:
+        # Optional grace: also In TAT if OFD1 is within N elapsed hours of pickup
+        # (e.g. Skye Air: same calendar day OR within 15h).
+        grace = _CARRIERS[idx].get("ofd1_grace_hours")
+        on_time = (actual <= promised) or (
+            grace is not None and ofd1_hours is not None and ofd1_hours <= grace)
+        return ("In TAT" if on_time else "Out of TAT", promised, promised - actual)
     if forward_pending:
         elapsed = age_hours if unit == "hours" else age_days
         if elapsed is not None and elapsed > promised:
             return ("Out of TAT", promised, promised - elapsed)
-
     return ("Pending", promised, None)

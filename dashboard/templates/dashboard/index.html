@@ -1969,11 +1969,15 @@ body {
 
     // In-TAT / Out-of-TAT order counts for the selected date range (only lanes
     // with a mapped promised-TAT rule are counted).
+    // In/Out TAT show the % as the headline number, with the raw count small.
+    function countTag(n) {
+      return (n != null) ? ' <span class="unit">' + n.toLocaleString() + '</span>' : "";
+    }
     var headline = [
       { label: "Shipments", value: s.total, kind: "int" },
       { label: "Delivery success", value: s.success_rate, kind: "pct", tone: "good" },
-      { label: "In TAT", value: s.tat_in, kind: "int", tone: "good" },
-      { label: "Out of TAT", value: s.tat_out, kind: "int", tone: "bad" },
+      { label: "In TAT", value: s.tat_in_pct, kind: "pct", tone: "good", suffix: countTag(s.tat_in) },
+      { label: "Out of TAT", value: s.tat_out_pct, kind: "pct", tone: "bad", suffix: countTag(s.tat_out) },
       { label: "RTO", value: s.rto_pct, kind: "pct", tone: "bad" }
     ];
     var ops = [
