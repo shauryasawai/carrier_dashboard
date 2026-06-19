@@ -538,9 +538,9 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
 
     # Optional per-carrier offset added to the promised TAT (e.g. Shadowfax
     # "test" parcels run ~1.4kg, above the <=1kg Prime band, so they're held to
-    # NDD+1 -> tat_offset_days=1).
+    # NDD+1 -> tat_offset_days=1). A manual override is exact, so no offset then.
     offset = _CARRIERS[idx].get("tat_offset_days")
-    if offset:
+    if offset and not overridden:
         promised += offset
 
     unit = _CARRIERS[idx]["unit"]
