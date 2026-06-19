@@ -18,10 +18,11 @@ Two SLA "units" are supported, because carriers express TAT differently:
 ---------------------------------------------------------------------------
 Carriers wired up
 ---------------------------------------------------------------------------
-BLUE DART (Apex air, B2C)  - unit = hours
-    Matched by carrier name (any Blue Dart account). Lookup keyed
-    warehouse -> payment -> {dest_pincode: tat_hours}. COD/Prepaid TAT only
-    differ for Hyderabad. Source: the "BD Air" Apex per-warehouse files.
+BLUE DART (Surface, B2C)   - unit = hours
+    Matched by carrier name (any Blue Dart account). Destination-based flat
+    lookup {dest_pincode: tat_hours} from the Surface serviceability list
+    (origin TWH / Talegaon); surface transit is typically 3-8 days. Replaces
+    the earlier Apex-Air ~24h lookup, which mis-scored surface volume.
 
 DELHIVERY NDD (express)    - unit = days
     Matched by carrier name "Delhivery" AND account containing "NDD" (so
@@ -82,10 +83,14 @@ TAT_STATUSES = ["In TAT", "Out of TAT", "No rule", "Pending"]
 # ---------------------------------------------------------------------------
 _CARRIERS = [
     {
-        "name": "Bluedart", "file": "bd_tat.json.gz",
+        # Bluedart SURFACE (ground). Destination-based: promised TAT (hours) per
+        # drop pincode from the Surface serviceability list (origin TWH /
+        # Talegaon). Replaces the old Apex-Air ~24h lookup, which wrongly scored
+        # multi-day surface volume as almost entirely Out of TAT.
+        "name": "Bluedart", "file": "bd_surface_tat.json.gz",
         "carrier_contains": ["blue", "dart"], "account_contains": None,
         "exclude_contains": ["reverse", "rvp"],
-        "unit": "hours", "payment_split": True,
+        "unit": "hours", "payment_split": False, "warehouse_agnostic": True,
     },
     {
         # Delhivery NDD (express). Lanes in the lookup use the EXPRESS TAT
