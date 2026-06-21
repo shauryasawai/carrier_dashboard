@@ -956,25 +956,17 @@ body {
 
     <div id="viewEfficiency">
 
-    <!-- Upload zone -->
-    <section id="uploadZone" class="upload-zone">
+    <!-- Error / fallback panel: shown ONLY when the automatic BigQuery load
+         fails (or BigQuery isn't configured). Shipment data loads automatically
+         on entry, so there is no manual "load your data" landing screen.
+         File upload also stays available from the toolbar. -->
+    <section id="uploadZone" class="upload-zone" hidden>
       <div class="upload-card" id="dropArea">
         <img class="upload-logo" src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido">
-        <div class="upload-icon">⤓</div>
-        <h2>Load your shipment data</h2>
-        <p>Pull the latest shipments straight from BigQuery, or upload a standard export (<code>.xlsx</code> / <code>.csv</code>).</p>
-        <div class="bq-range">
-          <label for="bqRange">Date range</label>
-          <select id="bqRange">
-            <option value="7" selected>Last 7 days</option>
-            <option value="15">Last 15 days</option>
-            <option value="30">Last 30 days</option>
-            <option value="45">Last 45 days</option>
-            <option value="60">Last 60 days</option>
-            <option value="90">Last 90 days</option>
-          </select>
-        </div>
-        <button type="button" class="btn-primary" id="bqLoadBtn">Load from BigQuery</button>
+        <div class="upload-icon">⚠</div>
+        <h2>Couldn't load shipment data</h2>
+        <p>We weren't able to pull shipments from BigQuery. Retry the load, or upload a standard export (<code>.xlsx</code> / <code>.csv</code>) instead.</p>
+        <button type="button" class="btn-primary" id="bqLoadBtn">Retry BigQuery load</button>
         <div class="upload-or"><span>or</span></div>
         <label class="btn-secondary" for="fileInput">Upload a file instead</label>
         <input type="file" id="fileInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
@@ -995,7 +987,7 @@ body {
         <div class="toolbar-actions">
           <button class="btn-ghost" id="exportBtn">⬇ Export shipments</button>
           <button class="btn-ghost" id="bqReloadBtn">⟳ Reload BigQuery</button>
-          <button class="btn-ghost" id="reuploadBtn">↻ New source</button>
+          <button class="btn-ghost" id="reuploadBtn">⬆ Upload file</button>
         </div>
       </div>
 
@@ -1709,7 +1701,7 @@ body {
         failLoading(err.message);
       })
       .then(function () {
-        if (btn) { btn.disabled = false; btn.textContent = "Load from BigQuery"; }
+        if (btn) { btn.disabled = false; btn.textContent = "Retry BigQuery load"; }
         if (rbtn) rbtn.disabled = false;
         setWinDisabled(false);
       });
@@ -2554,9 +2546,12 @@ body {
 
   // Wiring
   $("fileInput").addEventListener("change", function (e) { handleFile(e.target.files[0]); });
-  // Manual "Load from BigQuery" on the upload screen uses that screen's preset.
+  // "Retry BigQuery load" on the error fallback panel: re-pull the current
+  // calendar window if one is set, otherwise the last lookback (defaults to 7d).
   if ($("bqLoadBtn")) $("bqLoadBtn").addEventListener("click", function () {
-    loadBigQuery({ lookback: $("bqRange") ? $("bqRange").value : lastLookback });
+    var r = getWinRange();
+    if (r) loadBigQuery({ from: r[0], to: r[1], auto: true });
+    else loadBigQuery({ lookback: lastLookback, auto: true });
   });
   // Dashboard "Reload" re-pulls the current calendar window (or last lookback).
   if ($("bqReloadBtn")) $("bqReloadBtn").addEventListener("click", function () {
@@ -2764,12 +2759,12 @@ body {
     whcSelection = e.target.value;
     if (lastReport) { renderWhcTable(lastReport); renderWhcChart(); }
   });
+  // "Upload file" in the toolbar opens the file picker directly — there's no
+  // landing screen to fall back to. The chosen file replaces the current
+  // dataset in place (handleFile re-renders the dashboard).
   $("reuploadBtn").addEventListener("click", function () {
-    $("dashboard").hidden = true;
-    $("uploadZone").hidden = false;
-    $("metaStatus").textContent = "No data loaded";
-    setHint("", null);
     $("fileInput").value = "";
+    $("fileInput").click();
   });
 
   var drop = $("dropArea");
@@ -2785,13 +2780,19 @@ body {
 
   // ---- Auto-load on entry -----------------------------------------------
   // Right after sign-in, pull the default window (last 7 days) from BigQuery
-  // and go straight to the dashboard, showing the loading bar meanwhile. If
-  // BigQuery isn't configured, just show the manual upload/load screen.
+  // and go straight to the dashboard, showing the loading bar meanwhile. There
+  // is no manual landing screen — the fallback panel below only appears if the
+  // load fails (handled in loadBigQuery's catch) or BigQuery isn't configured.
+  $("uploadZone").hidden = true;
   if (window.BQ_CONFIGURED) {
-    $("uploadZone").hidden = true;
     var r = { from: isoDaysAgo(6), to: isoToday() };  // last 7 days inclusive
     setWinRange(r.from, r.to);
     loadBigQuery({ from: r.from, to: r.to, auto: true });
+  } else {
+    // BigQuery isn't configured on the server: surface the upload fallback so
+    // the user can still load data from a file.
+    $("uploadZone").hidden = false;
+    setHint("BigQuery isn't configured on the server. Upload a file to continue.", "err");
   }
 
   // ====================================================================

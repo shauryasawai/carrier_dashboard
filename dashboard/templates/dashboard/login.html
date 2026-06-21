@@ -7,93 +7,182 @@
   <title>Sign in · Frido Carrier Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root{
       --teal:#0fb6a9; --teal-deep:#0a8c84; --teal-dark:#076b65;
       --ink:#16263a; --ink-soft:#4b5b6b; --faint:#8a98a6;
       --line:#e3ebec; --bg:#eef7f6; --card:#ffffff;
-      --danger:#d6453b; --danger-bg:#fdeceb;
+      --danger:#d6453b; --danger-bg:#fdeceb; --warn:#e0922f;
       --sans:'Inter',system-ui,sans-serif; --display:'Poppins',sans-serif;
     }
     *{box-sizing:border-box;margin:0;padding:0}
+    html,body{ height:100%; }
     body{
-      font-family:var(--sans); color:var(--ink); min-height:100vh;
+      font-family:var(--sans); color:var(--ink); height:100vh;
       background:radial-gradient(1200px 600px at 0% 0%, #d6f1ee 0%, var(--bg) 45%, #eaf4f3 100%);
-      display:flex; align-items:center; justify-content:center; padding:24px;
+      display:flex; align-items:center; justify-content:center; padding:16px;
+      overflow:hidden;
     }
     .auth{
-      width:100%; max-width:920px; background:var(--card); border-radius:22px;
-      box-shadow:0 24px 60px -20px rgba(16,38,58,.28), 0 2px 8px rgba(16,38,58,.06);
+      width:100%; max-width:940px; max-height:calc(100vh - 32px); background:var(--card); border-radius:24px;
+      box-shadow:0 30px 70px -24px rgba(16,38,58,.34), 0 2px 8px rgba(16,38,58,.06);
       overflow:hidden; display:grid; grid-template-columns:1.05fr 1fr;
+      opacity:0; transform:translateY(22px) scale(.985);
+      animation:authIn .7s cubic-bezier(.22,.61,.36,1) forwards;
     }
+    @keyframes authIn{ to{ opacity:1; transform:none; } }
+
     /* Brand panel */
     .brand-panel{
-      position:relative; padding:46px 42px; color:#fff;
+      position:relative; padding:38px 40px; color:#fff;
       background:linear-gradient(150deg, var(--teal) 0%, var(--teal-deep) 55%, var(--teal-dark) 100%);
       display:flex; flex-direction:column; justify-content:space-between; overflow:hidden;
     }
-    .brand-panel::before, .brand-panel::after{
-      content:""; position:absolute; border-radius:50%; background:rgba(255,255,255,.10);
+    /* Floating decorative orbs */
+    .orb{ position:absolute; border-radius:50%; background:rgba(255,255,255,.10); pointer-events:none; }
+    .orb.o1{ width:280px; height:280px; right:-90px; top:-90px; animation:float1 9s ease-in-out infinite; }
+    .orb.o2{ width:200px; height:200px; left:-70px; bottom:-80px; background:rgba(255,255,255,.07); animation:float2 11s ease-in-out infinite; }
+    .orb.o3{ width:90px; height:90px; right:30px; bottom:90px; background:rgba(255,255,255,.06); animation:float1 7s ease-in-out infinite; }
+    @keyframes float1{ 0%,100%{ transform:translate(0,0); } 50%{ transform:translate(-14px,18px); } }
+    @keyframes float2{ 0%,100%{ transform:translate(0,0); } 50%{ transform:translate(16px,-14px); } }
+
+    .brand-logo{
+      display:inline-flex; align-items:center; background:#fff; padding:11px 20px; border-radius:14px;
+      box-shadow:0 6px 16px -6px rgba(7,107,101,.45); position:relative;
+      transition:transform .25s cubic-bezier(.22,.61,.36,1), box-shadow .25s;
     }
-    .brand-panel::before{ width:280px; height:280px; right:-90px; top:-90px; }
-    .brand-panel::after{ width:200px; height:200px; left:-70px; bottom:-80px; background:rgba(255,255,255,.07); }
-    .brand-logo{ display:inline-flex; align-items:center; background:#fff; padding:11px 20px; border-radius:14px; box-shadow:0 6px 16px -6px rgba(7,107,101,.45); position:relative; }
+    .brand-logo:hover{ transform:translateY(-2px) rotate(-1.5deg); box-shadow:0 12px 24px -8px rgba(7,107,101,.55); }
     .brand-logo img{ height:30px; width:auto; display:block; }
-    .brand-kicker{ font-size:12px; letter-spacing:.16em; text-transform:uppercase; opacity:.85; margin-top:6px; }
+    .brand-kicker{ font-size:11.5px; letter-spacing:.18em; text-transform:uppercase; opacity:.88; margin-top:6px; font-weight:600; }
     .brand-body{ position:relative; z-index:1; }
-    .brand-body h2{ font-family:var(--display); font-weight:600; font-size:26px; line-height:1.25; margin-bottom:12px; }
-    .brand-body p{ font-size:14px; line-height:1.6; opacity:.92; max-width:330px; }
-    .brand-foot{ position:relative; z-index:1; font-size:12px; opacity:.8; display:flex; align-items:center; gap:8px; }
+    .brand-body h2{ font-family:var(--display); font-weight:800; font-size:30px; line-height:1.12; letter-spacing:-.02em; margin-bottom:12px; }
+    .brand-body p{ font-size:13.5px; line-height:1.55; opacity:.94; max-width:330px; }
+    .brand-feats{ list-style:none; margin:16px 0 0; display:flex; flex-direction:column; gap:8px; }
+    .brand-feats li{ display:flex; align-items:center; gap:10px; font-size:13.5px; font-weight:500; opacity:.95; }
+    .brand-feats .tick{
+      flex:none; width:20px; height:20px; border-radius:7px; background:rgba(255,255,255,.18);
+      display:flex; align-items:center; justify-content:center;
+    }
+    .brand-feats .tick svg{ width:12px; height:12px; }
+    .brand-foot{ position:relative; z-index:1; font-size:12px; opacity:.82; display:flex; align-items:center; gap:8px; font-weight:500; }
     .brand-foot svg{ width:15px; height:15px; flex:none; }
 
     /* Form panel */
-    .form-panel{ padding:46px 44px; display:flex; flex-direction:column; justify-content:center; }
-    .form-panel h1{ font-family:var(--display); font-weight:600; font-size:25px; letter-spacing:-.01em; }
-    .form-sub{ color:var(--ink-soft); font-size:14px; margin:6px 0 26px; }
-    .field{ margin-bottom:16px; }
-    .field label{ display:block; font-size:12px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; color:var(--faint); margin-bottom:7px; }
+    .form-panel{ padding:34px 40px; display:flex; flex-direction:column; justify-content:center; }
+    .form-panel h1{ font-family:var(--display); font-weight:800; font-size:28px; letter-spacing:-.02em; }
+    .form-panel h1 .dot{ color:var(--teal); }
+    .form-sub{ color:var(--ink-soft); font-size:13.5px; margin:5px 0 20px; }
+
+    .field{ margin-bottom:14px; }
+    .field label{ display:block; font-size:11.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); margin-bottom:6px; }
+    .input-wrap{ position:relative; }
+    .input-wrap .lead{
+      position:absolute; left:13px; top:50%; transform:translateY(-50%);
+      width:18px; height:18px; color:var(--faint); pointer-events:none; transition:color .15s;
+    }
     .field input{
-      width:100%; font-family:var(--sans); font-size:15px; color:var(--ink);
-      background:#f8fbfb; border:1.5px solid var(--line); border-radius:11px; padding:12px 14px;
-      transition:border-color .15s, background .15s, box-shadow .15s;
+      width:100%; font-family:var(--sans); font-size:15px; font-weight:500; color:var(--ink);
+      background:#f8fbfb; border:1.5px solid var(--line); border-radius:12px;
+      padding:11px 14px 11px 42px;
+      transition:border-color .15s, background .15s, box-shadow .18s, transform .18s;
     }
-    .field input:focus{ outline:none; border-color:var(--teal); background:#fff; box-shadow:0 0 0 4px rgba(15,182,169,.14); }
+    .field input::placeholder{ color:#aeb9c4; font-weight:400; }
+    .input-wrap:has(input:focus) .lead{ color:var(--teal-deep); }
+    .field input:focus{
+      outline:none; border-color:var(--teal); background:#fff;
+      box-shadow:0 0 0 4px rgba(15,182,169,.16); transform:translateY(-1px);
+    }
+    /* password reveal toggle */
+    .toggle-pw{
+      position:absolute; right:8px; top:50%; transform:translateY(-50%);
+      border:none; background:transparent; cursor:pointer; padding:7px; border-radius:8px;
+      color:var(--faint); display:flex; align-items:center; justify-content:center; transition:color .15s, background .15s;
+    }
+    .toggle-pw:hover{ color:var(--teal-deep); background:rgba(15,182,169,.10); }
+    .toggle-pw svg{ width:18px; height:18px; }
+    .field input[type="password"], .field input#password{ padding-right:44px; }
+
+    .caps{
+      display:none; align-items:center; gap:7px; margin-top:8px;
+      font-size:12px; font-weight:600; color:var(--warn);
+    }
+    .caps.on{ display:flex; }
+    .caps svg{ width:14px; height:14px; flex:none; }
+
     .btn{
+      position:relative; overflow:hidden;
       width:100%; cursor:pointer; border:none; margin-top:8px;
-      font-family:var(--display); font-weight:600; font-size:15px; color:#fff; letter-spacing:.01em;
+      font-family:var(--display); font-weight:700; font-size:15.5px; color:#fff; letter-spacing:.01em;
       background:linear-gradient(135deg, var(--teal) 0%, var(--teal-deep) 100%);
-      padding:13px 18px; border-radius:11px; transition:transform .08s, filter .15s, box-shadow .15s;
-      box-shadow:0 8px 18px -6px rgba(10,140,132,.6);
+      padding:13px 18px; border-radius:12px;
+      transition:transform .12s, filter .18s, box-shadow .2s;
+      box-shadow:0 10px 22px -8px rgba(10,140,132,.65);
     }
-    .btn:hover{ filter:brightness(1.04); box-shadow:0 10px 22px -6px rgba(10,140,132,.7); }
-    .btn:active{ transform:translateY(1px); }
+    .btn .label{ position:relative; z-index:1; display:inline-flex; align-items:center; gap:9px; }
+    .btn .arrow{ transition:transform .2s cubic-bezier(.22,.61,.36,1); }
+    /* shimmer sweep on hover */
+    .btn::after{
+      content:""; position:absolute; inset:0; z-index:0;
+      background:linear-gradient(110deg, transparent 30%, rgba(255,255,255,.35) 50%, transparent 70%);
+      transform:translateX(-120%); transition:transform .6s ease;
+    }
+    .btn:hover{ filter:brightness(1.05); box-shadow:0 14px 28px -8px rgba(10,140,132,.8); transform:translateY(-1px); }
+    .btn:hover::after{ transform:translateX(120%); }
+    .btn:hover .arrow{ transform:translateX(4px); }
+    .btn:active{ transform:translateY(1px) scale(.995); }
+    .btn:disabled{ cursor:default; filter:none; }
+    .btn .spinner{
+      display:none; width:17px; height:17px; border-radius:50%;
+      border:2.4px solid rgba(255,255,255,.45); border-top-color:#fff; animation:spin .7s linear infinite;
+    }
+    .btn.loading .arrow{ display:none; }
+    .btn.loading .spinner{ display:inline-block; }
+    @keyframes spin{ to{ transform:rotate(360deg); } }
+
     .error{
       background:var(--danger-bg); color:var(--danger); border:1px solid #f3c7c3;
-      border-radius:10px; padding:11px 13px; font-size:13.5px; margin-bottom:18px;
+      border-radius:11px; padding:12px 14px; font-size:13.5px; font-weight:500; margin-bottom:18px;
       display:flex; align-items:center; gap:9px;
+      animation:shake .4s cubic-bezier(.36,.07,.19,.97);
     }
     .error svg{ width:17px; height:17px; flex:none; }
-    .note{ margin-top:24px; font-size:12.5px; color:var(--faint); line-height:1.5; display:flex; gap:8px; align-items:flex-start; }
+    @keyframes shake{ 10%,90%{ transform:translateX(-1px);} 20%,80%{ transform:translateX(2px);} 30%,50%,70%{ transform:translateX(-4px);} 40%,60%{ transform:translateX(4px);} }
+
+    .note{ margin-top:18px; font-size:12px; color:var(--faint); line-height:1.45; display:flex; gap:8px; align-items:flex-start; }
     .note svg{ width:15px; height:15px; flex:none; margin-top:1px; color:var(--teal-deep); }
+    .made-by{ margin-top:14px; text-align:center; font-size:12px; color:var(--faint); letter-spacing:.02em; }
+    .made-by .heart{ display:inline-block; color:var(--danger); animation:beat 1.4s ease-in-out infinite; }
+    @keyframes beat{ 0%,100%{ transform:scale(1);} 15%{ transform:scale(1.28);} 30%{ transform:scale(1);} 45%{ transform:scale(1.18);} }
+
     @media (max-width:740px){
-      .auth{ grid-template-columns:1fr; max-width:440px; }
-      .brand-panel{ padding:34px 32px; }
-      .brand-body{ display:none; }
-      .form-panel{ padding:34px 30px; }
+      .auth{ grid-template-columns:1fr; max-width:440px; overflow-y:auto; }
+      .brand-panel{ padding:30px 30px; }
+      .brand-body p, .brand-feats{ display:none; }
+      .form-panel{ padding:30px 28px; }
+    }
+    @media (prefers-reduced-motion:reduce){
+      .auth,.error,.made-by .heart,.orb{ animation:none; }
+      .auth{ opacity:1; transform:none; }
     }
   </style>
 </head>
 <body>
   <main class="auth">
     <section class="brand-panel">
+      <span class="orb o1"></span><span class="orb o2"></span><span class="orb o3"></span>
       <div>
         <div class="brand-logo"><img src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido"></div>
         <div class="brand-kicker">Carrier Efficiency Console</div>
       </div>
       <div class="brand-body">
-        <h2>Freedom to do more.</h2>
-        <p>Shipment performance &amp; partner scoring for the Frido operations team. Sign in to upload an export and explore carrier KPIs.</p>
+        <h2>Freedom to<br>do more.</h2>
+        <p>Shipment performance &amp; partner scoring for the Frido operations team.</p>
+        <ul class="brand-feats">
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span> Live carrier KPIs &amp; scoring</li>
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span> TAT &amp; SLA compliance</li>
+          <li><span class="tick"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></span> Carrier cost analysis</li>
+        </ul>
       </div>
       <div class="brand-foot">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
@@ -102,8 +191,8 @@
     </section>
 
     <section class="form-panel">
-      <h1>Sign in</h1>
-      <p class="form-sub">Frido internal team access</p>
+      <h1>Welcome back<span class="dot">.</span></h1>
+      <p class="form-sub">Sign in to the Frido internal team console.</p>
 
       {% if error %}
       <div class="error">
@@ -112,27 +201,85 @@
       </div>
       {% endif %}
 
-      <form method="post" action="{% url 'login' %}" autocomplete="off">
+      <form method="post" action="{% url 'login' %}" autocomplete="off" id="loginForm">
         {% csrf_token %}
         <input type="hidden" name="next" value="{{ next }}">
         <div class="field">
           <label for="username">Username</label>
-          <input type="text" id="username" name="username" value="{{ username|default:'' }}"
-                 autocomplete="username" required autofocus>
+          <div class="input-wrap">
+            <svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-3.5 3.6-6 8-6s8 2.5 8 6"/></svg>
+            <input type="text" id="username" name="username" value="{{ username|default:'' }}"
+                   placeholder="your.username" autocomplete="username" required autofocus>
+          </div>
         </div>
         <div class="field">
           <label for="password">Password</label>
-          <input type="password" id="password" name="password"
-                 autocomplete="current-password" required>
+          <div class="input-wrap">
+            <svg class="lead" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+            <input type="password" id="password" name="password"
+                   placeholder="••••••••" autocomplete="current-password" required>
+            <button type="button" class="toggle-pw" id="togglePw" aria-label="Show password" aria-pressed="false">
+              <svg id="eyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+          </div>
+          <div class="caps" id="capsHint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l8 8h-5v6H9v-6H4l8-8z"/></svg>
+            Caps Lock is on
+          </div>
         </div>
-        <button type="submit" class="btn">Sign in &rarr;</button>
+        <button type="submit" class="btn" id="submitBtn">
+          <span class="label"><span class="spinner"></span><span class="text">Sign in</span> <span class="arrow">&rarr;</span></span>
+        </button>
       </form>
 
       <div class="note">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3l7 4v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V7l7-4z"/></svg>
         <span>This is a restricted internal tool. Access attempts are rate-limited.</span>
       </div>
+
+      <p class="made-by">Made with <span class="heart">&hearts;</span> by an intern</p>
     </section>
   </main>
+
+  <script>
+    (function () {
+      var pw = document.getElementById("password");
+      var toggle = document.getElementById("togglePw");
+      var eye = document.getElementById("eyeIcon");
+      var caps = document.getElementById("capsHint");
+      var form = document.getElementById("loginForm");
+      var btn = document.getElementById("submitBtn");
+
+      var EYE = '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>';
+      var EYE_OFF = '<path d="M3 3l18 18"/><path d="M10.6 10.6a3 3 0 0 0 4.2 4.2"/><path d="M9.4 5.2A9.7 9.7 0 0 1 12 5c6.5 0 10 7 10 7a16 16 0 0 1-3 3.6"/><path d="M6 6.5A16 16 0 0 0 2 12s3.5 7 10 7a9.6 9.6 0 0 0 3.3-.6"/>';
+
+      // Show / hide password
+      toggle.addEventListener("click", function () {
+        var show = pw.type === "password";
+        pw.type = show ? "text" : "password";
+        eye.innerHTML = show ? EYE_OFF : EYE;
+        toggle.setAttribute("aria-pressed", String(show));
+        toggle.setAttribute("aria-label", show ? "Hide password" : "Show password");
+        pw.focus();
+      });
+
+      // Caps Lock hint
+      function capsCheck(e) {
+        if (typeof e.getModifierState !== "function") return;
+        caps.classList.toggle("on", e.getModifierState("CapsLock"));
+      }
+      pw.addEventListener("keydown", capsCheck);
+      pw.addEventListener("keyup", capsCheck);
+      pw.addEventListener("blur", function () { caps.classList.remove("on"); });
+
+      // Button loading state on submit (native validation still runs first)
+      form.addEventListener("submit", function () {
+        if (!form.checkValidity()) return;
+        btn.classList.add("loading");
+        btn.disabled = true;
+        btn.querySelector(".text").textContent = "Signing in…";
+      });
+    })();
+  </script>
 </body>
 </html>
