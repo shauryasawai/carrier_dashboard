@@ -899,6 +899,26 @@ body {
 #invSkuTable th:nth-child(6), #invSkuTable td:nth-child(6) { width: 11%; white-space: nowrap; text-align: right; }
 #invSkuTable th:nth-child(7), #invSkuTable td:nth-child(7) { width: 17%; white-space: normal; }  /* cheapest carrier */
 #invSkuTable td:nth-child(2) span { display: inline; }
+
+/* Per-order economics hero: carrier-name secondary cards (cheapest / priciest) */
+.stat .stat-name { font-family: var(--display); font-weight: 600; font-size: 19px; letter-spacing: -.01em; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat .stat-sub { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); margin-top: 4px; }
+.stat .stat-sub b { font-weight: 600; color: var(--ink-soft); }
+.stat--bad .stat-sub b { color: var(--bad); }
+.stat--good .stat-sub b { color: var(--good); }
+
+/* Carrier efficiency leaderboard */
+.eff-badge {
+  display: inline-flex; align-items: center; gap: 4px; vertical-align: middle;
+  background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff;
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .05em; text-transform: uppercase;
+  font-weight: 600; padding: 2px 8px; border-radius: 20px; margin-left: 9px;
+  box-shadow: 0 6px 14px -7px rgba(10,140,132,.8);
+}
+.eff-table tbody tr.eff-top td { background: linear-gradient(90deg, var(--good-soft), transparent 60%); }
+.eff-table .eff-carrier { font-family: var(--sans); font-weight: 600; }
+.eff-gap { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+.eff-gap.up { color: var(--bad); }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
@@ -1278,16 +1298,26 @@ body {
 
         <div id="invFileChips" class="inv-chips"></div>
 
-        <!-- Summary stats -->
-        <div class="stat-row" id="invStatRow"></div>
+        <!-- ===== PER-ORDER ECONOMICS (headline) ===== -->
+        <div class="kpi-group">
+          <div class="kpi-label">Per-order economics</div>
+          <div class="stat-row stat-row--primary" id="invStatRow"></div>
+        </div>
 
-        <!-- Category cards with product images -->
-        <div class="tier-section">
-          <div class="tier-section-head">
-            <h3>Spend by product category</h3>
-            <span class="panel-sub" id="invCatSub"></span>
+        <!-- Carrier efficiency leaderboard: ranked by avg cost / shipment -->
+        <div class="panel">
+          <div class="panel-head">
+            <h3>Carrier efficiency · most efficient first</h3>
+            <p class="panel-sub" id="invEffSub">ranked by avg ₹ / shipment — lowest is most efficient</p>
           </div>
-          <div class="prodcost-grid" id="invCatGrid"></div>
+          <div class="table-scroll">
+            <table class="score-table eff-table" id="invEffTable"></table>
+          </div>
+        </div>
+
+        <!-- ===== SPEND TOTALS · reference ===== -->
+        <div class="kpi-group" style="margin-top:24px">
+          <div class="kpi-label">Spend totals · reference</div>
         </div>
 
         <!-- Charts -->
@@ -1370,6 +1400,15 @@ body {
           <div class="table-scroll">
             <table class="score-table matrix-table" id="invLaneTable"></table>
           </div>
+        </div>
+
+        <!-- Per-order cost by product category (cards show cost/shipment by carrier) -->
+        <div class="tier-section">
+          <div class="tier-section-head">
+            <h3>Cost per shipment by product category</h3>
+            <span class="panel-sub" id="invCatSub"></span>
+          </div>
+          <div class="prodcost-grid" id="invCatGrid"></div>
         </div>
 
         <!-- SKU cost explorer -->
@@ -2883,7 +2922,8 @@ body {
   function renderCost(rep) {
     populateInvCarrierFilter(rep);
     renderInvChips(rep.files);
-    renderInvStats(rep.summary, rep.currency);
+    renderInvStats(rep);
+    renderInvEfficiency(rep);
     renderInvCats(rep);
     renderInvMatrix(rep);
     renderInvLanes(rep);
@@ -2907,20 +2947,97 @@ body {
     }).join("");
   }
 
-  function renderInvStats(s) {
-    var cards = [
-      { label: "Total billed", value: s.total_spend, kind: "money" },
-      { label: "Shipments", value: s.shipments, kind: "int" },
-      { label: "Avg cost / shipment", value: s.avg_cost, kind: "money" },
-      { label: "Categories", value: s.categories, kind: "int" },
-      { label: "Unique SKUs", value: s.skus, kind: "int" },
-      { label: "Carriers", value: s.carriers, kind: "int" }
-    ];
-    $("invStatRow").innerHTML = cards.map(function (c) {
-      return '<div class="stat"><div class="stat-label">' + c.label + '</div><div class="stat-value">—</div></div>';
+  // Pick the cheapest / priciest carrier by avg ₹/shipment, ignoring tiny-
+  // volume carriers (< 0.5% of shipments) so a 3-parcel outlier can't headline.
+  function cheapestPriciest(rep) {
+    var s = rep.summary || {};
+    var cars = (rep.carriers || []).filter(function (c) { return c.avg_cost != null && c.shipments > 0; });
+    var minShip = Math.max(1, Math.round((s.shipments || 0) * 0.005));
+    var elig = cars.filter(function (c) { return c.shipments >= minShip; });
+    if (elig.length < 2) elig = cars;
+    var lo = null, hi = null;
+    elig.forEach(function (c) {
+      if (!lo || c.avg_cost < lo.avg_cost) lo = c;
+      if (!hi || c.avg_cost > hi.avg_cost) hi = c;
+    });
+    return { cheapest: lo, priciest: hi };
+  }
+
+  function renderInvStats(rep) {
+    var s = rep.summary;
+    var cp = cheapestPriciest(rep);
+    var lo = cp.cheapest, hi = cp.priciest;
+    var gapPct = (lo && hi && hi.avg_cost) ? Math.round((hi.avg_cost - lo.avg_cost) / hi.avg_cost * 100) : null;
+
+    function nameCard(label, name, sub, cls) {
+      return '<div class="stat' + cls + '"><div class="stat-label">' + label + '</div>' +
+        '<div class="stat-name">' + (name ? esc(name) : '—') + '</div>' +
+        '<div class="stat-sub">' + (sub || '') + '</div></div>';
+    }
+
+    var html = '';
+    html += '<div class="stat"><div class="stat-label">Avg cost / shipment</div><div class="stat-value">—</div></div>';
+    html += '<div class="stat"><div class="stat-label">Avg cost / kg</div><div class="stat-value">—</div></div>';
+    html += nameCard("Cheapest carrier", lo ? lo.carrier : null,
+      lo ? ('<b>₹' + Math.round(lo.avg_cost).toLocaleString() + '</b>/shipment') : '', ' stat--good');
+    html += nameCard("Priciest carrier", hi ? hi.carrier : null,
+      hi ? ('<b>₹' + Math.round(hi.avg_cost).toLocaleString() + '</b>/shipment'
+        + (gapPct != null ? ' · ' + gapPct + '% dearer' : '')) : '', ' stat--bad');
+    html += '<div class="stat"><div class="stat-label">Total billed</div><div class="stat-value">—</div>' +
+      '<div class="stat-sub">' + (s.shipments || 0).toLocaleString() + ' shipments · ' + (s.carriers || 0) + ' carriers</div></div>';
+
+    $("invStatRow").innerHTML = html;
+    var vals = $("invStatRow").querySelectorAll(".stat-value");  // 3 numeric cards, in DOM order
+    countUp(vals[0], s.avg_cost, "money", "");
+    countUp(vals[1], s.avg_per_kg, "money", ' <span class="unit">/kg</span>');
+    countUp(vals[2], s.total_spend, "money", "");
+  }
+
+  // Carrier efficiency leaderboard: ranked by avg ₹/shipment (lowest first =
+  // most efficient). Bar length encodes efficiency (cheaper = fuller).
+  function renderInvEfficiency(rep) {
+    var cars = (rep.carriers || []).filter(function (c) { return c.shipments > 0; }).slice();
+    cars.sort(function (a, b) {
+      if (a.avg_cost == null) return 1;
+      if (b.avg_cost == null) return -1;
+      return a.avg_cost - b.avg_cost;
+    });
+    var sub = $("invEffSub");
+    if (!cars.length) {
+      $("invEffTable").innerHTML = '<tbody><tr><td class="empty" colspan="7">No carrier data.</td></tr></tbody>';
+      if (sub) sub.textContent = "";
+      return;
+    }
+    var priced = cars.filter(function (c) { return c.avg_cost != null; });
+    var best = priced.length ? priced[0].avg_cost : null;
+    var worst = priced.length ? priced[priced.length - 1].avg_cost : null;
+    var range = (worst != null && best != null) ? (worst - best) : 0;
+
+    var head = "<thead><tr><th></th><th>Carrier</th><th>Avg / shipment</th><th>Avg / kg</th>" +
+      "<th>Shipments</th><th>Spend share</th><th>vs best</th></tr></thead>";
+    var rows = cars.map(function (c, i) {
+      var isTop = (i === 0 && c.avg_cost != null);
+      var cls = isTop ? "good" : (c.avg_cost != null && c.avg_cost === worst ? "bad" : "warn");
+      var effW = (c.avg_cost == null || !range) ? (isTop ? 100 : 50)
+        : Math.max(6, Math.round((worst - c.avg_cost) / range * 100));
+      var gap = (c.avg_cost != null && best) ? Math.round((c.avg_cost - best) / best * 100) : null;
+      var badge = isTop ? '<span class="eff-badge">★ Most efficient</span>' : '';
+      var gapTxt = isTop ? '<span class="eff-gap">best</span>'
+        : (gap != null ? '<span class="eff-gap up">+' + gap + '%</span>' : '—');
+      return '<tr' + (isTop ? ' class="eff-top"' : '') + '>' +
+        '<td class="rank">' + (i + 1) + '</td>' +
+        '<td class="eff-carrier">' + esc(c.carrier) + badge + '</td>' +
+        '<td><div class="score-cell"><span class="score-val g-' + cls + '">₹' +
+          (c.avg_cost != null ? Math.round(c.avg_cost).toLocaleString() : '—') +
+          '</span><span class="score-bar"><span class="b-' + cls + '" style="width:' + effW + '%"></span></span></div></td>' +
+        '<td class="num">' + (c.avg_per_kg != null ? '₹' + Math.round(c.avg_per_kg).toLocaleString() : '—') + '</td>' +
+        '<td class="num">' + c.shipments.toLocaleString() + '</td>' +
+        '<td class="num">' + (c.share != null ? c.share.toFixed(1) + '%' : '—') + '</td>' +
+        '<td class="num">' + gapTxt + '</td>' +
+        '</tr>';
     }).join("");
-    var els = $("invStatRow").querySelectorAll(".stat-value");
-    cards.forEach(function (c, i) { countUp(els[i], c.value, c.kind, ""); });
+    $("invEffTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+    if (sub) sub.textContent = cars.length + " carriers · ranked by avg ₹/shipment — lowest is most efficient";
   }
 
   function renderInvCats(rep) {
@@ -2949,9 +3066,11 @@ body {
           '<span class="pcost-share-badge">' + c.share + '%</span>' + media + '</div>' +
         '<div class="pcost-body">' +
           '<div class="pcost-name">' + esc(c.category) + '</div>' +
-          '<div class="pcost-spend">₹' + Math.round(c.spend).toLocaleString() + '</div>' +
-          '<div class="pcost-meta"><b>₹' + (c.avg_cost != null ? Math.round(c.avg_cost).toLocaleString() : '—') +
-            '</b>/shipment · ' + c.shipments.toLocaleString() + ' shp · ' + c.sku_count + ' SKUs</div>' +
+          '<div class="pcost-spend">₹' + (c.avg_cost != null ? Math.round(c.avg_cost).toLocaleString() : '—') +
+            '<span style="font-family:var(--mono);font-size:13px;color:var(--ink-faint);font-weight:400"> /shipment</span></div>' +
+          '<div class="pcost-meta">₹' + Math.round(c.spend).toLocaleString() + ' billed · ' +
+            c.shipments.toLocaleString() + ' shp · ' + c.sku_count + ' SKUs' +
+            (c.avg_per_kg != null ? ' · ₹' + Math.round(c.avg_per_kg).toLocaleString() + '/kg' : '') + '</div>' +
           '<div class="pcost-carriers"><div class="pcost-ct">Cost / shipment by carrier</div>' + crows + '</div>' +
         '</div></div>';
     }).join("");

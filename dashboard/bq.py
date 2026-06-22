@@ -28,7 +28,9 @@ DEFAULT_LOOKBACK_DAYS = 30
 
 DEFAULT_COLUMN_MAP = {
     "carrier": "courier_partner",
-    "account": "account_code",       
+    "account": "account_code",
+    "awb": "awb",                    # waybill / tracking number
+    "order_id": "order_id",          # client order reference
     "weight": "shipment_weight",
     "payment": "payment_mode",
     "pickup_pin": "pickup_pincode",

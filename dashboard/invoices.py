@@ -24,6 +24,7 @@ from __future__ import annotations
 import csv as _csv
 import io as _io
 import re
+from functools import lru_cache
 from openpyxl import load_workbook
 
 # --------------------------------------------------------------------------
@@ -72,34 +73,46 @@ EXPLICIT_MAP = {
 }
 
 
+# Precompiled: one alternation regex per category (any keyword -> that category),
+# checked in category order. Far fewer operations than the nested keyword loop.
+_CATEGORY_RES = [(cat, re.compile("|".join(re.escape(k) for k in kws)))
+                 for cat, kws in CATEGORY_RULES]
+
+
+@lru_cache(maxsize=20000)
 def resolve_category(explicit, name_text):
+    # Memoized: invoice lines repeat the same SKU/product names heavily, so the
+    # cache turns most calls into a dict hit.
     ex = (explicit or "").strip()
     if ex:
         first = re.split(r"[|/]", ex)[0].strip().lower()
         if first in EXPLICIT_MAP:
             return EXPLICIT_MAP[first]
     text = (name_text or "").lower()
-    for cat, kws in CATEGORY_RULES:
-        for kw in kws:
-            if kw in text:
-                return cat
+    for cat, rx in _CATEGORY_RES:
+        if rx.search(text):
+            return cat
     if ex:
         low = ex.lower()
-        for cat, kws in CATEGORY_RULES:
-            for kw in kws:
-                if kw in low:
-                    return cat
+        for cat, rx in _CATEGORY_RES:
+            if rx.search(low):
+                return cat
     return "Others"
 
 
 # --------------------------------------------------------------------------
 # value helpers
 # --------------------------------------------------------------------------
+_NUM_CLEAN = re.compile(r"[,₹\s]")
+
+
 def _f(v):
     if v is None or v == "":
         return None
+    if isinstance(v, (int, float)):   # already numeric: skip string/regex work
+        return float(v)
     try:
-        return float(re.sub(r"[,₹\s]", "", str(v)))
+        return float(_NUM_CLEAN.sub("", str(v)))
     except (ValueError, TypeError):
         return None
 
@@ -679,15 +692,21 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
 
     total_spend = sum(i["amount"] for i in items)
     total_ship = sum(i["shipments"] for i in items)
+    total_weight = sum((i["weight_kg"] or 0.0) for i in items)
 
     cb = {}
     for i in items:
-        g = cb.setdefault(i["carrier"], {"carrier": i["carrier"], "spend": 0.0, "shipments": 0})
+        g = cb.setdefault(i["carrier"], {"carrier": i["carrier"], "spend": 0.0,
+                                         "shipments": 0, "weight": 0.0})
         g["spend"] += i["amount"]; g["shipments"] += i["shipments"]
+        if i["weight_kg"]:
+            g["weight"] += i["weight_kg"]
     carriers = []
     for g in sorted(cb.values(), key=lambda x: -x["spend"]):
         carriers.append({"carrier": g["carrier"], "spend": round(g["spend"], 1),
                          "shipments": g["shipments"], "avg_cost": _avg(g["spend"], g["shipments"]),
+                         "avg_per_kg": _avg(g["spend"], g["weight"]) if g["weight"] else None,
+                         "weight": round(g["weight"], 1),
                          "share": round(g["spend"] / total_spend * 100, 1) if total_spend else 0})
     carrier_names = [c["carrier"] for c in carriers]
 
@@ -800,6 +819,8 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
         "currency": "₹",
         "summary": {"total_spend": round(total_spend, 1), "shipments": total_ship,
                     "avg_cost": _avg(total_spend, total_ship),
+                    "total_weight": round(total_weight, 1),
+                    "avg_per_kg": _avg(total_spend, total_weight) if total_weight else None,
                     "categories": len(categories), "skus": sku_total, "carriers": len(carriers)},
         "carriers": carriers, "categories": categories, "matrix": matrix,
         "skus": skus, "sku_total": sku_total, "files": files or [],

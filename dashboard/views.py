@@ -22,7 +22,12 @@ _CACHE = {"records": None, "window": None}
 # (Carrier Cost Analysis). awb2cat / sku2cat come from uploaded master files
 # (weights / SKU masters) and are used to recover category/SKU on invoices that
 # don't carry them.
-_INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {}}
+_INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {},
+                  "version": 0, "report_cache": {}}
+
+# Cached lane maps (AWB/order -> lane), rebuilt only when the shipment record
+# set changes — not on every invoice filter/refresh.
+_LANE_CACHE = {"records": None, "maps": None}
 
 
 def _reset_invoice_cache():
@@ -30,6 +35,8 @@ def _reset_invoice_cache():
     _INVOICE_CACHE["files"] = []
     _INVOICE_CACHE["awb2cat"] = {}
     _INVOICE_CACHE["sku2cat"] = {}
+    _INVOICE_CACHE["version"] += 1
+    _INVOICE_CACHE["report_cache"] = {}
 
 
 def _invoice_report(carrier_filter=None):
@@ -37,6 +44,14 @@ def _invoice_report(carrier_filter=None):
     to a single carrier. The full carrier list is always returned (all_carriers)
     so the frontend dropdown stays populated even while a filter is active."""
     items = _INVOICE_CACHE["items"]
+    active = carrier_filter if (carrier_filter and carrier_filter != "all") else ""
+
+    # Cache the built report by (carrier, invoice version, shipment-set id) so a
+    # plain refresh or repeated carrier filter is an instant cache hit.
+    ckey = (active, _INVOICE_CACHE["version"], id(_CACHE.get("records")))
+    cached = _INVOICE_CACHE["report_cache"].get(ckey)
+    if cached is not None:
+        return cached
 
     # Full carrier list (by spend desc) — drives the dropdown options.
     spend_by = {}
@@ -44,7 +59,6 @@ def _invoice_report(carrier_filter=None):
         spend_by[it["carrier"]] = spend_by.get(it["carrier"], 0.0) + it["amount"]
     all_carriers = [c for c, _ in sorted(spend_by.items(), key=lambda kv: -kv[1])]
 
-    active = carrier_filter if (carrier_filter and carrier_filter != "all") else ""
     selected = items
     if active:
         selected = [it for it in items if it["carrier"] == active]
@@ -56,6 +70,7 @@ def _invoice_report(carrier_filter=None):
         awb2lane=awb2lane, order2lane=order2lane)
     report["all_carriers"] = all_carriers
     report["carrier_filter"] = active
+    _INVOICE_CACHE["report_cache"][ckey] = report
     return report
 
 
@@ -64,6 +79,10 @@ def _lane_maps():
     loaded shipment data, so invoice lines can be matched to their lane. Uses
     the same AWB normalization as the invoice parser so keys line up."""
     recs = _CACHE.get("records") or []
+    # Rebuild only when the shipment record set changes (identity check); avoids
+    # rescanning tens of thousands of rows on every invoice filter/refresh.
+    if _LANE_CACHE["records"] is recs and _LANE_CACHE["maps"] is not None:
+        return _LANE_CACHE["maps"]
     awb2lane, order2lane = {}, {}
     for r in recs:
         pin = r.get("pickup_pin") or ""
@@ -77,6 +96,8 @@ def _lane_maps():
         oid = (r.get("order_id") or "").strip().upper()
         if oid:
             order2lane.setdefault(oid, lane)
+    _LANE_CACHE["records"] = recs
+    _LANE_CACHE["maps"] = (awb2lane, order2lane)
     return awb2lane, order2lane
 
 
@@ -425,6 +446,10 @@ def process_invoices(request):
                + (" · ".join(errors) if errors else
                   "Uploaded file(s) had no amounts — add an invoice with charges."))
         return JsonResponse({"error": msg}, status=400)
+
+    # New data ingested (incl. append): invalidate the cached reports.
+    _INVOICE_CACHE["version"] += 1
+    _INVOICE_CACHE["report_cache"] = {}
 
     # A fresh upload always shows the full (unfiltered) picture; the frontend
     # resets its carrier dropdown to "All carriers" to match.
