@@ -413,7 +413,7 @@ body {
   display: grid; grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px; margin-bottom: 28px;
 }
-/* 9 cards: 5-wide => 2 rows; 3-wide => 3 rows; 2-wide on phones. */
+/* Each group is 5 cards: 5-wide => 1 clean row; 3-wide and 2-wide reflow on smaller screens. */
 @media (max-width: 1180px) {
   .stat-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
@@ -2011,12 +2011,18 @@ body {
       { label: "Out of TAT", value: s.tat_out_pct, kind: "pct", tone: "bad", suffix: countTag(s.tat_out) },
       { label: "RTO", value: s.rto_pct, kind: "pct", tone: "bad" }
     ];
+    // Network coverage: carriers + warehouses combined into one card so both
+    // stat rows are an even 5 cards wide (uniform grid, no orphan card).
+    var carriers = (s.carriers != null) ? s.carriers : 0;
+    var whs = (s.warehouses != null) ? s.warehouses : 0;
+    var coverageSuffix = ' <span class="unit">carrier' + (carriers === 1 ? "" : "s") +
+      " \u00b7 " + whs.toLocaleString() + " WH</span>";
     var ops = [
       { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
+      { label: "Avg order\u2192pickup (O2S)", value: s.avg_o2s, kind: "hours" },
       { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
       { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
-      { label: "Carriers", value: s.carriers, kind: "int" },
-      { label: "Warehouses", value: s.warehouses, kind: "int" }
+      { label: "Coverage", value: s.carriers, kind: "int", suffix: coverageSuffix }
     ];
     fillStatGroup($("statRow"), headline);
     fillStatGroup($("statRow2"), ops);
@@ -2074,8 +2080,9 @@ body {
   }
 
   // Shared KPI cells used by carrier / warehouse / city / whc tables.
-  function kpiCells(a) {
+  function kpiCells(a, withO2s) {
     return '<td class="num">' + a.n.toLocaleString() + "</td>" +
+      (withO2s ? '<td class="num">' + fmtH(a.o2s) + "</td>" : "") +
       '<td class="num">' + fmtH(a.p2o) + "</td>" +
       '<td class="num">' + fmtH(a.p2d) + "</td>" +
       '<td class="num">' + fmtPct(a.success_rate) + "</td>" +
@@ -2129,13 +2136,13 @@ body {
       " shipments) \u00b7 ranked by volume";
 
     var head = "<thead><tr><th></th><th>Warehouse</th><th>Score</th><th>Shipments</th>" +
-      "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
+      "<th>O2S</th><th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
     var rows = wh.map(function (w, i) {
       return "<tr>" +
         '<td class="rank">' + (i + 1) + "</td>" +
         '<td class="carrier-name">' + esc(w.warehouse || w.pickup_pin) + "</td>" +
         "<td>" + scoreCellHtml(w.score, minN) + "</td>" +
-        kpiCells(w) +
+        kpiCells(w, true) +
         "</tr>";
     }).join("");
     $("whTable").innerHTML = head + "<tbody>" + rows + "</tbody>";

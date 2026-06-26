@@ -40,6 +40,10 @@ COLUMNS = {
     # pincode-derived region when it's blank.
     "drop_city": ["Drop City", "Destination City"],
     "pickup_ts": ["Pickup Timestamp"],
+    # Order-received time, used for the Order->Pickup processing time (O2S).
+    # In the standard export this is the customer order/creation date.
+    "order_ts": ["Order Date", "Order Created At", "Order Creation Date",
+                 "Order Placed", "Order Timestamp", "Created At"],
     "delivery_ts": ["Delivery Timestamp"],
     "ofd1_ts": ["OFD1 Timestamp"],
     # The standard export uses "Shipment Zone"; older trimmed exports used "Zone".
@@ -593,6 +597,7 @@ def build_record(get):
         return None
 
     pickup = _to_datetime(get("pickup_ts"))
+    order = _to_datetime(get("order_ts"))   # order-received time, for O2S
     ofd1 = _to_datetime(get("ofd1_ts"))
     delivery = _to_datetime(get("delivery_ts"))
     edd = _to_datetime(get("edd_ts"))   # carrier's committed expected delivery date
@@ -692,6 +697,9 @@ def build_record(get):
         "attempts": attempts,
         "p2o": _hours_between(pickup, ofd1),
         "p2d": p2d,
+        # O2S: order-received -> pickup processing time, in hours. Order date is
+        # often date-only, so this is effectively (pickup - order midnight).
+        "o2s": _hours_between(order, pickup),
         "promised_tat": promised_tat,
         "tat_status": tat_status,
         "tat_margin": tat_margin,
@@ -866,7 +874,7 @@ def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> 
         if g is None:
             g = {
                 label_field: key, "n": 0, "picked": 0, "delivered": 0,
-                "first_attempt": 0, "p2o": [], "p2d": [], "att": [],
+                "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": [],
             }
             for out_name, rec_key in extra_fields:
                 g[out_name] = r.get(rec_key, "")
@@ -878,6 +886,8 @@ def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> 
             g["delivered"] += 1
             if r["attempts"] == 1:
                 g["first_attempt"] += 1
+        if r["o2s"] is not None:
+            g["o2s"].append(r["o2s"])
         if r["p2o"] is not None:
             g["p2o"].append(r["p2o"])
         if r["p2d"] is not None:
@@ -894,6 +904,7 @@ def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> 
             "delivered": g["delivered"],
             "success_rate": (g["delivered"] / g["picked"] * 100) if g["picked"] else None,
             "first_attempt_rate": (g["first_attempt"] / g["delivered"] * 100) if g["delivered"] else None,
+            "o2s": _mean(g["o2s"]),
             "p2o": _mean(g["p2o"]),
             "p2d": _mean(g["p2d"]),
             "avg_attempts": _mean(g["att"]),
@@ -966,6 +977,7 @@ def _round_metrics(agg: list[dict]) -> None:
     for a in agg:
         a["success_rate"] = _round(a["success_rate"])
         a["first_attempt_rate"] = _round(a["first_attempt_rate"])
+        a["o2s"] = _round(a["o2s"])
         a["p2o"] = _round(a["p2o"])
         a["p2d"] = _round(a["p2d"])
         a["avg_attempts"] = _round(a["avg_attempts"], 2)
@@ -1414,6 +1426,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             "success_rate": _round(delivered / picked * 100 if picked else None),
             "avg_p2o": _round(_mean([r["p2o"] for r in rows])),
             "avg_p2d": _round(_mean([r["p2d"] for r in rows])),
+            "avg_o2s": _round(_mean([r["o2s"] for r in rows])),
             "carriers": len(agg),
             "warehouses": wh_total_count,
             "ndd_orders": ndd_orders,

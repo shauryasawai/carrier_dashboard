@@ -195,6 +195,18 @@ _CARRIERS = [
         "default_tat": 3, "measure_on": "delivery", "ignore_edd": True,
         "tat_offset_days": 1,
     },
+    {
+        # Shiprocket (Shiprocket-Shopify). Scored against the carrier's own
+        # committed EDD, which here is accurate (~2.9d vs ~2.67d actual) and is
+        # the fair commitment -- Shiprocket ships ~2-3 day, not the aspirational
+        # Apex-air 24h. The Apex TAT (hours) stays as a fallback for the rare
+        # lines without an EDD. Reverse/RVP excluded.
+        "name": "Shiprocket", "file": "shiprocket_tat.json.gz",
+        "carrier_contains": ["shiprocket"], "account_contains": None,
+        "exclude_contains": ["reverse", "revers", "rvp"],
+        "unit": "hours", "payment_split": False, "warehouse_agnostic": True,
+        "default_tat": 72, "measure_on": "delivery",
+    },
 ]
 
 

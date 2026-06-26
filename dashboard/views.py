@@ -196,6 +196,7 @@ _EXPORT_FIELDS = [
     ("drop_pin", "Drop pincode"), ("drop_city", "Drop city"), ("tier", "City tier"),
     ("payment", "Payment"), ("pickup_date", "Pickup date"),
     ("status", "Latest status"), ("outcome", "Outcome"), ("delivered", "Delivered"),
+    ("o2s", "Order->Pickup O2S (hrs)"),
     ("p2o", "Pickup->OFD1 (hrs)"), ("p2d", "Pickup->Delivery (hrs)"),
     ("promised_tat", "Promised TAT"), ("tat_status", "TAT status"), ("tat_margin", "TAT margin"),
 ]

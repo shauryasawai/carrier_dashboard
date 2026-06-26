@@ -37,6 +37,7 @@ DEFAULT_COLUMN_MAP = {
     "drop_pin": "drop_pincode",
     "drop_city": "drop_city",
     "pickup_ts": "pickup_date",
+    "order_ts": "order_date",          # order-received time (O2S processing time)
     "delivery_ts": "delivery_date",
     "ofd1_ts": "out_for_delivery_1st_attempt",
     "edd_ts": "expected_delivery_date_by_courier_partner",
