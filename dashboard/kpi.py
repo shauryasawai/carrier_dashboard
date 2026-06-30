@@ -688,6 +688,7 @@ def build_record(get):
         "outcome": outcome,
         "pendency_state": _pendency_state(status),
         "item_name": item_name,
+        "sku": str(get("sku") or "").strip(),
         "category": category,
         "subcategory": subcategory,
         "awb": str(get("awb") or "").strip(),

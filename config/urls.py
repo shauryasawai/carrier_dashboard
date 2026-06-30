@@ -11,4 +11,5 @@ urlpatterns = [
     path("api/export/", views.export_shipments, name="export_shipments"),
     path("api/sla/", views.sla_config, name="sla_config"),
     path("api/invoices/", views.process_invoices, name="process_invoices"),
+    path("api/invoices/awbs/", views.export_invoice_awbs, name="export_invoice_awbs"),
 ]

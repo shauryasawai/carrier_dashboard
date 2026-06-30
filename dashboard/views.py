@@ -23,11 +23,22 @@ _CACHE = {"records": None, "window": None}
 # (weights / SKU masters) and are used to recover category/SKU on invoices that
 # don't carry them.
 _INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {},
-                  "version": 0, "report_cache": {}}
+                  "version": 0, "report_cache": {},
+                  # BigQuery product enrichment fetched by invoice date window
+                  # (awb/order -> (category, subcategory, sku, item_name)).
+                  "awb2prod": {}, "order2prod": {}, "prod_window": None,
+                  # Item master SKU -> volumetric/billable weight (kg), from an
+                  # uploaded master file, for weight over-charge detection.
+                  "sku2vol": {}}
 
 # Cached lane maps (AWB/order -> lane), rebuilt only when the shipment record
 # set changes — not on every invoice filter/refresh.
 _LANE_CACHE = {"records": None, "maps": None}
+
+# Cached product maps (AWB/order -> (category, subcategory, sku, item_name)),
+# built from the loaded BigQuery shipment data so invoice AWBs can be enriched
+# with sub-category / SKU. Rebuilt only when the record set changes.
+_PROD_CACHE = {"records": None, "maps": None}
 
 
 def _reset_invoice_cache():
@@ -37,6 +48,63 @@ def _reset_invoice_cache():
     _INVOICE_CACHE["sku2cat"] = {}
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
+    _INVOICE_CACHE["awb2prod"] = {}
+    _INVOICE_CACHE["order2prod"] = {}
+    _INVOICE_CACHE["prod_window"] = None
+    _INVOICE_CACHE["sku2vol"] = {}
+
+
+def _refresh_invoice_product_map():
+    """Search BigQuery by the uploaded invoices' service month and cache an
+    AWB/order -> product (category, sub-category, SKU, item) map for enrichment.
+
+    The window is derived from the invoice dates (service month) padded a little
+    each side, so the shipments that the invoices bill are captured regardless of
+    any separate BigQuery lookback the user has loaded. No-op when BigQuery isn't
+    configured or no invoice carries a service-month/date."""
+    from datetime import date as _date, timedelta as _td
+
+    items = _INVOICE_CACHE["items"]
+    if not (items and bq.is_configured()):
+        return
+    keys = sorted({it.get("service_month_key") for it in items
+                   if it.get("service_month_key")})
+    if not keys:
+        return
+
+    def _month_start(k):
+        return _date(int(k[:4]), int(k[5:7]), 1)
+
+    def _month_end(k):
+        y, m = int(k[:4]), int(k[5:7])
+        nxt = _date(y + 1, 1, 1) if m == 12 else _date(y, m + 1, 1)
+        return nxt - _td(days=1)
+
+    lo = _month_start(keys[0]) - _td(days=15)
+    hi = _month_end(keys[-1]) + _td(days=45)
+    # Only the AWBs actually on the invoices need enriching — pass them so the
+    # BigQuery loader skips category derivation for every other shipment in the
+    # window (most of the per-row cost).
+    inv_awbs = {it["awb"] for it in items if it.get("awb")}
+    inv_carriers = {it.get("carrier") for it in items if it.get("carrier")}
+    try:
+        awb2prod, order2prod = bq.fetch_awb_product_map(
+            lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers)
+    except Exception:  # noqa: BLE001 - enrichment is best-effort; never block upload
+        logger.exception("Invoice BigQuery enrichment failed")
+        return
+    _INVOICE_CACHE["awb2prod"] = awb2prod
+    _INVOICE_CACHE["order2prod"] = order2prod
+    _INVOICE_CACHE["prod_window"] = {"from": lo.isoformat(), "to": hi.isoformat(),
+                                     "awbs": len(awb2prod)}
+
+
+def _invoice_product_maps():
+    """Prefer the BigQuery-by-invoice-date map; fall back to the loaded shipment
+    record set when no invoice-date enrichment has been fetched."""
+    if _INVOICE_CACHE.get("awb2prod"):
+        return _INVOICE_CACHE["awb2prod"], _INVOICE_CACHE.get("order2prod") or {}
+    return _product_maps()
 
 
 def _invoice_report(carrier_filter=None):
@@ -64,12 +132,19 @@ def _invoice_report(carrier_filter=None):
         selected = [it for it in items if it["carrier"] == active]
 
     awb2lane, order2lane = _lane_maps()
+    awb2prod, order2prod = _invoice_product_maps()
     report = invoices.build_cost_report(
         selected, _INVOICE_CACHE["files"],
         _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"],
-        awb2lane=awb2lane, order2lane=order2lane)
+        awb2lane=awb2lane, order2lane=order2lane,
+        awb2prod=awb2prod, order2prod=order2prod,
+        sku2vol=_INVOICE_CACHE.get("sku2vol"))
     report["all_carriers"] = all_carriers
     report["carrier_filter"] = active
+    report["prod_window"] = _INVOICE_CACHE.get("prod_window")
+    # Cross-carrier comparison is built from ALL loaded invoices (not the
+    # filtered subset) so it stays the same regardless of the carrier dropdown.
+    report["carrier_comparison"] = invoices.build_carrier_comparison(items)
     _INVOICE_CACHE["report_cache"][ckey] = report
     return report
 
@@ -99,6 +174,34 @@ def _lane_maps():
     _LANE_CACHE["records"] = recs
     _LANE_CACHE["maps"] = (awb2lane, order2lane)
     return awb2lane, order2lane
+
+
+def _product_maps():
+    """Build AWB -> (category, subcategory, sku, item_name) and order-id -> same
+    from the loaded shipment data, so invoice lines can be enriched with the
+    product sub-category / SKU pulled from BigQuery. Uses the same AWB
+    normalization as the invoice parser so keys line up."""
+    recs = _CACHE.get("records") or []
+    if _PROD_CACHE["records"] is recs and _PROD_CACHE["maps"] is not None:
+        return _PROD_CACHE["maps"]
+    awb2prod, order2prod = {}, {}
+    for r in recs:
+        sub = (r.get("subcategory") or "").strip()
+        sku = (r.get("sku") or "").strip()
+        cat = (r.get("category") or "").strip()
+        name = (r.get("item_name") or "").strip()
+        if not (sub or sku or cat or name):
+            continue
+        prod = (cat, sub, sku, name)
+        awb = r.get("awb")
+        if awb:
+            awb2prod[invoices._norm_awb(awb)] = prod
+        oid = (r.get("order_id") or "").strip().upper()
+        if oid:
+            order2prod.setdefault(oid, prod)
+    _PROD_CACHE["records"] = recs
+    _PROD_CACHE["maps"] = (awb2prod, order2prod)
+    return awb2prod, order2prod
 
 
 def login_view(request):
@@ -424,7 +527,9 @@ def process_invoices(request):
         if kind == "master":
             _INVOICE_CACHE["awb2cat"].update(payload.get("awb2cat", {}))
             _INVOICE_CACHE["sku2cat"].update(payload.get("sku2cat", {}))
-            entries = len(payload.get("awb2cat", {})) + len(payload.get("sku2cat", {}))
+            _INVOICE_CACHE["sku2vol"].update(payload.get("sku2vol", {}))
+            entries = (len(payload.get("awb2cat", {})) + len(payload.get("sku2cat", {}))
+                       + len(payload.get("sku2vol", {})))
             _INVOICE_CACHE["files"].append(
                 {"name": name, "carrier": "Reference / master", "lines": entries,
                  "spend": 0, "kind": "master"})
@@ -452,12 +557,59 @@ def process_invoices(request):
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
 
+    # Search BigQuery by the invoices' service month and cache the AWB -> SKU /
+    # sub-category map, so the sub-category analysis is populated automatically.
+    _refresh_invoice_product_map()
+
     # A fresh upload always shows the full (unfiltered) picture; the frontend
     # resets its carrier dropdown to "All carriers" to match.
     report = _invoice_report()
     if errors:
         report["warnings"] = errors
     return JsonResponse(report)
+
+
+@auth.team_required
+@require_POST
+def export_invoice_awbs(request):
+    """Download every billed AWB line as CSV, enriched with the SKU /
+    sub-category joined from the loaded BigQuery shipment data. This is the full
+    per-shipment detail behind the per-invoice reconciliation rows (the UI shows
+    only counts and the sub-category rollup)."""
+    items = _INVOICE_CACHE["items"]
+    if not items:
+        return JsonResponse({"error": "Upload invoices first, then export."}, status=400)
+
+    # Enrich in place using the same map the report uses (BigQuery searched by
+    # invoice date, falling back to the loaded shipment records).
+    awb2prod, order2prod = _invoice_product_maps()
+    invoices._attach_products(items, awb2prod, order2prod)
+
+    carrier = (request.POST.get("carrier") or "").strip()
+    rows = items
+    if carrier and carrier != "all":
+        rows = [it for it in items if it["carrier"] == carrier]
+
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["AWB", "Invoice Number", "Service Month", "Carrier", "Direction",
+                "SKU", "Sub-category", "Category", "Item Name",
+                "Charged Wt (kg)", "Amount with GST", "Amount ex GST",
+                "Matched from BigQuery"])
+    for it in rows:
+        w.writerow([
+            it.get("awb", ""), it.get("invoice_number", ""), it.get("service_month", ""),
+            it.get("carrier", ""), it.get("direction", ""),
+            it.get("sku", ""), it.get("subcategory", ""), it.get("category", ""),
+            it.get("product") or it.get("item_name") or it.get("sku_name") or "",
+            it.get("weight_kg") or "",
+            round(it.get("amount") or 0.0, 2), round(it.get("amount_ex_gst") or 0.0, 2),
+            "yes" if it.get("prod_matched") else "no",
+        ])
+
+    resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
+    resp["Content-Disposition"] = 'attachment; filename="invoice_awb_detail.csv"'
+    return resp
 
 
 @auth.team_required

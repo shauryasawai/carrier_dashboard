@@ -6,8 +6,12 @@ gunicorn
 whitenoise
 google-cloud-bigquery
 google-auth
-pyxlsb
-# NOTE: pyarrow + google-cloud-bigquery-storage (the fast columnar download)
-# only to Cloud Run / Railway (no bundle limit) you can re-add them for speed:
-#   google-cloud-bigquery-storage
+# NOTE: the fast columnar download (BigQuery Storage API + Arrow) is intentionally
+# NOT installed. The target project's service account doesn't have the BigQuery
+# Storage Read API enabled, and in that case `to_arrow(create_bqstorage_client=True)`
+# can return an EMPTY table without raising — silently dropping all rows. Staying
+# on the REST download keeps results correct. The invoice enrichment is kept fast
+# instead by filtering to the invoice's carrier and only deriving products for the
+# invoice's AWBs. If you later enable the Storage Read API for the SA, you can add:
+google-cloud-bigquery-storage
 #   pyarrow

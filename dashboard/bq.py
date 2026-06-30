@@ -46,6 +46,7 @@ DEFAULT_COLUMN_MAP = {
     "status": "clickpost_unified_status",
     "attempts": "out_for_delivery_attempts",
     "item_names": "items",
+    "sku": "product_sku_code",         # product SKU code(s) for the shipment
 }
 
 _IDENT = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -420,6 +421,13 @@ def _records_from_arrow(query_job) -> list | None:
     except Exception:  # noqa: BLE001 - any import/runtime issue -> use REST path
         return None
 
+    # Guard against a silent empty result: if the Storage Read API isn't enabled
+    # for the service account, to_arrow can return a 0-row table without raising.
+    # Treat that as "fast path unavailable" so the caller falls back to REST and
+    # we never silently drop all rows.
+    if table.num_rows == 0:
+        return None
+
     # Materialize each aliased column once; build records by row index. Column
     # names are the logical aliases, so they feed kpi.build_record directly.
     columns = {name: table.column(name).to_pylist() for name in table.schema.names}
@@ -460,6 +468,120 @@ def _page_size() -> int | None:
     if raw and raw.isdigit() and int(raw) > 0:
         return int(raw)
     return 100_000
+
+
+def fetch_awb_product_map(date_from: str, date_to: str,
+                          limit: int | None = None,
+                          awbs: set | None = None,
+                          carriers: set | None = None) -> tuple[dict, dict]:
+    """Return (awb2prod, order2prod) for shipments in the [date_from, date_to]
+    window (YYYY-MM-DD), filtered on the configured date/partition column.
+
+    Each value is (category, subcategory, sku, item_name), with category /
+    subcategory derived from the item names via kpi._product_category — the same
+    rules the dashboard uses. AWBs are normalized (upper-cased, trailing ".0"
+    stripped) so they line up with the invoice parser's keys. Only four columns
+    are scanned (awb, product_sku_code, items, order_id) to keep cost low.
+
+    Performance: the result is downloaded columnar via the BigQuery Storage API +
+    Arrow (far faster than paginated REST for the large window), and when `awbs`
+    (the set of normalized invoice AWBs) is given we only build/derive entries for
+    those AWBs — so category derivation runs on the handful of billed shipments
+    instead of every shipment in the window. Category lookups are memoized per
+    distinct item-name string.
+
+    This is the "search BigQuery by invoice date" path: the caller derives the
+    window from the uploaded invoices' service month, so enrichment matches the
+    billed shipments regardless of what lookback window is otherwise loaded.
+    """
+    project, dataset, table = _table_ref()
+    _check_identifier(project, dotted=True)
+    _check_identifier(dataset)
+    _check_identifier(table)
+
+    cmap = _column_map()
+    awb_col = cmap.get("awb", "awb")
+    sku_col = cmap.get("sku", "product_sku_code")
+    items_col = cmap.get("item_names", "items")
+    order_col = cmap.get("order_id", "order_id")
+    for c in (awb_col, sku_col, items_col, order_col):
+        _check_identifier(str(c))
+
+    where = _range_predicate(project, dataset, table, date_from, date_to)
+
+    # Restrict to the invoice's carrier(s) so BigQuery scans/returns only those
+    # shipments (e.g. BlueDart) instead of every courier in the window. Tokens
+    # are sanitised to [a-z0-9] so they can't inject SQL; matched as a prefix on
+    # the carrier column (so "BlueDart" also catches "Bluedart Reverse").
+    import re as _re
+    carrier_pred = ""
+    if carriers:
+        car_col = cmap.get("carrier", "courier_partner")
+        _check_identifier(str(car_col))
+        toks = set()
+        for c in carriers:
+            tok = _re.sub(r"[^a-z0-9]", "", _re.split(r"[ _\-/]", str(c).strip().lower())[0])
+            if tok:
+                toks.add(tok)
+        if toks:
+            likes = " OR ".join(f"LOWER(`{car_col}`) LIKE '{t}%'" for t in sorted(toks))
+            carrier_pred = f" AND ({likes})"
+
+    sql = (
+        f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
+        f"`{items_col}` AS items, `{order_col}` AS order_id "
+        f"FROM `{project}.{dataset}.{table}` "
+        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}"
+    )
+    if limit:
+        sql += f" LIMIT {int(limit)}"
+
+    import re as _re
+    _norm_re = _re.compile(r"\.0$")
+    want = awbs or None
+    _cat_memo = {}
+
+    def _cat(text):
+        c = _cat_memo.get(text)
+        if c is None:
+            c = kpi._product_category(text)
+            _cat_memo[text] = c
+        return c
+
+    client = _client()
+    job = client.query(sql)
+    awb2prod, order2prod = {}, {}
+
+    def _emit(awb_raw, sku_raw, items_raw, order_raw):
+        if awb_raw is None:
+            return
+        awb = _norm_re.sub("", str(awb_raw).strip().upper())
+        in_want = (want is None) or (awb in want)
+        # Skip shipments not on the invoice entirely (no AWB match and, for the
+        # AWB-filtered path, no order fallback needed) — saves all the per-row
+        # string/category work for the ~70% of window rows we don't bill.
+        if want is not None and not in_want:
+            return
+        items_text = str(items_raw or "").strip()
+        sku = str(sku_raw or "").strip()
+        cat, sub = _cat(items_text)
+        prod = (cat, sub, sku, items_text)
+        if awb and in_want:
+            awb2prod[awb] = prod
+        oid = str(order_raw or "").strip().upper()
+        if oid:
+            order2prod.setdefault(oid, prod)
+
+    # Stream rows over the REST API (large page size to cut round-trips). The
+    # carrier filter (in SQL) and the AWB filter (in _emit) keep this fast: only
+    # the invoice's carrier rows are returned, and category derivation runs only
+    # for AWBs actually on the invoice. We deliberately avoid the Storage/Arrow
+    # path here — when the BigQuery Storage API isn't enabled for the service
+    # account it can yield an empty table without raising, silently dropping all
+    # enrichment.
+    for row in job.result(page_size=_page_size()):
+        _emit(row.get("awb"), row.get("sku"), row.get("items"), row.get("order_id"))
+    return awb2prod, order2prod
 
 
 def fetch_records(lookback_days: int | None = None,

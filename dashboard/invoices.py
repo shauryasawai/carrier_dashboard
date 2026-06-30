@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import csv as _csv
 import io as _io
+import math
 import re
 from functools import lru_cache
 from openpyxl import load_workbook
@@ -138,6 +139,17 @@ def _norm_awb(v):
 def _norm_zone(z):
     z = _s(z)
     return z.title() if z else ""
+
+
+def _unwrap_xl(v):
+    """Strip Excel text-formula wrapping used by Delhivery CSVs, e.g.
+    `="54484610119195"` -> `54484610119195`. Leaves normal values untouched."""
+    s = _s(v)
+    if s.startswith("="):
+        s = s[1:]
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        s = s[1:-1]
+    return s.strip().strip('"').strip()
 
 
 def _nh(h):
@@ -328,9 +340,88 @@ def _clean_courier(v):
 
 
 # --------------------------------------------------------------------------
+# invoice date / service month (BlueDart B2C carries an explicit invoice date)
+# --------------------------------------------------------------------------
+from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+
+_EXCEL_EPOCH = _dt(1899, 12, 30)
+
+
+def _excel_to_date(v):
+    """Convert a value to a date. Accepts an Excel serial number (what .xlsb
+    stores for date cells), a datetime, or a parseable date string. Returns a
+    datetime.date or None."""
+    if v is None or v == "":
+        return None
+    if isinstance(v, _dt):
+        return v.date()
+    if isinstance(v, (int, float)):
+        try:
+            return (_EXCEL_EPOCH + _td(days=float(v))).date()
+        except (ValueError, OverflowError):
+            return None
+    s = _s(v)
+    # An ISO date embedded in a longer string (e.g. "2026-05-19 16:59:58" or
+    # "2026-05-26+05:30") — take the date part.
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return _dt(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+        except ValueError:
+            pass
+    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y", "%m/%d/%Y", "%d-%b-%Y", "%d %b %Y"):
+        try:
+            return _dt.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def _invoice_period(v):
+    """From a raw invoice-date cell return (date_label, month_label, month_key).
+
+    date_label  -> "31 May 2026"   (display)
+    month_label -> "May 2026"      (service month, display)
+    month_key   -> "2026-05"       (sort key)
+    Returns ("", "", "") when the date can't be parsed."""
+    d = _excel_to_date(v)
+    if d is None:
+        return "", "", ""
+    return (d.strftime("%d %b %Y"),
+            "%s %d" % (_MONTH_NAMES[d.month], d.year),
+            "%04d-%02d" % (d.year, d.month))
+
+
+def _billing_month(filename, rows, idx, date_i):
+    """Billing (service) month for carriers whose files carry no per-row invoice
+    date — SkyAir, Shadowfax/Prime. Prefer the month parsed from the file name;
+    if the name has no recognisable month, fall back to the most common date in
+    the given column so it works for any month regardless of naming.
+    Returns (month_key, month_label)."""
+    mkey, mlabel = month_from_filename(filename)
+    if not mkey.startswith("zzzz"):
+        return mkey, mlabel
+    counts = {}
+    if date_i is not None:
+        for row in rows[idx + 1:]:
+            d = _excel_to_date(_cell(row, date_i))
+            if d:
+                counts[(d.year, d.month)] = counts.get((d.year, d.month), 0) + 1
+    if counts:
+        yy, mm = max(counts, key=counts.get)
+        return "%04d-%02d" % (yy, mm), "%s %d" % (_MONTH_NAMES[mm], yy)
+    return mkey, mlabel
+
+
+# --------------------------------------------------------------------------
 # adapters
 # --------------------------------------------------------------------------
 def _parse_frido_prime(sheets, filename):
+    """Shadowfax 'Frido Prime' forward billing (Prime Large / Prime Small). The
+    file has product_desc / product_cat / weight but no per-row invoice number
+    and no GST column, so the invoice is the tier (from client_name) + service
+    month (from picked_date), and Amount with GST is derived at +18%."""
+    GST = 1.18
     for name, rows in sheets:
         idx, cmap = None, None
         for i in range(min(4, len(rows))):
@@ -341,27 +432,40 @@ def _parse_frido_prime(sheets, filename):
                 break
         if idx is None:
             continue
-        carrier = carrier_from_filename(filename) or "Frido Prime"
-        if carrier == "Unknown carrier":
-            carrier = "Frido Prime"
+        awb_i = cmap.get("awb_number")
+        amt_i = cmap.get("total_charges")
+        client_i = cmap.get("client_name")
+        # No per-row invoice number/date — treat the whole file as one billing
+        # period, taken from the file name (e.g. "...Prime Large_FORWARD_May26"),
+        # falling back to the most common picked_date month when the name has none.
+        date_i = _first(cmap, ["picked_date", "received_at_hub_date", "last_updated"])
+        mkey, mlabel = _billing_month(filename, rows, idx, date_i)
         out = []
         for row in rows[idx + 1:]:
             if not row:
                 continue
-            awb = _norm_awb(_cell(row, cmap.get("awb_number")))
-            amt = _f(_cell(row, cmap.get("total_charges")))
-            if not awb:
+            awb = _norm_awb(_cell(row, awb_i))
+            amt = _f(_cell(row, amt_i))
+            if not awb or amt is None:
                 continue
             desc = _clean_name(_cell(row, cmap.get("product_desc")))
             cat = _s(_cell(row, cmap.get("product_cat")))
+            tier = re.sub(r"(?i)^my\s*frido\s*-\s*", "", _s(_cell(row, client_i))).strip() or "Prime"
+            inv_no = (tier + " " + mlabel).strip() if mlabel else tier
             out.append({
-                "carrier": carrier, "awb": awb,
+                "carrier": "Shadowfax", "awb": awb,
                 "order_id": _s(_cell(row, cmap.get("client_order_id"))),
                 "sku": "", "sku_name": desc, "product": desc,
                 "category": resolve_category(cat, desc),
                 "weight_kg": _f(_cell(row, cmap.get("weight"))),
                 "zone": _norm_zone(_cell(row, cmap.get("zone"))),
-                "amount": amt or 0.0, "shipments": 1,
+                "amount": round(amt * GST, 2), "shipments": 1,
+                "amount_ex_gst": round(amt, 2),
+                "invoice_number": inv_no,
+                "invoice_date": "",
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
             })
         if out:
             return out
@@ -401,32 +505,405 @@ def _parse_bluedart_b2b(sheets, filename):
     return None
 
 
-def _parse_skyair(sheets, filename):
+def _parse_bluedart_b2c(sheets, filename):
+    """BlueDart B2C raw billing dump (one row per AWB) with explicit invoice
+    columns: CINVOICENBR, DINVDATE and GROSS TOTAL (amount incl. GST). Captures
+    invoice number / date / service month so the management reconciliation table
+    can group billed lines by invoice and compute the final payable.
+
+    Reads EVERY sheet that matches the B2C layout (real exports can split lines
+    across multiple tabs), accumulating all billed lines so nothing is dropped.
+    The header row can sit a few rows down (a banner row precedes it), so we
+    scan the first several rows of each sheet for it."""
+    out = []
     for name, rows in sheets:
         idx = cmap = None
-        for i in range(min(4, len(rows))):
+        for i in range(min(15, len(rows))):
             cells = set(_nh(c) for c in (rows[i] or []))
-            if "awb" in cells and "sku name" in cells and "total" in cells:
+            if ("cinvoicenbr" in cells and "cawbno" in cells
+                    and ("gross total" in cells or "with gst" in cells)):
                 idx = i
                 cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
                 break
         if idx is None:
             continue
+        amt_i = _first(cmap, ["gross total", "with gst"])
+        exgst_i = _first(cmap, ["total", "ex gst", "ntotalamt"])
+        awb_i = cmap.get("cawbno")
+        inv_i = cmap.get("cinvoicenbr")
+        date_i = cmap.get("dinvdate")
+        wt_i = _first(cmap, ["nchrgwt", "final wt", "nactwgt"])
+        zone_i = cmap.get("zone")
+        dir_i = cmap.get("fwd/reverse")
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            inv_no = _s(_cell(row, inv_i))
+            amt = _f(_cell(row, amt_i))
+            awb = _norm_awb(_cell(row, awb_i))
+            # A line needs an invoice number plus either an AWB or an amount.
+            if not inv_no or (amt is None and not awb):
+                continue
+            dlabel, mlabel, mkey = _invoice_period(_cell(row, date_i))
+            out.append({
+                "carrier": "BlueDart", "awb": awb, "order_id": "",
+                "sku": "", "sku_name": "", "product": "",
+                "category": "Others",
+                "weight_kg": _f(_cell(row, wt_i)),
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": _f(_cell(row, exgst_i)) or 0.0,
+                "invoice_number": inv_no,
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": _s(_cell(row, dir_i)).upper(),
+            })
+    return out or None
+
+
+def _parse_skyair(sheets, filename):
+    """SkyAir hyperlocal billing ('Sheet 1'). Columns: AWB / Pickup Date /
+    Round Weight (kg) / Before Tax (ex GST) / GST / Total (with GST); some
+    exports also carry SKU Name. No invoice-number column, so the file is treated
+    as one invoice for the billing month taken from the file name."""
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(4, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if ("awb" in cells and "total" in cells
+                    and ("before tax" in cells or "round weight" in cells or "sku name" in cells)):
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        awb_i = cmap.get("awb")
+        amt_i = cmap.get("total")
+        exgst_i = _first(cmap, ["before tax", "ex gst"])
+        wt_i = _first(cmap, ["round weight", "charge weight", "sky air weight", "weight"])
+        name_i = _first(cmap, ["sku name", "product name"])
+        sku_i = _first(cmap, ["sku code", "sku codes", "sku"])
+        zone_i = _first(cmap, ["city", "zone"])
+        date_i = _first(cmap, ["pickup date", "receiving date", "order last status date"])
+        mkey, mlabel = _billing_month(filename, rows, idx, date_i)
+        inv_no = ("SkyAir " + mlabel).strip() if mlabel else "SkyAir"
         out = []
         for row in rows[idx + 1:]:
             if not row:
                 continue
-            awb = _norm_awb(_cell(row, cmap.get("awb")))
-            amt = _f(_cell(row, cmap.get("total")))
-            if not awb:
+            awb = _norm_awb(_cell(row, awb_i))
+            amt = _f(_cell(row, amt_i))
+            if not awb or amt is None:
                 continue
-            nm = _clean_name(_cell(row, cmap.get("sku name")))
+            nm = _clean_name(_cell(row, name_i))
+            ex = _f(_cell(row, exgst_i))
             out.append({
                 "carrier": "SkyAir", "awb": awb, "order_id": "",
-                "sku": _s(_cell(row, cmap.get("sku code"))), "sku_name": nm, "product": nm,
+                "sku": _s(_cell(row, sku_i)), "sku_name": nm, "product": nm,
                 "category": resolve_category("", nm),
-                "weight_kg": _f(_cell(row, cmap.get("round weight"))) or _f(_cell(row, cmap.get("sky air weight"))),
-                "zone": "", "amount": amt or 0.0, "shipments": 1,
+                "weight_kg": _f(_cell(row, wt_i)),
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": ex if ex is not None else round((amt or 0.0) / 1.18, 2),
+                "invoice_number": inv_no,
+                "invoice_date": "",
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_swift(sheets, filename):
+    """Swift B2C billing detail. Columns: Swift Id / AWB / Cost (incl GST) /
+    Weight (in gms) / Billing Date / Direction / Product Description. The invoice
+    number lives in the SHEET NAME (e.g. 'Swift Invoice #SWT26001442 Details'),
+    so every line on the sheet shares that invoice number. SKU(s) and product
+    name are parsed from the Product Description: '[sku] {name} {qty}'."""
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(8, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if "swift id" in cells and "awb" in cells and ("cost" in cells or "billing date" in cells):
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        amt_i = _first(cmap, ["cost", "cost incl gst", "freight", "shipping cost"])
+        awb_i = cmap.get("awb")
+        date_i = _first(cmap, ["billing date", "invoice date", "date"])
+        wt_i = _first(cmap, ["weight", "weight in gms", "charge weight"])
+        dir_i = cmap.get("direction")
+        desc_i = _first(cmap, ["product description", "item names", "product name"])
+        car_i = _first(cmap, ["courier name", "courier", "carrier"])
+        ord_i = _first(cmap, ["order number", "order id", "order_id"])
+        zone_i = cmap.get("zone")
+        # Invoice number from the sheet name: token after '#', else first
+        # alphanumeric code that contains a digit.
+        m = re.search(r"#\s*([A-Za-z0-9][\w-]*)", name or "") \
+            or re.search(r"([A-Za-z]{2,}\d[\w-]*)", name or "")
+        inv_no = m.group(1) if m else (name or filename)
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            awb = _norm_awb(_cell(row, awb_i))
+            amt = _f(_cell(row, amt_i))
+            if not awb or amt is None:
+                continue
+            draw = _s(_cell(row, date_i))
+            dm = re.search(r"(\d{4}-\d{2}-\d{2})", draw)
+            dlabel, mlabel, mkey = _invoice_period(dm.group(1) if dm else _cell(row, date_i))
+            desc = _s(_cell(row, desc_i))
+            skus = re.findall(r"\[([^\]]+)\]", desc)
+            sku = ", ".join(s.strip().upper() for s in skus)
+            names = re.findall(r"\{([^}]+)\}", desc)
+            pname = _clean_name(names[0]) if names else ""
+            wt_g = _f(_cell(row, wt_i))
+            carrier = _clean_courier(_cell(row, car_i)) or "Swift"
+            out.append({
+                "carrier": carrier or "Swift", "awb": awb,
+                "order_id": _s(_cell(row, ord_i)),
+                "sku": sku, "sku_name": pname, "product": pname,
+                "category": "Others",
+                "weight_kg": (wt_g / 1000.0) if wt_g else None,
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": round(amt / 1.18, 2) if amt else 0.0,
+                "invoice_number": inv_no,
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": _s(_cell(row, dir_i)).upper(),
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_delhivery(sheets, filename):
+    """Delhivery billing files (CSV or XLSX). Columns: waybill_num / serial_number
+    / total_amount (incl GST) / gross_amount (ex GST) / charged_weight (grams) /
+    zone / order_id / item_shipped|product_description / pickup_date. CSVs wrap
+    text fields in Excel formulas (`="..."`) which are unwrapped. The invoice
+    number is the serial_number (one per file)."""
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(6, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if "waybill_num" in cells and "total_amount" in cells and "gross_amount" in cells:
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        awb_i = cmap.get("waybill_num")
+        amt_i = cmap.get("total_amount")
+        exgst_i = cmap.get("gross_amount")
+        serial_i = cmap.get("serial_number")
+        date_i = _first(cmap, ["pickup_date", "status_date", "invoice date"])
+        wt_i = cmap.get("charged_weight")
+        zone_i = cmap.get("zone")
+        ord_i = cmap.get("order_id")
+        name_i = _first(cmap, ["item_shipped", "product_description", "product_desc"])
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            awb = _norm_awb(_unwrap_xl(_cell(row, awb_i)))
+            amt = _f(_unwrap_xl(_cell(row, amt_i)))
+            if not awb or amt is None:
+                continue
+            inv_no = _unwrap_xl(_cell(row, serial_i)) or _s(filename)
+            draw = _cell(row, date_i)
+            if isinstance(draw, (int, float)):
+                dlabel, mlabel, mkey = _invoice_period(draw)
+            else:
+                ds = _unwrap_xl(draw)
+                dm = re.search(r"(\d{4}-\d{2}-\d{2})", ds)
+                dlabel, mlabel, mkey = _invoice_period(dm.group(1) if dm else ds)
+            wt_g = _f(_unwrap_xl(_cell(row, wt_i)))   # charged weight in grams
+            nm = _clean_name(_unwrap_xl(_cell(row, name_i)).rstrip(","))
+            out.append({
+                "carrier": "Delhivery", "awb": awb,
+                "order_id": _unwrap_xl(_cell(row, ord_i)),
+                "sku": "", "sku_name": nm, "product": nm,
+                "category": "Others",
+                "weight_kg": (wt_g / 1000.0) if wt_g else None,
+                "zone": _norm_zone(_unwrap_xl(_cell(row, zone_i))),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": _f(_unwrap_xl(_cell(row, exgst_i))) or 0.0,
+                "invoice_number": inv_no,
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_urbanbolt(sheets, filename):
+    """Urban Bolt billing summary. Columns: AWB No / Shipment Date /
+    Chg. Weight (kg) / Freight Subtotal (ex GST) / GST Amount / Total Amount
+    (with GST). No invoice-number column, so the file is one invoice for the
+    billing month (file name, falling back to the Shipment Date)."""
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(4, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if ("awb no" in cells and "total amount" in cells
+                    and ("freight subtotal" in cells or "gst amount" in cells
+                         or "chg. weight" in cells or "chg weight" in cells)):
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        awb_i = _first(cmap, ["awb no", "awb number", "awb"])
+        amt_i = cmap.get("total amount")
+        exgst_i = _first(cmap, ["freight subtotal", "base charge"])
+        wt_i = _first(cmap, ["chg. weight", "chg weight", "charge weight", "weight"])
+        date_i = _first(cmap, ["shipment date", "pickup date", "date"])
+        zone_i = _first(cmap, ["lane / zone", "zone", "lane"])
+        mkey, mlabel = _billing_month(filename, rows, idx, date_i)
+        inv_no = ("Urban Bolt " + mlabel).strip() if mlabel else "Urban Bolt"
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            awb = _norm_awb(_cell(row, awb_i))
+            amt = _f(_cell(row, amt_i))
+            if not awb or amt is None:
+                continue
+            ex = _f(_cell(row, exgst_i))
+            out.append({
+                "carrier": "Urban Bolt", "awb": awb, "order_id": "",
+                "sku": "", "sku_name": "", "product": "",
+                "category": "Others",
+                "weight_kg": _f(_cell(row, wt_i)),
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": ex if ex is not None else round((amt or 0.0) / 1.18, 2),
+                "invoice_number": inv_no,
+                "invoice_date": "",
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_safexpress(sheets, filename):
+    """Safexpress B2B billing ('Data' sheet). Columns: Bill Number (invoice) /
+    Waybill Number (AWB) / Pickup Date / Charge Weight (kg) / Total Freight
+    (ex GST) / GST Amount / Grand Total (with GST). One bill per file."""
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(4, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if ("waybill number" in cells and "grand total" in cells
+                    and ("bill number" in cells or "total freight" in cells)):
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        awb_i = cmap.get("waybill number")
+        amt_i = cmap.get("grand total")
+        exgst_i = _first(cmap, ["total freight", "total amount"])
+        inv_i = cmap.get("bill number")
+        date_i = _first(cmap, ["pickup date", "invoice date", "booking date"])
+        wt_i = _first(cmap, ["charge weight", "charged weight", "chargeable weight", "weight"])
+        zone_i = _first(cmap, ["waybill destination", "destination", "zone"])
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            awb = _norm_awb(_cell(row, awb_i))
+            amt = _f(_cell(row, amt_i))
+            inv_no = _s(_cell(row, inv_i))
+            if not awb or amt is None:
+                continue
+            dlabel, mlabel, mkey = _invoice_period(_cell(row, date_i))
+            out.append({
+                "carrier": "Safexpress", "awb": awb, "order_id": "",
+                "sku": "", "sku_name": "", "product": "",
+                "category": "Others",
+                "weight_kg": _f(_cell(row, wt_i)),
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": amt or 0.0, "shipments": 1,
+                "amount_ex_gst": _f(_cell(row, exgst_i)) or 0.0,
+                "invoice_number": inv_no or _s(filename),
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_elasticrun(sheets, filename):
+    """ElasticRun billing ('Data' sheet). Columns: transaction_id (AWB) /
+    client_invoice_number / client_invoice_date / work_complete_time /
+    chargeable_weight / total_charge. The file carries the pre-tax charge only
+    (no GST column), so Amount with GST is derived at +18%. Invoice number is the
+    client_invoice_number; service month is taken from work_complete_time (when
+    the shipment was actually done), while the displayed invoice date is the
+    client_invoice_date."""
+    GST = 1.18
+    for name, rows in sheets:
+        idx = cmap = None
+        for i in range(min(4, len(rows))):
+            cells = set(_nh(c) for c in (rows[i] or []))
+            if ("transaction_id" in cells and "total_charge" in cells
+                    and "client_invoice_number" in cells):
+                idx = i
+                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+                break
+        if idx is None:
+            continue
+        awb_i = cmap.get("transaction_id")
+        charge_i = cmap.get("total_charge")
+        inv_i = cmap.get("client_invoice_number")
+        invdate_i = cmap.get("client_invoice_date")
+        svc_i = _first(cmap, ["work_complete_time", "client_invoice_date"])
+        wt_i = _first(cmap, ["chargeable_weight", "weight"])
+        zone_i = _first(cmap, ["zone", "state"])
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            awb = _norm_awb(_cell(row, awb_i))
+            charge = _f(_cell(row, charge_i))
+            inv_no = _s(_cell(row, inv_i))
+            if not awb or charge is None or not inv_no:
+                continue
+            _, _, mkey = _invoice_period(_cell(row, svc_i))
+            _, mlabel, _ = _invoice_period(_cell(row, svc_i))
+            dlabel, _, _ = _invoice_period(_cell(row, invdate_i))
+            out.append({
+                "carrier": "ElasticRun", "awb": awb, "order_id": "",
+                "sku": "", "sku_name": "", "product": "",
+                "category": "Others",
+                "weight_kg": _f(_cell(row, wt_i)),
+                "zone": _norm_zone(_cell(row, zone_i)),
+                "amount": round(charge * GST, 2), "shipments": 1,
+                "amount_ex_gst": round(charge, 2),
+                "invoice_number": inv_no,
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
             })
         if out:
             return out
@@ -473,16 +950,31 @@ def _parse_generic(sheets, filename):
     return None
 
 
-_ADAPTERS = [_parse_frido_prime, _parse_bluedart_b2b, _parse_skyair, _parse_generic]
+_ADAPTERS = [_parse_frido_prime, _parse_bluedart_b2c, _parse_bluedart_b2b,
+             _parse_skyair, _parse_swift, _parse_delhivery, _parse_elasticrun,
+             _parse_safexpress, _parse_urbanbolt, _parse_generic]
 
 
 # --------------------------------------------------------------------------
 # master files (no charges) -> AWB / SKU enrichment
 # --------------------------------------------------------------------------
+# Header keywords for a per-SKU volumetric / billable weight column (an item
+# master used to detect carrier weight over-charges).
+VOL_WEIGHT_KEYS = ["vol. weight", "vol. wt", "volumetric weight", "volumetric wt",
+                   "vol weight", "vol wt", "volumetric", "billable weight", "billable wt",
+                   "charge weight", "chargeable weight", "expected weight", "weight kg",
+                   "weight"]
+
+
 def _parse_master(sheets):
-    """Detect a SKU/weight master and return {'awb2cat':{awb:(cat,product,sku)},
-    'sku2cat':{sku:(cat,product)}} or None if it isn't a master."""
-    awb2cat, sku2cat = {}, {}
+    """Detect a SKU/weight master and return enrichment maps, or None if it isn't
+    a master:
+        {'awb2cat': {awb: (cat, product, sku)},
+         'sku2cat': {sku: (cat, product)},
+         'sku2vol': {sku: volumetric_weight_kg}}
+    sku2vol is populated when the file carries a per-SKU volumetric / billable
+    weight column (used to flag carrier weight over-charges)."""
+    awb2cat, sku2cat, sku2vol = {}, {}, {}
     found = False
     for name, rows in sheets:
         idx = cmap = None
@@ -504,6 +996,7 @@ def _parse_master(sheets):
         sub_i = cmap.get("sub_category")
         sku_i = _first(cmap, ["sku_list", "sku code", "product code", "skus", "sku"])
         nm_i = _first(cmap, ["sku name", "product name", "product_desc", "sub_cat"])
+        vol_i = _first(cmap, VOL_WEIGHT_KEYS)   # per-SKU volumetric / billable weight
         for row in rows[idx + 1:]:
             if not row:
                 continue
@@ -520,7 +1013,13 @@ def _parse_master(sheets):
             if sku and (nm or cat != "Others"):
                 sku2cat[sku.upper()] = (cat, nm or sku)
                 found = True
-    return {"awb2cat": awb2cat, "sku2cat": sku2cat} if found else None
+            if sku and vol_i is not None:
+                vol = _f(_cell(row, vol_i))
+                if vol is not None and vol > 0:
+                    sku2vol[sku.upper()] = vol
+                    found = True
+    return ({"awb2cat": awb2cat, "sku2cat": sku2cat, "sku2vol": sku2vol}
+            if found else None)
 
 
 def ingest(data, filename=""):
@@ -622,6 +1121,218 @@ def _attach_lanes(items, awb2lane, order2lane):
     return matched
 
 
+def _attach_products(items, awb2prod, order2prod):
+    """Tag each invoice line with the product info (category, sub-category, SKU,
+    item name) of its shipment, joined from the loaded BigQuery shipment data on
+    AWB (falling back to order id). Lines whose AWB isn't in the shipment set
+    keep an empty sub-category and are bucketed as "Unmatched" in the analysis.
+    Returns the number of lines that matched."""
+    awb2prod = awb2prod or {}
+    order2prod = order2prod or {}
+    matched = 0
+    for it in items:
+        prod = None
+        awb = it.get("awb")
+        if awb and awb in awb2prod:
+            prod = awb2prod[awb]
+        if prod is None:
+            oid = (it.get("order_id") or "").strip().upper()
+            if oid and oid in order2prod:
+                prod = order2prod[oid]
+        if prod:
+            cat, sub, sku, name = prod
+            it["subcategory"] = sub or it.get("subcategory") or ""
+            if sku and not it.get("sku"):
+                it["sku"] = sku
+            if name and not it.get("product"):
+                it["product"] = name
+                it["sku_name"] = it.get("sku_name") or name
+            if cat and cat not in ("Others", "", "Unknown"):
+                it["category"] = cat
+            it["prod_matched"] = True
+            matched += 1
+        else:
+            it.setdefault("subcategory", "")
+            it["prod_matched"] = bool(it.get("prod_matched"))
+    return matched
+
+
+def _build_subcategory_analysis(items):
+    """Spend (with GST) and shipment counts grouped by sub-category, plus a
+    matched/unmatched summary. Lines with no joined sub-category fall into the
+    "Unmatched" bucket so totals always reconcile to the invoice total."""
+    sub = {}
+    total_spend = 0.0
+    total_ship = 0
+    total_weight = 0.0
+    matched_ship = 0
+    matched_spend = 0.0
+    for i in items:
+        amt = i["amount"]
+        n = i["shipments"]
+        wt = i.get("weight_kg") or 0.0   # NCHRGWT — the charged/billed weight
+        total_spend += amt
+        total_ship += n
+        total_weight += wt
+        is_m = bool(i.get("prod_matched"))
+        if is_m:
+            matched_ship += n
+            matched_spend += amt
+        key = (i.get("subcategory") or "").strip() or ("Unmatched" if not is_m else "Other")
+        g = sub.setdefault(key, {"subcategory": key, "spend": 0.0, "shipments": 0,
+                                 "weight": 0.0})
+        g["spend"] += amt
+        g["shipments"] += n
+        g["weight"] += wt
+    rows = []
+    for g in sorted(sub.values(), key=lambda x: -x["spend"]):
+        rows.append({
+            "subcategory": g["subcategory"],
+            "spend": round(g["spend"], 2),
+            "shipments": g["shipments"],
+            "weight": round(g["weight"], 1),   # total charged kg
+            "share": round(g["spend"] / total_spend * 100, 1) if total_spend else 0,
+        })
+    return {
+        "rows": rows,
+        "matched_shipments": matched_ship,
+        "matched_spend": round(matched_spend, 2),
+        "total_shipments": total_ship,
+        "total_spend": round(total_spend, 2),
+        "total_weight": round(total_weight, 1),
+        "subcategory_count": sum(1 for r in rows if r["subcategory"] not in ("Unmatched",)),
+    }
+
+
+def _build_product_analysis(items, top=500):
+    """Spend (with GST), shipments and charged weight grouped by PRODUCT (SKU),
+    across the whole invoice set. Products are keyed by their SKU string (the
+    BigQuery product_sku_code; a combo line keeps its combined SKU), with the
+    item name shown for readability. Lines with no SKU fall into a single
+    "(no SKU / unmatched)" bucket so totals reconcile to the invoice total."""
+    prod = {}
+    total_spend = total_weight = 0.0
+    total_ship = 0
+    for i in items:
+        amt = i["amount"]
+        n = i["shipments"]
+        wt = i.get("weight_kg") or 0.0
+        total_spend += amt
+        total_ship += n
+        total_weight += wt
+        sku = (i.get("sku") or "").strip()
+        name = (i.get("product") or i.get("sku_name") or "").strip()
+        key = sku.upper() or "(no SKU / unmatched)"
+        g = prod.setdefault(key, {"sku": sku, "name": name, "spend": 0.0,
+                                  "shipments": 0, "weight": 0.0})
+        g["spend"] += amt
+        g["shipments"] += n
+        g["weight"] += wt
+        if not g["name"] and name:
+            g["name"] = name
+        if not g["sku"] and sku:
+            g["sku"] = sku
+    rows = []
+    for g in sorted(prod.values(), key=lambda x: -x["spend"]):
+        rows.append({
+            "sku": g["sku"],
+            "name": g["name"] or g["sku"] or "(no SKU / unmatched)",
+            "spend": round(g["spend"], 2),
+            "shipments": g["shipments"],
+            "weight": round(g["weight"], 1),
+            "share": round(g["spend"] / total_spend * 100, 1) if total_spend else 0,
+        })
+    return {
+        "rows": rows[:top],
+        "product_total": len(rows),
+        "shown": min(top, len(rows)),
+        "total_spend": round(total_spend, 2),
+        "total_shipments": total_ship,
+        "total_weight": round(total_weight, 1),
+    }
+
+
+def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
+    """Flag invoice AWB lines where BlueDart's charged weight exceeds the
+    expected billable weight (from the uploaded item master) by at least one
+    weight slab — i.e. likely weight over-charges worth disputing.
+
+    Per AWB: expected = sum of the master volumetric weight (kg) for the SKU(s)
+    on that AWB, rounded UP to the next `slab` (0.5 kg) = expected_slab. A line is
+    flagged when charged_weight - expected_slab >= min_over (one slab). The
+    estimated over-charge is excess_kg x the line's own ₹/kg (amount / charged).
+    Aggregated per invoice number and per sub-category for raising disputes."""
+    sku2vol = sku2vol or {}
+    by_inv, by_sub, by_prod = {}, {}, {}
+    checked = flagged = 0
+    tot_excess = tot_est = 0.0
+    for it in items:
+        skus = [s.strip().upper() for s in re.split(r"[,/|]", it.get("sku") or "") if s.strip()]
+        vols = [sku2vol[s] for s in skus if s in sku2vol]
+        charged = it.get("weight_kg") or 0.0
+        if not vols or charged <= 0:
+            continue
+        expected = sum(vols)
+        expected_slab = math.ceil(round(expected / slab, 6)) * slab
+        checked += 1
+        inv = it.get("invoice_number") or "(no invoice)"
+        bi = by_inv.setdefault(inv, {"invoice_number": inv, "checked": 0,
+                                     "flagged": 0, "excess_kg": 0.0, "est_overcharge": 0.0})
+        bi["checked"] += 1
+        excess = round(charged - expected_slab, 3)
+        if excess >= min_over:
+            est = excess * (it["amount"] / charged) if charged else 0.0
+            flagged += 1
+            bi["flagged"] += 1
+            bi["excess_kg"] += excess
+            bi["est_overcharge"] += est
+            sub = (it.get("subcategory") or "").strip() or "Unmatched"
+            bs = by_sub.setdefault(sub, {"subcategory": sub, "flagged": 0,
+                                         "excess_kg": 0.0, "est_overcharge": 0.0})
+            bs["flagged"] += 1
+            bs["excess_kg"] += excess
+            bs["est_overcharge"] += est
+            # product (SKU) bucket
+            sku_raw = (it.get("sku") or "").strip()
+            pname = (it.get("product") or it.get("sku_name") or "").strip()
+            pkey = sku_raw.upper() or "(no SKU)"
+            bp = by_prod.setdefault(pkey, {"sku": sku_raw, "name": pname, "flagged": 0,
+                                           "excess_kg": 0.0, "est_overcharge": 0.0})
+            bp["flagged"] += 1
+            bp["excess_kg"] += excess
+            bp["est_overcharge"] += est
+            if not bp["name"] and pname:
+                bp["name"] = pname
+            if not bp["sku"] and sku_raw:
+                bp["sku"] = sku_raw
+            tot_excess += excess
+            tot_est += est
+
+    def _round_rows(rows):
+        for r in rows:
+            r["excess_kg"] = round(r["excess_kg"], 1)
+            r["est_overcharge"] = round(r["est_overcharge"], 2)
+        return rows
+
+    inv_rows = _round_rows(sorted(by_inv.values(), key=lambda x: -x["est_overcharge"]))
+    sub_rows = _round_rows(sorted(by_sub.values(), key=lambda x: -x["est_overcharge"]))
+    prod_rows = _round_rows(sorted(by_prod.values(), key=lambda x: -x["est_overcharge"]))
+    for r in prod_rows:
+        r["name"] = r["name"] or r["sku"] or "(no SKU)"
+    return {
+        "by_invoice": inv_rows,
+        "by_subcategory": sub_rows,
+        "by_product": prod_rows[:200],
+        "product_count": len(prod_rows),
+        "checked": checked, "flagged": flagged,
+        "total_lines": len(items),
+        "excess_kg": round(tot_excess, 1),
+        "est_overcharge": round(tot_est, 2),
+        "slab": slab,
+        "has_master": bool(sku2vol),
+    }
+
+
 def _build_lane_comparison(items):
     """Like-for-like price comparison: per pickup->drop pincode lane, the avg
     billed cost of each carrier, side by side. Only lanes served by 2+ carriers
@@ -678,10 +1389,78 @@ def _build_lane_comparison(items):
     }
 
 
+def build_carrier_comparison(items, tds_rate=2.0):
+    """Summary per carrier (across ALL loaded invoices, ignoring the carrier
+    filter) so multiple carriers can be compared side by side: invoices,
+    shipments, amount with / ex GST, avg ₹/parcel, charged weight, TDS @2% and
+    payable (before any disputes / CNs, which are entered per-invoice in the UI)."""
+    car = {}
+    for i in items:
+        c = i.get("carrier") or "Unknown"
+        g = car.setdefault(c, {"carrier": c, "invoices": set(), "shipments": 0,
+                               "amount": 0.0, "amount_ex_gst": 0.0, "weight": 0.0})
+        inv = i.get("invoice_number")
+        if inv:
+            g["invoices"].add(inv)
+        g["shipments"] += i["shipments"]
+        g["amount"] += i["amount"]
+        g["amount_ex_gst"] += i.get("amount_ex_gst") or 0.0
+        g["weight"] += i.get("weight_kg") or 0.0
+
+    rows = []
+    tot = {"invoices": 0, "shipments": 0, "amount": 0.0, "amount_ex_gst": 0.0,
+           "weight": 0.0, "tds": 0.0, "payable": 0.0}
+    for g in sorted(car.values(), key=lambda x: -x["amount"]):
+        amt = round(g["amount"], 2)
+        tds = round(amt * tds_rate / 100.0, 2)
+        rows.append({
+            "carrier": g["carrier"],
+            "invoices": len(g["invoices"]),
+            "shipments": g["shipments"],
+            "amount_with_gst": amt,
+            "amount_ex_gst": round(g["amount_ex_gst"], 2),
+            "per_parcel": round(amt / g["shipments"], 2) if g["shipments"] else None,
+            "weight": round(g["weight"], 1),
+            "tds": tds,
+            "payable": round(amt - tds, 2),
+        })
+        tot["invoices"] += len(g["invoices"])
+        tot["shipments"] += g["shipments"]
+        tot["amount"] += amt
+        tot["amount_ex_gst"] += g["amount_ex_gst"]
+        tot["weight"] += g["weight"]
+        tot["tds"] += tds
+        tot["payable"] += amt - tds
+    totals = {
+        "invoices": tot["invoices"], "shipments": tot["shipments"],
+        "amount_with_gst": round(tot["amount"], 2),
+        "amount_ex_gst": round(tot["amount_ex_gst"], 2),
+        "per_parcel": round(tot["amount"] / tot["shipments"], 2) if tot["shipments"] else None,
+        "weight": round(tot["weight"], 1),
+        "tds": round(tot["tds"], 2), "payable": round(tot["payable"], 2),
+    }
+    return {"rows": rows, "carrier_count": len(rows), "totals": totals, "tds_rate": tds_rate}
+
+
 def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
-                      awb2lane=None, order2lane=None):
+                      awb2lane=None, order2lane=None,
+                      awb2prod=None, order2prod=None, sku2vol=None):
     if awb2cat or sku2cat:
         _enrich(items, awb2cat or {}, sku2cat or {})
+
+    # Join each line to the SKU / sub-category of its shipment (from loaded
+    # BigQuery data) so spend can be analysed by product sub-category.
+    prod_matched = _attach_products(items, awb2prod, order2prod)
+    subcategory_analysis = _build_subcategory_analysis(items)
+    subcategory_analysis["matched_lines"] = prod_matched
+    subcategory_analysis["total_lines"] = len(items)
+
+    # Product-wise spend breakdown across the whole invoice (by SKU).
+    product_analysis = _build_product_analysis(items)
+
+    # Compare BlueDart's charged weight to the item-master billable weight to
+    # flag likely weight over-charges (dispute opportunities).
+    weight_dispute = _build_weight_dispute(items, sku2vol or {})
 
     # Join each line to its pickup/drop pincode (from the loaded shipment data)
     # so carrier prices can be compared on the same lane.
@@ -815,6 +1594,67 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
     month_carrier_order = [c["carrier"] for c in carriers]
     month_category_order = [c["category"] for c in categories]
 
+    # --- per-invoice reconciliation (management payable view) --------------
+    # Group billed lines by carrier + invoice number into one row per invoice.
+    # The raw invoice only gives us Amount with GST + dates; the dispute and
+    # credit-note (CN) adjustments are entered by the team in the UI. TDS is
+    # pre-filled at 2% of the billed amount (sec 194C) and is overridable.
+    TDS_RATE = 2.0
+    recon_map = {}
+    for i in items:
+        inv_no = i.get("invoice_number")
+        if not inv_no:
+            continue
+        key = (i.get("carrier") or "", inv_no)
+        g = recon_map.setdefault(key, {
+            "carrier": i.get("carrier") or "",
+            "invoice_number": inv_no,
+            "invoice_date": i.get("invoice_date") or "",
+            "service_month": i.get("service_month") or i.get("month_label") or "",
+            "service_month_key": i.get("service_month_key") or "",
+            "amount_with_gst": 0.0, "amount_ex_gst": 0.0, "shipments": 0,
+        })
+        g["amount_with_gst"] += i["amount"]
+        g["amount_ex_gst"] += i.get("amount_ex_gst") or 0.0
+        g["shipments"] += i["shipments"]
+        if not g["invoice_date"] and i.get("invoice_date"):
+            g["invoice_date"] = i["invoice_date"]
+        if not g["service_month"] and i.get("service_month"):
+            g["service_month"] = i["service_month"]
+
+    reconciliation = None
+    if recon_map:
+        rrows = []
+        for g in sorted(recon_map.values(),
+                        key=lambda x: (x["service_month_key"] or "zzzz",
+                                       x["carrier"], x["invoice_number"])):
+            amt = round(g["amount_with_gst"], 2)
+            rrows.append({
+                "carrier": g["carrier"],
+                "invoice_date": g["invoice_date"],
+                "invoice_number": g["invoice_number"],
+                "service_month": g["service_month"],
+                "shipments": g["shipments"],
+                "amount_with_gst": amt,
+                "amount_ex_gst": round(g["amount_ex_gst"], 2),
+                "tds": round(amt * TDS_RATE / 100.0, 2),
+                # Team-entered adjustments — default 0, edited in the UI.
+                "billing_dispute": 0.0, "weight_dispute": 0.0,
+                "billing_cn": 0.0, "weight_cn": 0.0, "lost_cn": 0.0,
+            })
+        reconciliation = {
+            "rows": rrows,
+            "tds_rate": TDS_RATE,
+            "invoice_count": len(rrows),
+            "total_amount": round(sum(r["amount_with_gst"] for r in rrows), 2),
+            "total_amount_ex_gst": round(sum(r["amount_ex_gst"] for r in rrows), 2),
+            "total_tds": round(sum(r["tds"] for r in rrows), 2),
+            "total_shipments": sum(r["shipments"] for r in rrows),
+            "subcategories": subcategory_analysis,
+            "products": product_analysis,
+            "weight_dispute": weight_dispute,
+        }
+
     return {
         "currency": "₹",
         "summary": {"total_spend": round(total_spend, 1), "shipments": total_ship,
@@ -828,4 +1668,5 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
         "months": months,
         "month_carriers": month_carrier_order,
         "month_categories": month_category_order,
+        "reconciliation": reconciliation,
     }
