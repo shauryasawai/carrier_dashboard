@@ -1395,6 +1395,8 @@ def build_carrier_comparison(items, tds_rate=2.0):
     shipments, amount with / ex GST, avg ₹/parcel, charged weight, TDS @2% and
     payable (before any disputes / CNs, which are entered per-invoice in the UI)."""
     car = {}
+    months = {}                 # month_key -> month_label
+    cmn = {}                    # (carrier, month_key) -> aggregates
     for i in items:
         c = i.get("carrier") or "Unknown"
         g = car.setdefault(c, {"carrier": c, "invoices": set(), "shipments": 0,
@@ -1406,6 +1408,15 @@ def build_carrier_comparison(items, tds_rate=2.0):
         g["amount"] += i["amount"]
         g["amount_ex_gst"] += i.get("amount_ex_gst") or 0.0
         g["weight"] += i.get("weight_kg") or 0.0
+        # per carrier x month
+        mk = i.get("service_month_key") or "zzzz"
+        months[mk] = i.get("service_month") or "Unknown"
+        cg = cmn.setdefault((c, mk), {"amount": 0.0, "amount_ex_gst": 0.0,
+                                      "shipments": 0, "weight": 0.0})
+        cg["amount"] += i["amount"]
+        cg["amount_ex_gst"] += i.get("amount_ex_gst") or 0.0
+        cg["shipments"] += i["shipments"]
+        cg["weight"] += i.get("weight_kg") or 0.0
 
     rows = []
     tot = {"invoices": 0, "shipments": 0, "amount": 0.0, "amount_ex_gst": 0.0,
@@ -1439,7 +1450,34 @@ def build_carrier_comparison(items, tds_rate=2.0):
         "weight": round(tot["weight"], 1),
         "tds": round(tot["tds"], 2), "payable": round(tot["payable"], 2),
     }
-    return {"rows": rows, "carrier_count": len(rows), "totals": totals, "tds_rate": tds_rate}
+    # Month-wise: carrier x month cells, for trend / comparison charts.
+    month_keys = sorted(months)
+    month_list = [{"key": mk, "label": months[mk]} for mk in month_keys]
+    by_carrier_month = {}
+    for (c, mk), cg in cmn.items():
+        d = by_carrier_month.setdefault(c, {})
+        d[mk] = {
+            "amount_with_gst": round(cg["amount"], 2),
+            "amount_ex_gst": round(cg["amount_ex_gst"], 2),
+            "shipments": cg["shipments"],
+            "weight": round(cg["weight"], 1),
+            "per_parcel": round(cg["amount"] / cg["shipments"], 2) if cg["shipments"] else None,
+            "per_kg": round(cg["amount"] / cg["weight"], 2) if cg["weight"] else None,
+        }
+    month_totals = {}
+    for mk in month_keys:
+        a = sum(cmn[(c, mk)]["amount"] for c in car if (c, mk) in cmn)
+        s = sum(cmn[(c, mk)]["shipments"] for c in car if (c, mk) in cmn)
+        w = sum(cmn[(c, mk)]["weight"] for c in car if (c, mk) in cmn)
+        month_totals[mk] = {
+            "amount_with_gst": round(a, 2), "shipments": s, "weight": round(w, 1),
+            "per_parcel": round(a / s, 2) if s else None,
+            "per_kg": round(a / w, 2) if w else None,
+        }
+
+    return {"rows": rows, "carrier_count": len(rows), "totals": totals,
+            "tds_rate": tds_rate, "months": month_list,
+            "by_carrier_month": by_carrier_month, "month_totals": month_totals}
 
 
 def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,

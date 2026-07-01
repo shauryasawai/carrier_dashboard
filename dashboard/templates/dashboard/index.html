@@ -930,6 +930,17 @@ body {
 /* A fixed-track grid keeps every card the same width and stops the last row's
    cards from stretching to fill the row (the flex-grow problem). Cards occupy
    one cell each; any leftover cells in the final row stay empty. */
+/* ---- Carrier trends (month-wise) ---- */
+#invCarrierMonthPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
+.cmp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  margin-right: 8px; vertical-align: middle; }
+#invCarrierMonthTable { width: 100%; font-size: 12.5px; border-collapse: separate; border-spacing: 0; }
+#invCarrierMonthTable th, #invCarrierMonthTable td { padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+#invCarrierMonthTable th.num, #invCarrierMonthTable td.num { text-align: right; font-variant-numeric: tabular-nums; }
+#invCarrierMonthTable thead th { background: var(--paper-2); border-bottom: 1px solid var(--line-strong); }
+#invCarrierMonthTable tbody tr:hover td { background: var(--paper-2); }
+#invCarrierMonthTable tfoot th, #invCarrierMonthTable tfoot td { background: var(--paper-2); border-top: 2px solid var(--line-strong); font-weight: 600; }
+
 /* ---- Carrier comparison table ---- */
 #invCarrierCmpTable { width: 100%; font-size: 12.5px; border-collapse: separate; border-spacing: 0; }
 #invCarrierCmpTable th, #invCarrierCmpTable td { padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
@@ -952,6 +963,9 @@ body {
    gracefully on browsers without :has() (stays at the default 1120px). */
 body:has(#viewCost:not([hidden])) .wrap,
 body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
+/* Use more of the screen for the (wide) invoice tables — trim side padding. */
+body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px; }
+#viewCost .panel { padding-left: 16px; padding-right: 16px; }
 
 /* ---- Invoice reconciliation table ---- */
 #invReconPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
@@ -1414,6 +1428,12 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
 
         <div id="invFileChips" class="inv-chips"></div>
 
+        <!-- ===== INVOICE SUMMARY (whole-number headline) — first metric ===== -->
+        <div class="kpi-group" id="invReconKpis" hidden>
+          <div class="kpi-label">Invoice summary</div>
+          <div class="stat-row stat-row--primary" id="invReconCards"></div>
+        </div>
+
         <!-- ===== CARRIER COMPARISON (all loaded carriers, side by side) ===== -->
         <div class="panel" id="invCarrierCmpPanel" hidden>
           <div class="panel-head">
@@ -1425,10 +1445,27 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
           </div>
         </div>
 
-        <!-- ===== INVOICE SUMMARY (whole-number headline) ===== -->
-        <div class="kpi-group" id="invReconKpis" hidden>
-          <div class="kpi-label">Invoice summary</div>
-          <div class="stat-row stat-row--primary" id="invReconCards"></div>
+        <!-- ===== CARRIER TRENDS · month-wise ===== -->
+        <div class="panel" id="invCarrierMonthPanel" hidden>
+          <div class="panel-head">
+            <h3>Carrier trends &middot; month-wise</h3>
+            <p class="panel-sub" id="invCarrierMonthSub">compare carriers across months &mdash; same carrier over time and carriers side by side</p>
+            <label class="inv-carrier-filter" style="margin-left:auto">
+              <span>Metric</span>
+              <select id="invCmpMetric" aria-label="Comparison metric">
+                <option value="amount_with_gst">Amount with GST</option>
+                <option value="amount_ex_gst">Amount ex GST</option>
+                <option value="shipments">Shipments (AWBs)</option>
+                <option value="per_parcel">Avg ₹ / parcel</option>
+                <option value="per_kg">Charge / kg</option>
+                <option value="weight">Charged wt (kg)</option>
+              </select>
+            </label>
+          </div>
+          <div class="chart-box" style="--h: 340px"><canvas id="cCarrierMonth"></canvas></div>
+          <div class="table-scroll">
+            <table class="score-table" id="invCarrierMonthTable"></table>
+          </div>
         </div>
 
         <!-- ===== INVOICE RECONCILIATION (management payable view) ===== -->
@@ -2719,6 +2756,19 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
 
   var INK = "#16263a", FAINT = "#8a98a6", LINE = "rgba(22,38,58,.07)";
   var PALETTE = ["#0fb6a9", "#1f9d76", "#f2994a", "#5b8def", "#0a8c84", "#e5564b"];
+
+  // Vibrant, high-contrast per-carrier colours (fixed for known carriers so a
+  // carrier keeps the same colour across chart + matrix; index fallback else).
+  var CARRIER_COLORS = {
+    "BlueDart": "#2563eb", "Delhivery": "#e11d48", "Swift": "#f59e0b",
+    "ElasticRun": "#10b981", "Shadowfax": "#7c3aed", "Safexpress": "#06b6d4",
+    "SkyAir": "#ec4899", "Urban Bolt": "#f97316"
+  };
+  var VIBRANT = ["#2563eb", "#e11d48", "#f59e0b", "#10b981", "#7c3aed",
+                 "#06b6d4", "#ec4899", "#f97316", "#6366f1", "#84cc16"];
+  function carrierColor(name, i) {
+    return CARRIER_COLORS[name] || VIBRANT[(i || 0) % VIBRANT.length];
+  }
   var whcChart = null;
 
   function hbarOpts() {
@@ -3113,6 +3163,7 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
     renderInvChips(rep.files);
     renderInvRecon(rep);
     renderInvCarrierCmp(rep);
+    renderInvCarrierMonth(rep);
     // When the upload yields a per-invoice reconciliation (e.g. BlueDart B2C),
     // that payable view is the whole picture and the carrier cost-analysis
     // panels stay hidden. For files without invoice-level data we fall back to
@@ -3246,6 +3297,119 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
     $("invCarrierCmpTable").innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
   }
 
+  // Month-wise carrier comparison — chart + carrier×month matrix, with a metric
+  // selector so you can compare the same carrier over time and carriers side by
+  // side. Uses whatever months are present across the loaded invoices.
+  var carrierMonthChart = null;
+  function invCmpMetric() { var s = $("invCmpMetric"); return s ? s.value : "amount_with_gst"; }
+  function invCmpIsMoney(m) {
+    return m === "amount_with_gst" || m === "amount_ex_gst" || m === "per_parcel" || m === "per_kg";
+  }
+  function invCmpFmt(m, v) {
+    if (v == null) return "—";
+    return invCmpIsMoney(m) ? inr(v) : Math.round(v).toLocaleString("en-IN");
+  }
+  function renderInvCarrierMonth(rep) {
+    var panel = $("invCarrierMonthPanel");
+    if (!panel) return;
+    var cc = rep && rep.carrier_comparison;
+    if (!cc || !cc.months || !cc.months.length || (cc.carrier_count || 0) < 1) {
+      panel.hidden = true;
+      if (carrierMonthChart) { try { carrierMonthChart.destroy(); } catch (e) {} carrierMonthChart = null; }
+      return;
+    }
+    panel.hidden = false;
+    var metric = invCmpMetric();
+    var money = invCmpIsMoney(metric);
+    var ratio = (metric === "per_parcel" || metric === "per_kg");
+    var carriers = (cc.rows || []).map(function (r) { return r.carrier; });
+    var months = cc.months, bcm = cc.by_carrier_month || {}, mt = cc.month_totals || {};
+    function cell(c, mk) { var d = (bcm[c] || {})[mk]; return d ? d[metric] : null; }
+
+    var sel = $("invCmpMetric");
+    var metricName = (sel && sel.selectedOptions && sel.selectedOptions[0]) ? sel.selectedOptions[0].text : metric;
+    var sub = $("invCarrierMonthSub");
+    if (sub) sub.textContent = carriers.length + " carriers · " + months.length +
+      " month" + (months.length === 1 ? "" : "s") + " · " + metricName;
+
+    // ---- chart: grouped bars, x = month, one series per carrier ----
+    var labels = months.map(function (m) { return m.label; });
+    var datasets = carriers.map(function (c, i) {
+      var col = carrierColor(c, i);
+      return {
+        label: c,
+        data: months.map(function (m) { var v = cell(c, m.key); return v == null ? 0 : v; }),
+        backgroundColor: col, hoverBackgroundColor: col,
+        borderColor: col, borderWidth: 0,
+        borderRadius: 7, borderSkipped: false, maxBarThickness: 60,
+        categoryPercentage: 0.68, barPercentage: 0.9
+      };
+    });
+    if (carrierMonthChart) { try { carrierMonthChart.destroy(); } catch (e) {} carrierMonthChart = null; }
+    var ctx = $("cCarrierMonth");
+    if (ctx && window.Chart) {
+      carrierMonthChart = new Chart(ctx, {
+        type: "bar",
+        data: { labels: labels, datasets: datasets },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          animation: { duration: 700, easing: "easeOutQuart" },
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: { position: "top", align: "center",
+              labels: { color: INK, usePointStyle: true, pointStyle: "rectRounded",
+                        boxWidth: 12, boxHeight: 12, padding: 16,
+                        font: { family: "Inter", size: 13, weight: "600" } } },
+            tooltip: {
+              backgroundColor: "#16263a", padding: 11, cornerRadius: 8,
+              titleFont: { family: "Inter", size: 13, weight: "700" },
+              bodyFont: { family: "Spline Sans Mono", size: 12.5 },
+              callbacks: { label: function (c) {
+                var v = c.parsed.y;
+                return "  " + c.dataset.label + ": " + (money ? "₹" + Math.round(v).toLocaleString("en-IN") : Math.round(v).toLocaleString("en-IN"));
+              } }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { color: INK, font: { family: "Inter", size: 13, weight: "600" } } },
+            y: { grid: { color: LINE }, border: { display: false },
+                 ticks: { color: FAINT, font: { family: "Spline Sans Mono", size: 11 },
+                 callback: function (v) { return money ? "₹" + Number(v).toLocaleString("en-IN") : Number(v).toLocaleString("en-IN"); } } }
+          }
+        }
+      });
+    }
+
+    // ---- matrix: rows = carriers, cols = months, + Total ----
+    var head = '<thead><tr><th scope="col">Carrier</th>';
+    months.forEach(function (m) { head += '<th scope="col" class="num">' + esc(m.label) + '</th>'; });
+    head += '<th scope="col" class="num">Total</th></tr></thead>';
+    var body = carriers.map(function (c, ci) {
+      var sum = 0, has = false;
+      var tds = months.map(function (m) {
+        var v = cell(c, m.key);
+        if (v != null && !ratio) { sum += v; has = true; }
+        return '<td class="num">' + invCmpFmt(metric, v) + '</td>';
+      }).join("");
+      var rr = (cc.rows || []).filter(function (x) { return x.carrier === c; })[0];
+      var tot = ratio
+        ? (metric === "per_parcel" ? (rr ? inr(rr.per_parcel) : "—")
+           : (rr && rr.weight ? inr(rr.amount_with_gst / rr.weight) : "—"))
+        : invCmpFmt(metric, has ? sum : null);
+      var dot = '<span class="cmp-dot" style="background:' + carrierColor(c, ci) + '"></span>';
+      return '<tr><td>' + dot + '<b>' + esc(c) + '</b></td>' + tds + '<td class="num"><b>' + tot + '</b></td></tr>';
+    }).join("");
+    var footcells = months.map(function (m) {
+      var d = mt[m.key]; return '<td class="num"><b>' + invCmpFmt(metric, d ? d[metric] : null) + '</b></td>';
+    }).join("");
+    var t = cc.totals, grand;
+    if (ratio) grand = metric === "per_parcel" ? inr(t.per_parcel) : (t.weight ? inr(t.amount_with_gst / t.weight) : "—");
+    else { var g = 0, h = false; months.forEach(function (m) { var d = mt[m.key]; if (d && d[metric] != null) { g += d[metric]; h = true; } }); grand = invCmpFmt(metric, h ? g : null); }
+    var foot = '<tfoot><tr class="recon-foot"><th scope="row">Total</th>' + footcells +
+      '<td class="num"><b>' + grand + '</b></td></tr></tfoot>';
+    $("invCarrierMonthTable").innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
+  }
+
   function renderInvRecon(rep) {
     var panel = $("invReconPanel");
     var rc = rep.reconciliation;
@@ -3351,10 +3515,15 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
     if (hint) hint.hidden = true;
     if (grid) grid.hidden = false;
 
-    if (sub) sub.textContent = wd.flagged.toLocaleString("en-IN") + " of " +
-      wd.checked.toLocaleString("en-IN") + " checked AWBs over-charged ≥ " +
-      wd.slab + " kg · " + wd.excess_kg.toLocaleString("en-IN") + " kg excess · est. " +
-      inr(wd.est_overcharge) + " disputable · vs item-master billable weight";
+    if (sub) {
+      var cov = wd.total_lines ? Math.round(wd.checked / wd.total_lines * 100) : 0;
+      sub.textContent = wd.flagged.toLocaleString("en-IN") + " of " +
+        wd.checked.toLocaleString("en-IN") + " checked AWBs over-charged ≥ " +
+        wd.slab + " kg · " + wd.excess_kg.toLocaleString("en-IN") + " kg excess · est. " +
+        inr(wd.est_overcharge) + " disputable · only " +
+        wd.checked.toLocaleString("en-IN") + " of " + (wd.total_lines || 0).toLocaleString("en-IN") +
+        " AWBs (" + cov + "%) had a master SKU to check";
+    }
 
     // By invoice
     var ih = '<thead><tr><th scope="col">Invoice #</th>' +
@@ -4085,6 +4254,9 @@ body:has(#viewCost:not([hidden])) .masthead-inner { max-width: none; }
     if ($("invAwbExport")) $("invAwbExport").addEventListener("click", exportInvoiceAwbs);
     if ($("invProductSearch")) $("invProductSearch").addEventListener("input", function () {
       if (invReport && invReport.reconciliation) renderInvSubcats(invReport.reconciliation);
+    });
+    if ($("invCmpMetric")) $("invCmpMetric").addEventListener("change", function () {
+      if (invReport) renderInvCarrierMonth(invReport);
     });
     var d = $("invDrop");
     if (d) {
