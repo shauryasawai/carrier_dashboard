@@ -1429,6 +1429,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <p>Upload carrier invoices (<code>.xlsx</code> / <code>.xlsb</code> / <code>.csv</code>) to see who charges what per category &amp; SKU.</p>
           <label class="btn-primary" for="invFileInput">Upload invoices</label>
           <input type="file" id="invFileInput" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv" multiple hidden>
+          <button type="button" class="btn-ghost" id="invDriveImportEmpty" style="margin-top:10px">☁ Import from Google Drive</button>
           <p class="upload-hint" id="invHint"></p>
         </div>
       </section>
@@ -1457,6 +1458,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
               </select>
             </label>
             <span class="inv-tb-btngroup">
+              <button type="button" class="btn-ghost" id="invDriveImport" title="Import invoices from the shared Google Drive folder">☁ Import from Drive</button>
               <label class="btn-ghost" for="invMasterInput" title="Replace the stored item master">⤒ Update master</label>
               <input type="file" id="invMasterInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
               <label class="btn-primary-sm" for="invAddInput">＋ Add invoices</label>
@@ -1695,6 +1697,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     window.INVOICES_URL = "{% url 'process_invoices' %}";
     window.INVOICE_AWBS_URL = "{% url 'export_invoice_awbs' %}";
     window.MASTER_URL = "{% url 'master_config' %}";
+    window.DRIVE_URL = "{% url 'import_from_drive' %}";
     window.EXPORT_URL = "{% url 'export_shipments' %}";
     window.SLA_URL = "{% url 'sla_config' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
@@ -3121,8 +3124,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   var invCharts = [];
   var invCarrier = "all";   // active carrier filter ("all" = every carrier)
 
-  function invPost(formData) {
-    return fetch(window.INVOICES_URL, {
+  function invPost(formData, url) {
+    return fetch(url || window.INVOICES_URL, {
       method: "POST",
       headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" },
       body: formData
@@ -3160,6 +3163,42 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       finishLoading();
       if (rep.warnings && rep.warnings.length) invSetHint(rep.warnings.join(" · "), "err");
     }).catch(function (err) { invSetHint(err.message, "err"); failLoading(err.message); });
+  }
+
+  // Import invoices straight from a shared Google Drive folder (server fetches
+  // the files, so no upload-size limit). Remembers the folder for the session.
+  var driveFolder = "";
+  function importFromDrive() {
+    var fd = new FormData();
+    if (driveFolder) fd.append("folder", driveFolder);
+    invSetHint("Importing from Google Drive…", null);
+    showLoading("Importing from Google Drive…", "Fetching & parsing invoice files");
+    invCarrier = "all";
+    invPost(fd, window.DRIVE_URL).then(function (rep) {
+      finishLoading();
+      if (rep && rep.master_only) {
+        if (rep.master) setMasterStatus(rep.master);
+        invSetHint("Item master updated from Drive" +
+          (rep.master && rep.master.sku_count ? " · " + rep.master.sku_count.toLocaleString("en-IN") + " SKUs" : "") +
+          " · add invoices to see the analysis", null);
+        return;
+      }
+      invReport = rep;
+      $("invUpload").hidden = true; $("invDash").hidden = false;
+      renderCost(rep);
+      var msg = (rep.imported_from_drive ? rep.imported_from_drive + " file(s) imported from Drive" : "");
+      if (rep.warnings && rep.warnings.length) invSetHint((msg ? msg + " · " : "") + rep.warnings.join(" · "), "err");
+      else if (msg) invSetHint(msg, null);
+    }).catch(function (err) {
+      failLoading(err.message);
+      // Only prompt when the folder truly isn't configured — NOT when Drive
+      // read/access failed (that error also contains the word "folder").
+      if (/no drive folder set|GDRIVE_INVOICE_FOLDER/i.test(err.message) && !driveFolder) {
+        var f = window.prompt("Paste the Google Drive folder link (or ID) that holds the invoices:");
+        if (f && f.trim()) { driveFolder = f.trim(); importFromDrive(); return; }
+      }
+      invSetHint(err.message, "err");
+    });
   }
 
   function clearInvoices() {
@@ -3593,6 +3632,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       '<th scope="col" class="num">Excess kg</th>' +
       '<th scope="col" class="num">Est. over-charge</th></tr></thead>';
     var prows = wd.by_product || [];
+    var pcount = wd.product_count || prows.length;
+    var capped = pcount > prows.length;
     var pb = prows.length ? prows.map(function (r) {
       return '<tr><td>' + esc(r.name) + '</td>' +
         '<td class="mono">' + esc(r.sku || '—') + '</td>' +
@@ -3600,14 +3641,15 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<td class="num">' + r.excess_kg.toLocaleString("en-IN") + '</td>' +
         '<td class="num"><b>' + inr(r.est_overcharge) + '</b></td></tr>';
     }).join("") : '<tr><td class="empty" colspan="5">No over-charges flagged.</td></tr>';
-    var ptot = prows.reduce(function (a, r) {
-      a.f += r.flagged; a.kg += r.excess_kg; a.est += r.est_overcharge; return a;
-    }, { f: 0, kg: 0, est: 0 });
+    // Totals reflect ALL flagged products (not just the top rows shown), so this
+    // ties out to the "By invoice number" total above.
+    var plabel = "Total · " + pcount.toLocaleString("en-IN") + " products" +
+      (capped ? " (top " + prows.length + " shown)" : "");
     var pfoot = prows.length ? '<tfoot><tr class="recon-foot">' +
-      '<th scope="row" colspan="2">Total · ' + (wd.product_count || prows.length).toLocaleString("en-IN") + ' products</th>' +
-      '<td class="num">' + ptot.f.toLocaleString("en-IN") + '</td>' +
-      '<td class="num">' + (Math.round(ptot.kg * 10) / 10).toLocaleString("en-IN") + '</td>' +
-      '<td class="num"><b>' + inr(ptot.est) + '</b></td></tr></tfoot>' : '';
+      '<th scope="row" colspan="2">' + plabel + '</th>' +
+      '<td class="num">' + (wd.flagged || 0).toLocaleString("en-IN") + '</td>' +
+      '<td class="num">' + (wd.excess_kg || 0).toLocaleString("en-IN") + '</td>' +
+      '<td class="num"><b>' + inr(wd.est_overcharge || 0) + '</b></td></tr></tfoot>' : '';
     $("invWtProdTable").innerHTML = ph + '<tbody>' + pb + '</tbody>' + pfoot;
   }
 
@@ -4335,6 +4377,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if ($("invMasterInput")) $("invMasterInput").addEventListener("change", function (e) {
       updateItemMaster(e.target.files && e.target.files[0]); e.target.value = "";
     });
+    if ($("invDriveImport")) $("invDriveImport").addEventListener("click", importFromDrive);
+    if ($("invDriveImportEmpty")) $("invDriveImportEmpty").addEventListener("click", importFromDrive);
     refreshMasterStatus();
     if ($("invProductSearch")) $("invProductSearch").addEventListener("input", function () {
       if (invReport && invReport.reconciliation) renderInvSubcats(invReport.reconciliation);

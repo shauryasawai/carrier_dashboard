@@ -530,6 +530,128 @@ def process_upload(request):
     )
 
 
+def _ingest_into_cache(name, data, errors):
+    """Parse one invoice/master file's bytes and merge it into _INVOICE_CACHE.
+    Shared by the browser upload and the Google Drive import. Appends a message
+    to `errors` on failure; returns True when something was ingested."""
+    if not str(name).lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")):
+        errors.append(f"{name}: unsupported file type")
+        return None
+    try:
+        kind, payload = invoices.ingest(data or b"", name)
+    except ValueError as exc:
+        errors.append(f"{name}: {exc}")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        errors.append(f"{name}: could not read ({exc})")
+        return None
+
+    if kind == "master":
+        _INVOICE_CACHE["awb2cat"].update(payload.get("awb2cat", {}))
+        _INVOICE_CACHE["sku2cat"].update(payload.get("sku2cat", {}))
+        _INVOICE_CACHE["sku2vol"].update(payload.get("sku2vol", {}))
+        entries = (len(payload.get("awb2cat", {})) + len(payload.get("sku2cat", {}))
+                   + len(payload.get("sku2vol", {})))
+        _INVOICE_CACHE["files"].append(
+            {"name": name, "carrier": "Reference / master", "lines": entries,
+             "spend": 0, "kind": "master"})
+    else:  # invoice
+        spend = round(sum(i["amount"] for i in payload), 1)
+        carrier = payload[0]["carrier"] if payload else "Unknown"
+        # Each file is one billing period; tag every line with the month derived
+        # from its file name so the cost report can compare periods.
+        mkey, mlabel = invoices.month_from_filename(name)
+        for it in payload:
+            it["month"] = mkey
+            it["month_label"] = mlabel
+        _INVOICE_CACHE["items"].extend(payload)
+        _INVOICE_CACHE["files"].append(
+            {"name": name, "carrier": carrier, "lines": len(payload),
+             "spend": spend, "kind": "invoice", "month": mlabel})
+    return kind
+
+
+@auth.team_required
+@require_POST
+def import_from_drive(request):
+    """Import invoice/master files from a shared Google Drive folder, parse them
+    server-side, and return the report. Bypasses request-body size limits (the
+    server downloads the files) and supports monthly auto-import.
+
+    Params: `folder` (optional folder ID/link; else GDRIVE_INVOICE_FOLDER env),
+    `append=1` to add to the current set instead of replacing."""
+    from . import gdrive
+    if not gdrive.is_configured():
+        return JsonResponse(
+            {"error": "Google Drive isn't configured (no service-account "
+                      "credentials). See setup notes."}, status=400)
+    fid = gdrive.folder_id(request.POST.get("folder"))
+    if not fid:
+        return JsonResponse(
+            {"error": "No Drive folder set. Pass a folder link or set "
+                      "GDRIVE_INVOICE_FOLDER."}, status=400)
+    try:
+        files = gdrive.list_files(fid)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Drive listing failed")
+        return JsonResponse(
+            {"error": f"Could not read the Drive folder (is it shared with the "
+                      f"service account, and the Drive API enabled?): {exc}"}, status=502)
+
+    invoice_files = [f for f in files if gdrive.supported(f.get("name"))]
+    if not invoice_files:
+        return JsonResponse(
+            {"error": "No .xlsx / .xlsb / .csv files found in that Drive folder."},
+            status=400)
+
+    if request.POST.get("append") != "1":
+        _reset_invoice_cache()
+
+    errors = []
+    master_saved = False
+    for f in invoice_files:
+        name = f.get("name")
+        try:
+            data = gdrive.download(f["id"], f.get("mimeType"))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: download failed ({exc})")
+            continue
+        kind = _ingest_into_cache(name, data, errors)
+        # A master file found in Drive becomes the persisted default item master
+        # (so it's remembered across restarts, like the "Update item master"
+        # upload). Best-effort: a read-only filesystem just skips this.
+        if kind == "master":
+            try:
+                os.makedirs(os.path.dirname(_MASTER_PATH), exist_ok=True)
+                with open(_MASTER_PATH, "wb") as fh:
+                    fh.write(data)
+                _MASTER_CACHE["mtime"] = None
+                _MASTER_CACHE["maps"] = None
+                master_saved = True
+            except OSError:
+                pass
+
+    if not _INVOICE_CACHE["items"]:
+        if master_saved:
+            dm = _default_master()
+            return JsonResponse({"ok": True, "master_only": True,
+                                 "master": {"sku_count": dm["sku_count"],
+                                            "updated_at": dm["updated_at"]},
+                                 "warnings": errors})
+        msg = ("No billed invoice lines found in the Drive files. "
+               + (" · ".join(errors) if errors else ""))
+        return JsonResponse({"error": msg}, status=400)
+
+    _INVOICE_CACHE["version"] += 1
+    _INVOICE_CACHE["report_cache"] = {}
+    _refresh_invoice_product_map()
+    report = _invoice_report()
+    report["imported_from_drive"] = len(invoice_files)
+    if errors:
+        report["warnings"] = errors
+    return JsonResponse(report)
+
+
 @auth.team_required
 @require_POST
 def process_invoices(request):
@@ -557,46 +679,11 @@ def process_invoices(request):
 
     errors = []
     for up in uploads:
-        name = up.name
-        if not name.lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")):
-            errors.append(f"{name}: unsupported file type")
-            continue
         try:
             up.seek(0)
         except Exception:  # noqa: BLE001
             pass
-        data = up.read() or b""
-        try:
-            kind, payload = invoices.ingest(data, name)
-        except ValueError as exc:
-            errors.append(f"{name}: {exc}")
-            continue
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: could not read ({exc})")
-            continue
-
-        if kind == "master":
-            _INVOICE_CACHE["awb2cat"].update(payload.get("awb2cat", {}))
-            _INVOICE_CACHE["sku2cat"].update(payload.get("sku2cat", {}))
-            _INVOICE_CACHE["sku2vol"].update(payload.get("sku2vol", {}))
-            entries = (len(payload.get("awb2cat", {})) + len(payload.get("sku2cat", {}))
-                       + len(payload.get("sku2vol", {})))
-            _INVOICE_CACHE["files"].append(
-                {"name": name, "carrier": "Reference / master", "lines": entries,
-                 "spend": 0, "kind": "master"})
-        else:  # invoice
-            spend = round(sum(i["amount"] for i in payload), 1)
-            carrier = payload[0]["carrier"] if payload else "Unknown"
-            # Each file is one billing period; tag every line with the month
-            # derived from its file name so the cost report can compare periods.
-            mkey, mlabel = invoices.month_from_filename(name)
-            for it in payload:
-                it["month"] = mkey
-                it["month_label"] = mlabel
-            _INVOICE_CACHE["items"].extend(payload)
-            _INVOICE_CACHE["files"].append(
-                {"name": name, "carrier": carrier, "lines": len(payload),
-                 "spend": spend, "kind": "invoice", "month": mlabel})
+        _ingest_into_cache(up.name, up.read() or b"", errors)
 
     if not _INVOICE_CACHE["items"]:
         msg = ("No billed invoice lines found. "

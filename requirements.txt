@@ -6,6 +6,8 @@ gunicorn
 whitenoise
 google-cloud-bigquery
 google-auth
+# Google Drive ingestion (pull invoice files from a shared Drive folder).
+google-api-python-client
 # NOTE: the fast columnar download (BigQuery Storage API + Arrow) is intentionally
 # NOT installed. The target project's service account doesn't have the BigQuery
 # Storage Read API enabled, and in that case `to_arrow(create_bqstorage_client=True)`
