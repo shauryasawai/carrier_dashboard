@@ -1,7 +1,9 @@
 import csv
+import datetime
 import io
 import json
 import logging
+import os
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
@@ -12,6 +14,43 @@ from . import auth, bq, invoices, tat
 from .kpi import build_report, filter_records, parse_workbook, reclassify
 
 logger = logging.getLogger(__name__)
+
+# Persisted default item master (SKU -> volumetric/billable weight + category)
+# used for the weight-dispute comparison, so it doesn't have to be re-uploaded
+# each session. Replaceable via the "Update item master" upload (master_config).
+_MASTER_PATH = os.path.join(os.path.dirname(__file__), "data", "item_master.xlsx")
+_MASTER_CACHE = {"mtime": None, "maps": None}
+
+
+def _default_master():
+    """Parse the persisted item master (cached by file mtime) into
+    {awb2cat, sku2cat, sku2vol, sku_count, updated_at}. Returns empty maps when
+    no master file is present."""
+    empty = {"awb2cat": {}, "sku2cat": {}, "sku2vol": {}, "sku_count": 0, "updated_at": None}
+    try:
+        st = os.stat(_MASTER_PATH)
+    except OSError:
+        _MASTER_CACHE["mtime"] = None
+        _MASTER_CACHE["maps"] = None
+        return empty
+    if _MASTER_CACHE["maps"] is not None and _MASTER_CACHE["mtime"] == st.st_mtime:
+        return _MASTER_CACHE["maps"]
+    maps = dict(empty)
+    try:
+        with open(_MASTER_PATH, "rb") as fh:
+            data = fh.read()
+        kind, payload = invoices.ingest(data, os.path.basename(_MASTER_PATH))
+        if kind == "master":
+            maps["awb2cat"] = payload.get("awb2cat", {})
+            maps["sku2cat"] = payload.get("sku2cat", {})
+            maps["sku2vol"] = payload.get("sku2vol", {})
+    except Exception:  # noqa: BLE001 - a bad master file must not break the report
+        logger.exception("Default item master parse failed")
+    maps["sku_count"] = len(maps["sku2vol"])
+    maps["updated_at"] = datetime.datetime.fromtimestamp(st.st_mtime).strftime("%d %b %Y %H:%M")
+    _MASTER_CACHE["mtime"] = st.st_mtime
+    _MASTER_CACHE["maps"] = maps
+    return maps
 
 # client can re-filter without re-uploading. Single-process dev use.
 # "window" is the date range the loaded data covers (BigQuery load window),
@@ -133,12 +172,24 @@ def _invoice_report(carrier_filter=None):
 
     awb2lane, order2lane = _lane_maps()
     awb2prod, order2prod = _invoice_product_maps()
+    # Merge the persisted default item master with any master uploaded this
+    # session (session entries override), so weight-dispute comparison works
+    # without re-uploading the master every time.
+    dm = _default_master()
+    eff_awb2cat = dict(dm["awb2cat"]); eff_awb2cat.update(_INVOICE_CACHE.get("awb2cat") or {})
+    eff_sku2cat = dict(dm["sku2cat"]); eff_sku2cat.update(_INVOICE_CACHE.get("sku2cat") or {})
+    eff_sku2vol = dict(dm["sku2vol"]); eff_sku2vol.update(_INVOICE_CACHE.get("sku2vol") or {})
     report = invoices.build_cost_report(
         selected, _INVOICE_CACHE["files"],
-        _INVOICE_CACHE["awb2cat"], _INVOICE_CACHE["sku2cat"],
+        eff_awb2cat, eff_sku2cat,
         awb2lane=awb2lane, order2lane=order2lane,
         awb2prod=awb2prod, order2prod=order2prod,
-        sku2vol=_INVOICE_CACHE.get("sku2vol"))
+        sku2vol=eff_sku2vol)
+    report["master"] = {
+        "sku_count": len(eff_sku2vol),
+        "updated_at": dm["updated_at"],
+        "source": "uploaded" if _INVOICE_CACHE.get("sku2vol") else "default",
+    }
     report["all_carriers"] = all_carriers
     report["carrier_filter"] = active
     report["prod_window"] = _INVOICE_CACHE.get("prod_window")
@@ -610,6 +661,50 @@ def export_invoice_awbs(request):
     resp = HttpResponse(buf.getvalue(), content_type="text/csv; charset=utf-8")
     resp["Content-Disposition"] = 'attachment; filename="invoice_awb_detail.csv"'
     return resp
+
+
+@auth.team_required
+@require_POST
+def master_config(request):
+    """View or replace the persisted item master (SKU -> volumetric weight) used
+    for the weight-dispute comparison.
+
+    actions: get (status) | upload (replace with a new .xlsx/.csv). The uploaded
+    file is validated as a recognised master (must yield SKU volumetric weights)
+    before it replaces the stored one, and the invoice report cache is cleared so
+    the new weights apply immediately."""
+    action = request.POST.get("action", "get")
+    if action == "upload":
+        upload = request.FILES.get("file")
+        if upload is None:
+            return JsonResponse({"error": "No file uploaded."}, status=400)
+        if not upload.name.lower().endswith((".xlsx", ".xlsm", ".csv", ".tsv")):
+            return JsonResponse({"error": "Upload a .xlsx or .csv item master."}, status=400)
+        data = upload.read() or b""
+        try:
+            kind, payload = invoices.ingest(data, upload.name)
+        except Exception as exc:  # noqa: BLE001
+            return JsonResponse({"error": f"Could not read the file: {exc}"}, status=400)
+        if kind != "master" or not payload.get("sku2vol"):
+            return JsonResponse(
+                {"error": "This file isn't a recognised item master — it needs a "
+                          "SKU column and a volumetric/billable weight column."},
+                status=400)
+        try:
+            os.makedirs(os.path.dirname(_MASTER_PATH), exist_ok=True)
+            with open(_MASTER_PATH, "wb") as fh:
+                fh.write(data)
+        except OSError as exc:
+            return JsonResponse({"error": f"Could not save the master: {exc}"}, status=500)
+        _MASTER_CACHE["mtime"] = None
+        _MASTER_CACHE["maps"] = None
+        # New weights -> invalidate cached invoice reports.
+        _INVOICE_CACHE["version"] += 1
+        _INVOICE_CACHE["report_cache"] = {}
+
+    dm = _default_master()
+    return JsonResponse({"ok": True, "loaded": dm["sku_count"] > 0,
+                         "sku_count": dm["sku_count"], "updated_at": dm["updated_at"]})
 
 
 @auth.team_required

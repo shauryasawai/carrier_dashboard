@@ -934,6 +934,33 @@ body {
 #invCarrierMonthPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 .cmp-dot { display: inline-block; width: 10px; height: 10px; border-radius: 3px;
   margin-right: 8px; vertical-align: middle; }
+/* ---- Structured invoice toolbar ---- */
+.inv-toolbar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 14px 20px; background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; padding: 14px 18px; box-shadow: var(--shadow); margin-bottom: 14px;
+}
+.inv-tb-info { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+.inv-tb-stat { display: flex; flex-direction: column; gap: 3px; }
+.inv-tb-k { font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint); }
+.inv-tb-v { font-family: var(--display); font-weight: 600; font-size: 15px; color: var(--ink);
+  white-space: nowrap; }
+.inv-tb-v.ok { color: var(--accent-deep); }
+.inv-tb-v.warn { color: var(--bad); }
+.inv-tb-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 0; }
+.inv-tb-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.inv-tb-btngroup { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.btn-primary-sm {
+  cursor: pointer; background: var(--accent); color: #fff; border: 1px solid var(--accent);
+  border-radius: 8px; padding: 7px 13px; font-family: var(--sans); font-weight: 600; font-size: 13px;
+  white-space: nowrap;
+}
+.btn-primary-sm:hover { background: var(--accent-deep); border-color: var(--accent-deep); }
+@media (max-width: 760px) {
+  .inv-toolbar { flex-direction: column; align-items: stretch; }
+  .inv-tb-actions { justify-content: space-between; }
+}
 #invCarrierMonthTable { width: 100%; font-size: 12.5px; border-collapse: separate; border-spacing: 0; }
 #invCarrierMonthTable th, #invCarrierMonthTable td { padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 #invCarrierMonthTable th.num, #invCarrierMonthTable td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -1408,21 +1435,34 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 
       <!-- Invoice dashboard -->
       <section id="invDash" hidden>
-        <div class="toolbar">
-          <div class="toolbar-window">
-            <span class="toolbar-label">Invoices loaded</span>
-            <span class="data-range-val" id="invFilesLine"></span>
+        <div class="inv-toolbar">
+          <!-- Left: labeled status stats -->
+          <div class="inv-tb-info">
+            <div class="inv-tb-stat">
+              <span class="inv-tb-k">Invoices loaded</span>
+              <span class="inv-tb-v" id="invFilesLine">—</span>
+            </div>
+            <div class="inv-tb-sep"></div>
+            <div class="inv-tb-stat">
+              <span class="inv-tb-k">Item master</span>
+              <span class="inv-tb-v" id="invMasterStatus" title="Item master used for the weight-dispute comparison">—</span>
+            </div>
           </div>
-          <div class="toolbar-actions">
+          <!-- Right: controls, grouped -->
+          <div class="inv-tb-actions">
             <label class="inv-carrier-filter">
               <span>Carrier</span>
               <select id="invCarrierFilter" aria-label="Filter by carrier">
                 <option value="all">All carriers</option>
               </select>
             </label>
-            <label class="btn-ghost" for="invAddInput">＋ Add invoices / masters</label>
-            <input type="file" id="invAddInput" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv" multiple hidden>
-            <button type="button" class="btn-ghost" id="invReset">↻ Clear all</button>
+            <span class="inv-tb-btngroup">
+              <label class="btn-ghost" for="invMasterInput" title="Replace the stored item master">⤒ Update master</label>
+              <input type="file" id="invMasterInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
+              <label class="btn-primary-sm" for="invAddInput">＋ Add invoices</label>
+              <input type="file" id="invAddInput" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv" multiple hidden>
+              <button type="button" class="btn-ghost" id="invReset">↻ Clear all</button>
+            </span>
           </div>
         </div>
 
@@ -1654,6 +1694,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
     window.INVOICES_URL = "{% url 'process_invoices' %}";
     window.INVOICE_AWBS_URL = "{% url 'export_invoice_awbs' %}";
+    window.MASTER_URL = "{% url 'master_config' %}";
     window.EXPORT_URL = "{% url 'export_shipments' %}";
     window.SLA_URL = "{% url 'sla_config' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
@@ -3655,6 +3696,45 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     setTimeout(function () { document.body.removeChild(form); }, 1000);
   }
 
+  // ---- Persistent item master (stored server-side; no re-upload needed) ----
+  function setMasterStatus(d) {
+    var el = $("invMasterStatus"); if (!el) return;
+    if (d && d.sku_count) {
+      el.textContent = d.sku_count.toLocaleString("en-IN") + " SKUs" +
+        (d.updated_at ? " · updated " + d.updated_at : "");
+      el.className = "inv-tb-v ok";
+    } else {
+      el.textContent = "none loaded";
+      el.className = "inv-tb-v warn";
+    }
+  }
+  function refreshMasterStatus() {
+    var fd = new FormData(); fd.append("action", "get");
+    fetch(window.MASTER_URL, { method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" }, body: fd })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) setMasterStatus(d); }).catch(function () {});
+  }
+  function updateItemMaster(file) {
+    if (!file) return;
+    var fd = new FormData(); fd.append("action", "upload"); fd.append("file", file);
+    showLoading("Updating item master…", file.name);
+    fetch(window.MASTER_URL, { method: "POST",
+      headers: { "X-CSRFToken": window.CSRF_TOKEN || "", "X-Requested-With": "fetch" }, body: fd })
+      .then(function (r) { return r.text().then(function (t) {
+        var b; try { b = t ? JSON.parse(t) : {}; } catch (e) { throw new Error("Server error " + r.status); }
+        if (!r.ok) throw new Error(b.error || ("Update failed (" + r.status + ")"));
+        return b;
+      }); })
+      .then(function (d) {
+        setMasterStatus(d);
+        finishLoading();
+        // Re-pull the report so the new master applies to the weight dispute now.
+        if (invReport) applyInvCarrierFilter();
+      })
+      .catch(function (err) { failLoading(err.message); invSetHint(err.message, "err"); });
+  }
+
   // Sum every (computed) row into one totals object — used by the headline
   // cards, the table footer and the CSV export so they always agree.
   function reconTotals() {
@@ -4252,6 +4332,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if ($("invReconTable")) $("invReconTable").addEventListener("input", onReconInput);
     if ($("invReconExport")) $("invReconExport").addEventListener("click", exportReconCsv);
     if ($("invAwbExport")) $("invAwbExport").addEventListener("click", exportInvoiceAwbs);
+    if ($("invMasterInput")) $("invMasterInput").addEventListener("change", function (e) {
+      updateItemMaster(e.target.files && e.target.files[0]); e.target.value = "";
+    });
+    refreshMasterStatus();
     if ($("invProductSearch")) $("invProductSearch").addEventListener("input", function () {
       if (invReport && invReport.reconciliation) renderInvSubcats(invReport.reconciliation);
     });
