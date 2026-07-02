@@ -388,10 +388,23 @@ def _pickup_slot(dt):
 # "pregnancy pillow" must hit Maternity before the generic Pillows rule; an
 # "arch support insole" must hit Insoles before Footwears/Orthotics).
 #
-# The ten top-level categories are fixed (the Frido catalogue); subcategories
+# The top-level categories are fixed (the Frido catalogue); subcategories
 # are a convenience grouping and can be tuned freely. Anything unmatched falls
 # to ("Others", "Other"). Keywords match as case-insensitive substrings.
 PRODUCT_RULES = [
+    # --- Mobility & assistive devices (the Frido/Arcatron mobility catalogue —
+    # wheelchairs, scooters, bathroom-safety and transfer aids, e.g. the
+    # SHOPIFY_Mobility channel). Placed FIRST so a wheelchair whose name mentions
+    # a "footrest" / "armrest" / "seat" isn't miscategorized as Foot Care /
+    # Cushion, and bath mats don't fall through to "Others". ---
+    ("Mobility Aids", "Wheelchair", ["wheelchair", "wheel chair"]),
+    ("Mobility Aids", "Mobility Scooter", ["mobility scooter", "scooter"]),
+    ("Mobility Aids", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist"]),
+    ("Mobility Aids", "Commode", ["commode"]),
+    ("Mobility Aids", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair"]),
+    ("Mobility Aids", "Recliner Bed", ["recliner"]),
+    ("Mobility Aids", "Accessories", ["castor wheel", "joystick", "footrest", "armrest"]),
+
     # --- Maternity & Baby Care (first, so a pregnancy/maternity pillow lands
     # here instead of under Pillows) ---
     ("Maternity & Baby Care", "Pregnancy Pillow", ["pregnancy", "maternity"]),
