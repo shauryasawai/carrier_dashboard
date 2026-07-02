@@ -48,6 +48,8 @@ COLUMNS = {
     "ofd1_ts": ["OFD1 Timestamp"],
     # The standard export uses "Shipment Zone"; older trimmed exports used "Zone".
     "zone": ["Zone", "Shipment Zone", "Pricing Zone"],
+    # Sales channel the order came from (Shopify, Amazon, etc.). Optional.
+    "channel": ["Channel Name", "Channel", "channel_name"],
     "delivery_type": ["Delivery Type"],
     "status": ["Latest Status"],
     "attempts": ["Number of Delivery Attempts"],
@@ -672,6 +674,7 @@ def build_record(get):
         "account": account_name,
         "delivery_type": str(get("delivery_type") or "").strip(),
         "zone": str(get("zone") or "").strip(),
+        "channel": str(get("channel") or "").strip(),
         "pickup_pin": pickup_pin,
         "warehouse": warehouse_label(pickup_pin),
         "city": pickup_city,
@@ -816,7 +819,8 @@ def _filter_set(val):
 
 def filter_records(records, delivery_type="all", zone="all", payment="all",
                    warehouse="all", account="all", weight="all",
-                   slot="all", date_from="", date_to="", tier="all"):
+                   slot="all", date_from="", date_to="", tier="all",
+                   channel="all"):
     # Every categorical filter supports single value, list (multi-select) or
     # "all". An empty selection (None) means no constraint on that field.
     dt_set = _filter_set(delivery_type)
@@ -827,12 +831,15 @@ def filter_records(records, delivery_type="all", zone="all", payment="all",
     wt_set = _filter_set(weight)
     slot_set = _filter_set(slot)
     tier_set = _filter_set(tier)
+    channel_set = _filter_set(channel)
 
     out = []
     for r in records:
         if dt_set is not None and r["delivery_type"] not in dt_set:
             continue
         if tier_set is not None and r["tier"] not in tier_set:
+            continue
+        if channel_set is not None and r["channel"] not in channel_set:
             continue
         if zone_set is not None and r["zone"] not in zone_set:
             continue
@@ -1227,12 +1234,16 @@ def _filter_options(records) -> dict:
         return _FILTER_OPTIONS_CACHE["value"]
 
     zones = sorted({r["zone"] for r in records if r["zone"]})
+    channel_counts: dict[str, int] = {}
     acct_counts: dict[str, int] = {}
     wh_counts: dict[str, int] = {}
     wh_labels: dict[str, str] = {}
     pickup_dates_min = None
     pickup_dates_max = None
     for r in records:
+        ch = r["channel"]
+        if ch:
+            channel_counts[ch] = channel_counts.get(ch, 0) + 1
         a = r["account"]
         if a:
             acct_counts[a] = acct_counts.get(a, 0) + 1
@@ -1247,6 +1258,10 @@ def _filter_options(records) -> dict:
             if pickup_dates_max is None or pd > pickup_dates_max:
                 pickup_dates_max = pd
 
+    channels = [
+        {"value": c, "label": c, "n": cnt}
+        for c, cnt in sorted(channel_counts.items(), key=lambda kv: -kv[1])
+    ]
     accounts = [
         {"value": a, "label": a, "n": cnt}
         for a, cnt in sorted(acct_counts.items(), key=lambda kv: -kv[1])
@@ -1260,6 +1275,7 @@ def _filter_options(records) -> dict:
 
     value = {
         "zones": zones,
+        "channels": channels,
         "accounts": accounts,
         "warehouses": warehouses_opts,
         "weight_classes": ["Light", "Medium", "Heavy"],
@@ -1294,11 +1310,12 @@ def reclassify(records) -> None:
 
 def build_report(records, delivery_type="all", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
-                 slot="all", date_from="", date_to="", tier="all") -> dict:
+                 slot="all", date_from="", date_to="", tier="all",
+                 channel="all") -> dict:
     """Top-level entry: filter, aggregate, score, and assemble the payload."""
     rows = filter_records(records, delivery_type, zone, payment,
                           warehouse, account, weight,
-                          slot, date_from, date_to, tier=tier)
+                          slot, date_from, date_to, tier=tier, channel=channel)
     agg = attach_scores(aggregate_by_carrier(rows))
     agg.sort(key=lambda a: (a["score"] is None, -(a["score"] or 0)))
 

@@ -42,6 +42,7 @@ DEFAULT_COLUMN_MAP = {
     "ofd1_ts": "out_for_delivery_1st_attempt",
     "edd_ts": "expected_delivery_date_by_courier_partner",
     "zone": "zone",
+    "channel": "channel_name",
     "delivery_type": "shipment_type",
     "status": "clickpost_unified_status",
     "attempts": "out_for_delivery_attempts",

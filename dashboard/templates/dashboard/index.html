@@ -200,11 +200,11 @@ body {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px 18px; align-items: end;
 }
-/* Filters in two usability rows. Row 1 (primary, most-changed): carrier
-   account + warehouse + payment + Reset. Row 2 (secondary, finer slices):
-   tier, zone, weight, pickup time, and the date range. */
+/* Filters in two usability rows. Row 1 (primary, most-changed): channel name +
+   carrier account + warehouse + payment + Reset. Row 2 (secondary, finer
+   slices): tier, zone, weight, pickup time, and the date range. */
 .filter-row {
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
   gap: 12px 14px; align-items: end;
 }
 .filter-row--secondary {
@@ -997,6 +997,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 /* ---- Invoice reconciliation table ---- */
 #invReconPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 #invReconExport { margin-left: auto; }
+#invWtDisputePanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
+#invWtProdExport { margin-left: auto; }
 #invReconPanel .table-scroll { max-height: 88vh; overflow: auto; border-radius: 10px; }
 
 .recon-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 0; font-size: 12px; }
@@ -1173,6 +1175,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <div class="filters">
         <!-- All filters in a single row. -->
         <div class="filter-row">
+          <div class="filter">
+            <label>Channel Name</label>
+            <div class="msel" data-name="channel" data-all="All channels">
+              <button type="button" class="msel-toggle"><span class="msel-text">All channels</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden></div>
+            </div>
+          </div>
           <div class="filter">
             <label>Carrier account</label>
             <div class="msel" data-name="account" data-all="All accounts">
@@ -1540,6 +1549,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <div class="panel-head">
             <h3>Weight dispute opportunities</h3>
             <p class="panel-sub" id="invWtDisputeSub">charged weight vs item-master volumetric weight, 1&nbsp;kg slabs</p>
+            <button type="button" class="btn-ghost" id="invWtProdExport" title="Download every flagged AWB (with product, SKU, charged vs expected weight) as CSV">⤓ Export AWB detail</button>
           </div>
           <div id="invWtDisputeHint" class="cost-empty" hidden></div>
           <div class="wtd-stack" id="invWtDisputeGrid">
@@ -2033,7 +2043,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Each dynamic dropdown is filled independently and only the FIRST time it
   // actually receives options. This way a partial first response (e.g. only
   // "zones") never permanently blocks the others from filling on a later one.
-  var filled = { zone: false, account: false, warehouse: false };
+  var filled = { channel: false, zone: false, account: false, warehouse: false };
   var dateBoundsSet = false;
 
   // When a NEW dataset loads (fresh BigQuery pull or file upload), the dynamic
@@ -2044,9 +2054,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // and their selections are left intact. Not called on client-side re-filters
   // (the loaded record set, and thus the option lists, don't change there).
   function resetDynamicFilters() {
-    filled = { zone: false, account: false, warehouse: false };
+    filled = { channel: false, zone: false, account: false, warehouse: false };
     dateBoundsSet = false;
-    ["zone", "account", "warehouse"].forEach(function (name) {
+    ["channel", "zone", "account", "warehouse"].forEach(function (name) {
       var m = document.querySelector('.msel[data-name="' + name + '"]');
       if (!m) return;
       var menu = m.querySelector(".msel-menu");
@@ -2058,6 +2068,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   function populateOptions(filters) {
     filters = filters || {};
 
+    fillMsel("channel", filters.channels, function (c) {
+      return { value: c.value, text: c.label + " (" + (c.n || 0).toLocaleString() + ")" };
+    });
     fillMsel("zone", filters.zones, function (z) {
       return { value: z, text: z };
     });
@@ -3296,21 +3309,28 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if (e && e[field] != null && e[field] !== "") { var v = parseFloat(e[field]); return isNaN(v) ? 0 : v; }
     return base || 0;
   }
-  // Final Outstanding (post-dispute) = Amount − Billing Dispute − Weight Dispute
-  // Final Outstanding (post-CN)      = Amount − Billing CN − Weight CN
-  // Final Payable                    = Final Outstanding (post-CN) − TDS
+  // All working values are EX-GST; GST is added back in a dedicated column just
+  // before Payable.
+  //   After dispute (ex GST) = Amount ex GST − Billing Dispute − Weight Dispute
+  //   After CN (ex GST)      = After dispute − Billing CN − Weight CN
+  //   GST                    = After CN × invoice GST rate (with/ex − 1)
+  //   TDS (sec 194C)         = 2% of the ex-GST taxable value
+  //   Final Payable          = After CN (ex GST) + GST − TDS
   function reconCompute(r) {
-    var amt = r.amount_with_gst || 0;
+    var exgst = r.amount_ex_gst || 0;
+    var withGst = r.amount_with_gst || 0;
+    var gstRate = exgst > 0 ? (withGst - exgst) / exgst : 0;
     var bd = reconVal(r.invoice_number, "billing_dispute", r.billing_dispute);
     var wd = reconVal(r.invoice_number, "weight_dispute", r.weight_dispute);
     var bcn = reconVal(r.invoice_number, "billing_cn", r.billing_cn);
     var wcn = reconVal(r.invoice_number, "weight_cn", r.weight_cn);
     var tds = reconVal(r.invoice_number, "tds", r.tds);
-    var foDispute = amt - bd - wd;
-    var foCN = amt - bcn - wcn;
-    var payable = foCN - tds;
-    return { amt: amt, bd: bd, wd: wd, bcn: bcn, wcn: wcn, tds: tds,
-             foDispute: foDispute, foCN: foCN, payable: payable };
+    var foDispute = exgst - bd - wd;      // ex GST
+    var foCN = foDispute - bcn - wcn;     // ex GST, chains from after-dispute
+    var gst = foCN * gstRate;             // GST on the final taxable value
+    var payable = foCN + gst - tds;       // add GST back, deduct TDS
+    return { amt: withGst, exgst: exgst, bd: bd, wd: wd, bcn: bcn, wcn: wcn, tds: tds,
+             foDispute: foDispute, foCN: foCN, gst: gst, payable: payable };
   }
 
   function reconInput(invNo, field, base) {
@@ -3507,32 +3527,33 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     renderReconCards();
 
     var head = '<caption class="sr-only">Invoice reconciliation. One row per invoice. ' +
-      'Courier, invoice date, number, service month, shipment count and billed amount are read from the file. ' +
+      'Courier, invoice number, service month, shipment count and billed amount are read from the file. ' +
       'Billing dispute, weight dispute, billing / weight / lost credit notes and TDS are editable; ' +
       'final outstanding and final payable are calculated automatically.</caption>' +
       '<thead>' +
       '<tr class="recon-grp">' +
-        '<th scope="colgroup" colspan="4">Invoice details</th>' +
+        '<th scope="colgroup" colspan="3">Invoice details</th>' +
         '<th scope="colgroup" colspan="2" class="grp">Billed</th>' +
         '<th scope="colgroup" colspan="2" class="grp">Disputes (₹)</th>' +
         '<th scope="colgroup" colspan="1" class="grp">After dispute</th>' +
         '<th scope="colgroup" colspan="2" class="grp">Credit notes (₹)</th>' +
         '<th scope="colgroup" colspan="1" class="grp">After CN</th>' +
-        '<th scope="colgroup" colspan="1" class="grp">Tax</th>' +
+        '<th scope="colgroup" colspan="2" class="grp">Tax</th>' +
         '<th scope="colgroup" colspan="1" class="grp">Payable</th>' +
       '</tr>' +
       '<tr>' +
-        '<th scope="col">Courier</th><th scope="col">Inv. date</th>' +
+        '<th scope="col">Courier</th>' +
         '<th scope="col">Invoice&nbsp;#</th><th scope="col">Month</th>' +
         '<th scope="col" class="num grp">AWBs</th>' +
         '<th scope="col" class="num">Amt ex GST</th>' +
         '<th scope="col" class="num grp recon-edit">Billing</th>' +
         '<th scope="col" class="num recon-edit">Weight</th>' +
-        '<th scope="col" class="num grp">Final O/S</th>' +
+        '<th scope="col" class="num grp">Final O/S<br><small>ex GST</small></th>' +
         '<th scope="col" class="num grp recon-edit">Billing</th>' +
         '<th scope="col" class="num recon-edit">Weight</th>' +
-        '<th scope="col" class="num grp">Final O/S</th>' +
+        '<th scope="col" class="num grp">Final O/S<br><small>ex GST</small></th>' +
         '<th scope="col" class="num grp recon-edit">TDS</th>' +
+        '<th scope="col" class="num">GST</th>' +
         '<th scope="col" class="num grp">Payable</th>' +
       '</tr></thead>';
 
@@ -3540,7 +3561,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       var c = reconCompute(r);
       return '<tr data-inv="' + esc(r.invoice_number) + '">' +
         '<td>' + esc(r.carrier || "—") + '</td>' +
-        '<td>' + esc(r.invoice_date || "—") + '</td>' +
         '<th scope="row" class="mono">' + esc(r.invoice_number) + '</th>' +
         '<td>' + esc(r.service_month || "—") + '</td>' +
         '<td class="num grp">' + (r.shipments || 0).toLocaleString("en-IN") + '</td>' +
@@ -3552,6 +3572,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<td class="num">' + reconInput(r.invoice_number, "weight_cn", r.weight_cn) + '</td>' +
         '<td class="num recon-calc grp" data-col="foCN">' + inr(c.foCN) + '</td>' +
         '<td class="num grp">' + reconInput(r.invoice_number, "tds", r.tds) + '</td>' +
+        '<td class="num recon-calc" data-col="gst">' + inr(c.gst) + '</td>' +
         '<td class="num recon-calc recon-payable grp" data-col="payable"><b>' + inr(c.payable) + '</b></td>' +
         '</tr>';
     }).join("");
@@ -3626,9 +3647,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       '<td class="num"><b>' + inr(itot.est) + '</b></td></tr></tfoot>' : '';
     $("invWtInvTable").innerHTML = ih + '<tbody>' + ib + '</tbody>' + ifoot;
 
-    // By product (SKU)
+    // By product (SKU). "Charged wt" = weight the carrier billed; "Expected wt"
+    // = billable weight per our item master (volumetric, rounded to slab). The
+    // gap between them is the disputable excess.
     var ph = '<thead><tr><th scope="col">Product</th><th scope="col">SKU</th>' +
       '<th scope="col" class="num">Flagged AWBs</th>' +
+      '<th scope="col" class="num">Charged wt (kg)</th>' +
+      '<th scope="col" class="num">Expected wt (kg)</th>' +
       '<th scope="col" class="num">Excess kg</th>' +
       '<th scope="col" class="num">Est. over-charge</th></tr></thead>';
     var prows = wd.by_product || [];
@@ -3638,9 +3663,11 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       return '<tr><td>' + esc(r.name) + '</td>' +
         '<td class="mono">' + esc(r.sku || '—') + '</td>' +
         '<td class="num">' + r.flagged.toLocaleString("en-IN") + '</td>' +
+        '<td class="num">' + (r.charged_kg || 0).toLocaleString("en-IN") + '</td>' +
+        '<td class="num">' + (r.expected_kg || 0).toLocaleString("en-IN") + '</td>' +
         '<td class="num">' + r.excess_kg.toLocaleString("en-IN") + '</td>' +
         '<td class="num"><b>' + inr(r.est_overcharge) + '</b></td></tr>';
-    }).join("") : '<tr><td class="empty" colspan="5">No over-charges flagged.</td></tr>';
+    }).join("") : '<tr><td class="empty" colspan="7">No over-charges flagged.</td></tr>';
     // Totals reflect ALL flagged products (not just the top rows shown), so this
     // ties out to the "By invoice number" total above.
     var plabel = "Total · " + pcount.toLocaleString("en-IN") + " products" +
@@ -3648,9 +3675,55 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var pfoot = prows.length ? '<tfoot><tr class="recon-foot">' +
       '<th scope="row" colspan="2">' + plabel + '</th>' +
       '<td class="num">' + (wd.flagged || 0).toLocaleString("en-IN") + '</td>' +
+      '<td class="num">' + (wd.charged_kg || 0).toLocaleString("en-IN") + '</td>' +
+      '<td class="num">' + (wd.expected_kg || 0).toLocaleString("en-IN") + '</td>' +
       '<td class="num">' + (wd.excess_kg || 0).toLocaleString("en-IN") + '</td>' +
       '<td class="num"><b>' + inr(wd.est_overcharge || 0) + '</b></td></tr></tfoot>' : '';
     $("invWtProdTable").innerHTML = ph + '<tbody>' + pb + '</tbody>' + pfoot;
+  }
+
+  // Download the weight-dispute detail as CSV — one row per flagged AWB, with
+  // the AWB number, its product/SKU, and charged vs expected weight. Falls back
+  // to the aggregated by-product view if per-AWB detail isn't available.
+  function exportWtProdCsv() {
+    var rc = invReport && invReport.reconciliation;
+    var wd = rc && rc.weight_dispute;
+    if (!wd) return;
+    function q(v) { var s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
+    function n2(x) { return (Math.round((x || 0) * 100) / 100); }
+    var lines, fname;
+    if (wd.lines && wd.lines.length) {
+      var headers = ["AWB Number", "Invoice #", "Courier", "Product", "SKU", "Sub-category",
+        "Charged Weight (kg)", "Expected Weight per Item Master (kg)", "Excess kg", "Est. Over-charge (INR)"];
+      lines = [headers.join(",")];
+      wd.lines.forEach(function (r) {
+        lines.push([q(r.awb), q(r.invoice_number || ""), q(r.carrier || ""), q(r.name),
+          q(r.sku || ""), q(r.subcategory || ""), n2(r.charged_kg), n2(r.expected_kg),
+          n2(r.excess_kg), n2(r.est_overcharge)].join(","));
+      });
+      lines.push(["Total (" + (wd.line_count || wd.lines.length) + " AWBs)", "", "", "", "", "",
+        n2(wd.charged_kg), n2(wd.expected_kg), n2(wd.excess_kg), n2(wd.est_overcharge)].join(","));
+      fname = "weight_dispute_by_awb.csv";
+    } else {
+      if (!wd.by_product || !wd.by_product.length) return;
+      var h2 = ["Product", "SKU", "Flagged AWBs", "Charged Weight (kg)",
+        "Expected Weight per Item Master (kg)", "Excess kg", "Est. Over-charge (INR)"];
+      lines = [h2.join(",")];
+      wd.by_product.forEach(function (r) {
+        lines.push([q(r.name), q(r.sku || ""), (r.flagged || 0), n2(r.charged_kg),
+          n2(r.expected_kg), n2(r.excess_kg), n2(r.est_overcharge)].join(","));
+      });
+      lines.push(["Total (" + (wd.product_count || wd.by_product.length) + " products)", "",
+        (wd.flagged || 0), n2(wd.charged_kg), n2(wd.expected_kg), n2(wd.excess_kg),
+        n2(wd.est_overcharge)].join(","));
+      fname = "weight_dispute_by_product.csv";
+    }
+    var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url; a.download = fname;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
 
   // Spend by product (SKU) across the whole invoice — joined from BigQuery by AWB.
@@ -3781,14 +3854,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // cards, the table footer and the CSV export so they always agree.
   function reconTotals() {
     var t = { invoices: invReconRows.length, ship: 0, amt: 0, exgst: 0, bd: 0, wd: 0,
-              foDispute: 0, bcn: 0, wcn: 0, foCN: 0, tds: 0, payable: 0 };
+              foDispute: 0, bcn: 0, wcn: 0, foCN: 0, tds: 0, gst: 0, payable: 0 };
     invReconRows.forEach(function (r) {
       var c = reconCompute(r);
       t.ship += (r.shipments || 0);
       t.exgst += (r.amount_ex_gst || 0);
       t.amt += c.amt; t.bd += c.bd; t.wd += c.wd; t.foDispute += c.foDispute;
       t.bcn += c.bcn; t.wcn += c.wcn; t.foCN += c.foCN;
-      t.tds += c.tds; t.payable += c.payable;
+      t.tds += c.tds; t.gst += c.gst; t.payable += c.payable;
     });
     t.disputes = t.bd + t.wd;     // Billing + Weight dispute
     t.cns = t.bcn + t.wcn;        // Billing + Weight credit notes
@@ -3821,14 +3894,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       card("Amount per parcel", inr(t.perParcel), "avg ₹ (with GST) / AWB") +
       card("Dispute amount", inr(t.disputes), "billing + weight dispute") +
       card("Credit note", inr(t.cns), "billing + weight CN") +
-      card("TDS (2%)", inr(t.tds), "sec 194C") +
+      card("TDS (2%)", inr(t.tds), "sec 194C · on ex-GST") +
       card("Final payable", inr(t.payable), "after disputes & CNs", " stat--good");
   }
 
   function reconFootHTML() {
     var t = reconTotals();
     return '<tfoot><tr class="recon-foot">' +
-      '<th scope="row" colspan="4">Total · ' + invReconRows.length + ' invoices</th>' +
+      '<th scope="row" colspan="3">Total · ' + invReconRows.length + ' invoices</th>' +
       '<td class="num grp"><b>' + t.ship.toLocaleString("en-IN") + '</b></td>' +
       '<td class="num"><b>' + inr(t.exgst) + '</b></td>' +
       '<td class="num grp">' + inr(t.bd) + '</td><td class="num">' + inr(t.wd) + '</td>' +
@@ -3836,6 +3909,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       '<td class="num grp">' + inr(t.bcn) + '</td><td class="num">' + inr(t.wcn) + '</td>' +
       '<td class="num grp"><b>' + inr(t.foCN) + '</b></td>' +
       '<td class="num grp">' + inr(t.tds) + '</td>' +
+      '<td class="num">' + inr(t.gst) + '</td>' +
       '<td class="num recon-payable grp"><b>' + inr(t.payable) + '</b></td>' +
       '</tr></tfoot>';
   }
@@ -3876,23 +3950,23 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if (!invReconRows.length) return;
     var headers = ["Courier Name", "Invoice Date", "Invoice Number", "Service Month",
       "Shipments (AWBs)", "Amount with GST", "Amount ex GST", "Billing Dispute", "Weight Dispute",
-      "Final Outstanding (post-dispute)", "Billing CN", "Weight CN",
-      "Final Outstanding (post-CN)", "TDS", "Final Payable"];
+      "Final Outstanding post-dispute (ex GST)", "Billing CN", "Weight CN",
+      "Final Outstanding post-CN (ex GST)", "TDS", "GST", "Final Payable"];
     var lines = [headers.join(",")];
-    var tot = { ship: 0, amt: 0, exgst: 0, bd: 0, wd: 0, foD: 0, bcn: 0, wcn: 0, foCN: 0, tds: 0, pay: 0 };
+    var tot = { ship: 0, amt: 0, exgst: 0, bd: 0, wd: 0, foD: 0, bcn: 0, wcn: 0, foCN: 0, tds: 0, gst: 0, pay: 0 };
     function q(v) { var s = String(v == null ? "" : v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; }
     function n2(x) { return (Math.round(x * 100) / 100); }
     invReconRows.forEach(function (r) {
       var c = reconCompute(r);
       tot.ship += (r.shipments || 0); tot.exgst += (r.amount_ex_gst || 0);
       tot.amt += c.amt; tot.bd += c.bd; tot.wd += c.wd; tot.foD += c.foDispute;
-      tot.bcn += c.bcn; tot.wcn += c.wcn; tot.foCN += c.foCN; tot.tds += c.tds; tot.pay += c.payable;
+      tot.bcn += c.bcn; tot.wcn += c.wcn; tot.foCN += c.foCN; tot.tds += c.tds; tot.gst += c.gst; tot.pay += c.payable;
       lines.push([q(r.carrier), q(r.invoice_date), q(r.invoice_number), q(r.service_month),
         (r.shipments || 0), n2(c.amt), n2(r.amount_ex_gst || 0), n2(c.bd), n2(c.wd), n2(c.foDispute),
-        n2(c.bcn), n2(c.wcn), n2(c.foCN), n2(c.tds), n2(c.payable)].join(","));
+        n2(c.bcn), n2(c.wcn), n2(c.foCN), n2(c.tds), n2(c.gst), n2(c.payable)].join(","));
     });
     lines.push(["Total", "", "", "", tot.ship, n2(tot.amt), n2(tot.exgst), n2(tot.bd), n2(tot.wd), n2(tot.foD),
-      n2(tot.bcn), n2(tot.wcn), n2(tot.foCN), n2(tot.tds), n2(tot.pay)].join(","));
+      n2(tot.bcn), n2(tot.wcn), n2(tot.foCN), n2(tot.tds), n2(tot.gst), n2(tot.pay)].join(","));
     var blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8" });
     var url = URL.createObjectURL(blob);
     var a = document.createElement("a");
@@ -4373,6 +4447,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if ($("invLaneSearch")) $("invLaneSearch").addEventListener("input", function () { if (invReport) renderInvLanes(invReport); });
     if ($("invReconTable")) $("invReconTable").addEventListener("input", onReconInput);
     if ($("invReconExport")) $("invReconExport").addEventListener("click", exportReconCsv);
+    if ($("invWtProdExport")) $("invWtProdExport").addEventListener("click", exportWtProdCsv);
     if ($("invAwbExport")) $("invAwbExport").addEventListener("click", exportInvoiceAwbs);
     if ($("invMasterInput")) $("invMasterInput").addEventListener("change", function (e) {
       updateItemMaster(e.target.files && e.target.files[0]); e.target.value = "";

@@ -318,6 +318,7 @@ def _filter_kwargs(request):
     return {
         "delivery_type": request.POST.getlist("delivery_type") or "all",
         "tier": request.POST.getlist("tier") or "all",
+        "channel": request.POST.getlist("channel") or "all",
         "zone": request.POST.getlist("zone") or "all",
         "payment": request.POST.getlist("payment") or "all",
         "warehouse": request.POST.getlist("warehouse") or "all",

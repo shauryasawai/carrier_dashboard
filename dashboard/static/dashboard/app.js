@@ -117,12 +117,15 @@
   // Each dynamic dropdown is filled independently and only the FIRST time it
   // actually receives options. This way a partial first response (e.g. only
   // "zones") never permanently blocks the others from filling on a later one.
-  var filled = { zone: false, account: false, warehouse: false };
+  var filled = { channel: false, zone: false, account: false, warehouse: false };
   var dateBoundsSet = false;
 
   function populateOptions(filters) {
     filters = filters || {};
 
+    fillMsel("channel", filters.channels, function (c) {
+      return { value: c.value, text: c.label + " (" + (c.n || 0).toLocaleString() + ")" };
+    });
     fillMsel("zone", filters.zones, function (z) {
       return { value: z, text: z };
     });

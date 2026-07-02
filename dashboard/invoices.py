@@ -1264,8 +1264,10 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
     Aggregated per invoice number and per sub-category for raising disputes."""
     sku2vol = sku2vol or {}
     by_inv, by_sub, by_prod = {}, {}, {}
+    lines_out = []          # per-AWB flagged detail (for the CSV export)
     checked = flagged = 0
     tot_excess = tot_est = 0.0
+    tot_charged = tot_expected = 0.0
     for it in items:
         skus = [s.strip().upper() for s in re.split(r"[,/|]", it.get("sku") or "") if s.strip()]
         vols = [sku2vol[s] for s in skus if s in sku2vol]
@@ -1277,19 +1279,25 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
         checked += 1
         inv = it.get("invoice_number") or "(no invoice)"
         bi = by_inv.setdefault(inv, {"invoice_number": inv, "checked": 0,
-                                     "flagged": 0, "excess_kg": 0.0, "est_overcharge": 0.0})
+                                     "flagged": 0, "charged_kg": 0.0, "expected_kg": 0.0,
+                                     "excess_kg": 0.0, "est_overcharge": 0.0})
         bi["checked"] += 1
         excess = round(charged - expected_slab, 3)
         if excess >= min_over:
             est = excess * (it["amount"] / charged) if charged else 0.0
             flagged += 1
             bi["flagged"] += 1
+            bi["charged_kg"] += charged
+            bi["expected_kg"] += expected_slab
             bi["excess_kg"] += excess
             bi["est_overcharge"] += est
             sub = (it.get("subcategory") or "").strip() or "Unmatched"
             bs = by_sub.setdefault(sub, {"subcategory": sub, "flagged": 0,
+                                         "charged_kg": 0.0, "expected_kg": 0.0,
                                          "excess_kg": 0.0, "est_overcharge": 0.0})
             bs["flagged"] += 1
+            bs["charged_kg"] += charged
+            bs["expected_kg"] += expected_slab
             bs["excess_kg"] += excess
             bs["est_overcharge"] += est
             # product (SKU) bucket
@@ -1297,23 +1305,48 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
             pname = (it.get("product") or it.get("sku_name") or "").strip()
             pkey = sku_raw.upper() or "(no SKU)"
             bp = by_prod.setdefault(pkey, {"sku": sku_raw, "name": pname, "flagged": 0,
+                                           "charged_kg": 0.0, "expected_kg": 0.0,
                                            "excess_kg": 0.0, "est_overcharge": 0.0})
             bp["flagged"] += 1
+            bp["charged_kg"] += charged
+            bp["expected_kg"] += expected_slab
             bp["excess_kg"] += excess
             bp["est_overcharge"] += est
             if not bp["name"] and pname:
                 bp["name"] = pname
             if not bp["sku"] and sku_raw:
                 bp["sku"] = sku_raw
+            # per-AWB detail row (used for the AWB-level CSV export)
+            lines_out.append({
+                "awb": it.get("awb") or "",
+                "invoice_number": it.get("invoice_number") or "",
+                "carrier": it.get("carrier") or "",
+                "sku": sku_raw,
+                "name": pname or sku_raw,
+                "subcategory": sub,
+                "charged_kg": round(charged, 2),
+                "expected_kg": round(expected_slab, 2),
+                "excess_kg": round(excess, 2),
+                "est_overcharge": round(est, 2),
+            })
             tot_excess += excess
             tot_est += est
+            tot_charged += charged
+            tot_expected += expected_slab
 
     def _round_rows(rows):
         for r in rows:
+            if "charged_kg" in r:
+                r["charged_kg"] = round(r["charged_kg"], 1)
+            if "expected_kg" in r:
+                r["expected_kg"] = round(r["expected_kg"], 1)
             r["excess_kg"] = round(r["excess_kg"], 1)
             r["est_overcharge"] = round(r["est_overcharge"], 2)
         return rows
 
+    # Per-AWB detail, grouped by product then biggest excess first, capped so the
+    # payload stays reasonable for the browser.
+    lines_out.sort(key=lambda x: (x["name"] or "zzz", -x["excess_kg"]))
     inv_rows = _round_rows(sorted(by_inv.values(), key=lambda x: -x["est_overcharge"]))
     sub_rows = _round_rows(sorted(by_sub.values(), key=lambda x: -x["est_overcharge"]))
     prod_rows = _round_rows(sorted(by_prod.values(), key=lambda x: -x["est_overcharge"]))
@@ -1324,8 +1357,12 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
         "by_subcategory": sub_rows,
         "by_product": prod_rows[:200],
         "product_count": len(prod_rows),
+        "lines": lines_out[:10000],
+        "line_count": len(lines_out),
         "checked": checked, "flagged": flagged,
         "total_lines": len(items),
+        "charged_kg": round(tot_charged, 1),
+        "expected_kg": round(tot_expected, 1),
         "excess_kg": round(tot_excess, 1),
         "est_overcharge": round(tot_est, 2),
         "slab": slab,
@@ -1675,7 +1712,9 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
                 "shipments": g["shipments"],
                 "amount_with_gst": amt,
                 "amount_ex_gst": round(g["amount_ex_gst"], 2),
-                "tds": round(amt * TDS_RATE / 100.0, 2),
+                # TDS (sec 194C) is deducted on the taxable value (ex GST), not
+                # on the GST-inclusive amount. Overridable in the UI.
+                "tds": round(g["amount_ex_gst"] * TDS_RATE / 100.0, 2),
                 # Team-entered adjustments — default 0, edited in the UI.
                 "billing_dispute": 0.0, "weight_dispute": 0.0,
                 "billing_cn": 0.0, "weight_cn": 0.0, "lost_cn": 0.0,
