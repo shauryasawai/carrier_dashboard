@@ -11,8 +11,6 @@ if not SECRET_KEY:
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() == "true"
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
-# HTTPS origins Django trusts for CSRF (Cloud Run serves an https URL). Comma-
-# separated, scheme included, e.g. https://carrier-dash-xxxxxx-uc.a.run.app
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
