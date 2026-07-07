@@ -9,6 +9,7 @@ urlpatterns = [
     path("api/process/", views.process_upload, name="process_upload"),
     path("api/bigquery/", views.load_bigquery, name="load_bigquery"),
     path("api/export/", views.export_shipments, name="export_shipments"),
+    path("api/ai-summary/", views.ai_summary, name="ai_summary"),
     path("api/sla/", views.sla_config, name="sla_config"),
     path("api/invoices/", views.process_invoices, name="process_invoices"),
     path("api/invoices/awbs/", views.export_invoice_awbs, name="export_invoice_awbs"),

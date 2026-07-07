@@ -5,6 +5,8 @@ import json
 import logging
 import os
 import re
+import urllib.error
+import urllib.request
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
@@ -368,6 +370,129 @@ def _report_response(request, empty_msg):
     # window). None for uploaded files; the frontend falls back to pickup span.
     report["load_window"] = _CACHE.get("window")
     return JsonResponse(report)
+
+
+# ---------------------------------------------------------------------------
+# AI business summary (OpenAI) — a short, crisp exec overview of the selected
+# date range covering both what's working and what needs attention. The API key
+# lives server-side in OPENAI_API_KEY and is never exposed to the browser.
+# ---------------------------------------------------------------------------
+def _ai_metrics(report, window):
+    """Compact, model-friendly slice of the report for the summary prompt."""
+    s = report.get("summary", {})
+    pay = report.get("payment_perf", []) or []
+    carriers = report.get("carriers", []) or []
+    prods = report.get("products", []) or []
+    whs = report.get("warehouses", []) or []
+    daily = report.get("daily", []) or []
+    if window and window.get("from"):
+        dr = {"from": window.get("from"), "to": window.get("to")}
+    else:
+        f = report.get("filters", {}) or {}
+        dr = {"from": f.get("date_min"), "to": f.get("date_max")}
+    busiest = max(daily, key=lambda d: d["n"], default=None) if daily else None
+    lightest = min(daily, key=lambda d: d["n"], default=None) if daily else None
+    return {
+        "currency": "INR",
+        "date_range": dr,
+        "orders": s.get("total"),
+        "delivered_orders": s.get("delivered"),
+        "delivery_success_pct": s.get("success_rate"),
+        "revenue": s.get("revenue"),
+        "avg_order_value": s.get("aov"),
+        "delivered_value": s.get("delivered_value"),
+        "rto_orders": s.get("rto"), "rto_pct": s.get("rto_pct"), "rto_value": s.get("rto_value"),
+        "forward_pending_value": s.get("pending_value"),
+        "cancelled_value": s.get("cancelled_value"),
+        "in_tat_pct": s.get("tat_in_pct"), "out_of_tat_pct": s.get("tat_out_pct"),
+        "ndd_orders": s.get("ndd_orders"),
+        "city_tier_orders": s.get("tiers"), "city_tier_revenue": s.get("tier_revenue"),
+        "payment_modes": [
+            {"mode": p.get("group"), "orders": p.get("n"), "revenue": p.get("revenue"),
+             "success_pct": p.get("success_rate"), "rto_pct": p.get("rto_pct"),
+             "cod_cash_in_transit": p.get("cod_exposure")}
+            for p in pay
+        ],
+        "top_carriers": [
+            {"carrier": c.get("carrier"), "score": c.get("score"), "orders": c.get("n"),
+             "success_pct": c.get("success_rate"), "pickup_to_delivery_hrs": c.get("p2d")}
+            for c in carriers[:6]
+        ],
+        "top_product_categories": [
+            {"category": p.get("category"), "revenue": p.get("revenue"), "rto_pct": p.get("rto_pct")}
+            for p in prods[:6]
+        ],
+        "top_warehouses": [
+            {"warehouse": w.get("warehouse") or w.get("pickup_pin"), "orders": w.get("n"),
+             "success_pct": w.get("success_rate")}
+            for w in whs[:5]
+        ],
+        "busiest_day": ({"date": busiest["date"], "orders": busiest["n"]} if busiest else None),
+        "lightest_day": ({"date": lightest["date"], "orders": lightest["n"]} if lightest else None),
+    }
+
+
+_AI_SYSTEM = (
+    "You are an operations analyst for an Indian D2C e-commerce logistics dashboard "
+    "(Frido). You are given KPI metrics (JSON) for a selected date range. Write a "
+    "SHORT, CRISP executive summary for management. Rules: open with one line "
+    "'**Bottom line:** ...'; then a '## What's working' list and a '## What needs "
+    "attention' list, 3-4 bullets each. Be specific and cite the numbers (amounts "
+    "are INR — show large values as ₹X.XCr or ₹X.XL, plus % and counts). Focus on "
+    "business impact: revenue, delivery success, RTO/returns risk, COD risk, "
+    "TAT/SLA, high-return product categories, and standout or weak carriers/regions. "
+    "No preamble, no generic advice. Use markdown '##' headings, '- ' bullets and "
+    "**bold** for key numbers. Keep the whole thing under 180 words."
+)
+
+
+def _openai_summary(api_key, metrics, model="gpt-4o-mini"):
+    """Call OpenAI Chat Completions via stdlib urllib (no extra dependency)."""
+    body = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": _AI_SYSTEM},
+            {"role": "user", "content": "KPI metrics JSON:\n" + json.dumps(metrics, ensure_ascii=False)},
+        ],
+        "temperature": 0.3,
+        "max_tokens": 550,
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://api.openai.com/v1/chat/completions",
+        data=body,
+        headers={"Authorization": "Bearer " + api_key, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=45) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", "replace")[:300]
+        raise RuntimeError(f"OpenAI API error {exc.code}: {detail}") from exc
+    return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+@auth.team_required
+@require_POST
+def ai_summary(request):
+    """Generate an AI executive summary of the current (filtered) date range."""
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        return JsonResponse(
+            {"error": "OpenAI API key not configured. Add OPENAI_API_KEY to your .env and restart."},
+            status=400,
+        )
+    records = _CACHE["records"]
+    if not records:
+        return JsonResponse({"error": "Load data first, then generate a summary."}, status=400)
+    report = build_report(records, **_filter_kwargs(request))
+    metrics = _ai_metrics(report, _CACHE.get("window"))
+    try:
+        summary = _openai_summary(api_key, metrics)
+    except Exception as exc:  # noqa: BLE001 - surface any API/network failure cleanly
+        logger.exception("AI summary failed")
+        return JsonResponse({"error": f"AI summary failed: {exc}"}, status=502)
+    return JsonResponse({"summary": summary})
 
 
 # Columns written to the shipment-level CSV export, in order: (record key, header).

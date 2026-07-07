@@ -441,6 +441,29 @@ body {
 @media (max-width: 1180px) { .stat-row--rev { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 640px) { .stat-row--rev { grid-template-columns: 1fr; } }
 
+/* AI business summary panel */
+.ai-panel .panel-head { align-items: center; gap: 10px; flex-wrap: wrap; }
+.ai-panel .panel-head #aiGenBtn { margin-left: auto; }
+.ai-badge {
+  font-family: var(--mono); font-size: 9.5px; letter-spacing: .08em; font-weight: 600;
+  color: #fff; background: linear-gradient(90deg, #0fb6a9, #5b8def);
+  padding: 2px 7px; border-radius: 999px; vertical-align: middle; margin-left: 6px;
+}
+.ai-summary { font-size: 14px; line-height: 1.6; color: var(--ink); margin-top: 6px; }
+.ai-summary.ai-empty, .ai-summary.ai-loading { color: var(--ink-faint); font-size: 13.5px; }
+.ai-summary.ai-loading { animation: aiPulse 1.2s ease-in-out infinite; }
+@keyframes aiPulse { 0%,100% { opacity: .55; } 50% { opacity: 1; } }
+.ai-summary.ai-err { color: var(--bad); font-size: 13.5px; }
+.ai-summary .ai-h {
+  font-family: var(--display); font-weight: 600; font-size: 14px; letter-spacing: -.01em;
+  color: var(--ink); margin: 14px 0 6px;
+}
+.ai-summary .ai-h:first-child { margin-top: 2px; }
+.ai-summary .ai-ul { margin: 4px 0 8px; padding-left: 18px; }
+.ai-summary .ai-ul li { margin: 3px 0; }
+.ai-summary p { margin: 6px 0; }
+.ai-summary strong { color: var(--ink); font-weight: 600; }
+
 /* Grouped KPI sections (Headline / Operations) */
 .kpi-group { margin-bottom: 18px; }
 .kpi-label {
@@ -1308,32 +1331,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="stat-row stat-row--rev" id="revRow"></div>
       </div>
 
-      <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
-      <div class="panel sla-panel">
-        <div class="panel-head sla-head">
-          <div>
-            <h3>SLA rules</h3>
-            <p class="panel-sub" id="slaStatus"></p>
-          </div>
-          <button type="button" class="btn-ghost" id="slaToggle" aria-expanded="false">Edit SLA</button>
+      <!-- AI business summary (NEW) -->
+      <div class="panel ai-panel">
+        <div class="panel-head">
+          <h3>Business summary <span class="ai-badge">AI</span></h3>
+          <p class="panel-sub">Short overview of the selected date range — what's working and what needs attention</p>
+          <button type="button" class="btn-secondary" id="aiGenBtn">✦ Generate summary</button>
         </div>
-        <div id="slaBody" hidden>
-          <div class="sla-controls">
-            <label class="sla-carrier">Carrier
-              <select id="slaCarrier"></select>
-            </label>
-            <span class="sla-actions">
-              <input type="file" id="slaUpload" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
-              <label class="btn-ghost" for="slaUpload">⬆ Upload file</label>
-              <button type="button" class="btn-ghost" id="slaAddRow">＋ Add row</button>
-              <button type="button" class="btn-ghost" id="slaClear">Revert to built-in</button>
-              <button type="button" class="btn-secondary" id="slaSave">Save SLA</button>
-            </span>
-          </div>
-          <div class="table-scroll">
-            <table class="sla-table" id="slaTable"></table>
-          </div>
-        </div>
+        <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview of the current date range and filters.</div>
       </div>
 
       <!-- Destination city-tier breakdown -->
@@ -1435,6 +1440,34 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDest"></canvas></div>
         <div class="table-scroll">
           <table class="score-table" id="destTable"></table>
+        </div>
+      </div>
+
+      <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
+      <div class="panel sla-panel">
+        <div class="panel-head sla-head">
+          <div>
+            <h3>SLA rules</h3>
+            <p class="panel-sub" id="slaStatus"></p>
+          </div>
+          <button type="button" class="btn-ghost" id="slaToggle" aria-expanded="false">Edit SLA</button>
+        </div>
+        <div id="slaBody" hidden>
+          <div class="sla-controls">
+            <label class="sla-carrier">Carrier
+              <select id="slaCarrier"></select>
+            </label>
+            <span class="sla-actions">
+              <input type="file" id="slaUpload" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
+              <label class="btn-ghost" for="slaUpload">⬆ Upload file</label>
+              <button type="button" class="btn-ghost" id="slaAddRow">＋ Add row</button>
+              <button type="button" class="btn-ghost" id="slaClear">Revert to built-in</button>
+              <button type="button" class="btn-secondary" id="slaSave">Save SLA</button>
+            </span>
+          </div>
+          <div class="table-scroll">
+            <table class="sla-table" id="slaTable"></table>
+          </div>
         </div>
       </div>
 
@@ -1737,6 +1770,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     window.MASTER_URL = "{% url 'master_config' %}";
     window.DRIVE_URL = "{% url 'import_from_drive' %}";
     window.EXPORT_URL = "{% url 'export_shipments' %}";
+    window.AI_SUMMARY_URL = "{% url 'ai_summary' %}";
     window.SLA_URL = "{% url 'sla_config' %}";
     window.CSRF_TOKEN = "{{ csrf_token }}";
     window.LOGIN_URL = "{% url 'login' %}";
@@ -3091,6 +3125,44 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     else loadBigQuery({ lookback: lastLookback });
   });
   if ($("exportBtn")) $("exportBtn").addEventListener("click", function () { exportShipments(); });
+
+  // ---- AI business summary ------------------------------------------------
+  // Minimal markdown -> HTML (headings, bullets, **bold**) so the model's
+  // markdown renders cleanly without pulling in a library.
+  function mdLite(md) {
+    function esc(s) { return s.replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+    function bold(s) { return s.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>"); }
+    var out = [], inList = false;
+    (md || "").split(/\r?\n/).forEach(function (raw) {
+      var ln = raw.replace(/\s+$/, "");
+      var h = ln.match(/^#{1,4}\s+(.*)/);
+      if (h) { if (inList) { out.push("</ul>"); inList = false; } out.push('<h4 class="ai-h">' + bold(esc(h[1])) + "</h4>"); return; }
+      var b = ln.match(/^[-*]\s+(.*)/);
+      if (b) { if (!inList) { out.push('<ul class="ai-ul">'); inList = true; } out.push("<li>" + bold(esc(b[1])) + "</li>"); return; }
+      if (!ln.trim()) { if (inList) { out.push("</ul>"); inList = false; } return; }
+      if (inList) { out.push("</ul>"); inList = false; }
+      out.push("<p>" + bold(esc(ln)) + "</p>");
+    });
+    if (inList) out.push("</ul>");
+    return out.join("");
+  }
+
+  if ($("aiGenBtn")) $("aiGenBtn").addEventListener("click", function () {
+    if (!loaded) { setHint("Load data first, then generate a summary.", "err"); return; }
+    var btn = this, box = $("aiSummary"), label = btn.textContent;
+    btn.disabled = true; btn.textContent = "Generating…";
+    box.className = "ai-summary ai-loading";
+    box.textContent = "Analysing the selected date range…";
+    post(currentFilters(), window.AI_SUMMARY_URL).then(function (b) {
+      box.className = "ai-summary";
+      box.innerHTML = mdLite(b.summary || "No summary returned.");
+    }).catch(function (err) {
+      box.className = "ai-summary ai-err";
+      box.textContent = "Couldn't generate summary: " + err.message;
+    }).finally(function () {
+      btn.disabled = false; btn.textContent = label;
+    });
+  });
 
   // ---- SLA editor: view / replace a carrier's promised-TAT table ----------
   var slaCarriers = [];
