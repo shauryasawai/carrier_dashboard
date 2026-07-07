@@ -283,6 +283,9 @@ body {
 .tier-card.t1 .tier-bar > span { background: var(--good); }
 .tier-card.t2 .tier-bar > span { background: var(--gold); }
 .tier-card.t3 .tier-bar > span { background: var(--ink-faint); }
+.tier-rev { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
+  font-family: var(--display); font-weight: 500; font-size: 16px; letter-spacing: -.01em; color: var(--ink-soft); }
+.tier-rev .unit { font-size: 10.5px; color: var(--ink-faint); font-family: var(--mono); margin-left: 6px; font-weight: 400; }
 .filter label {
   display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
   text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
@@ -432,6 +435,12 @@ body {
 .stat-value { font-family: var(--display); font-weight: 600; font-size: 27px; letter-spacing: -.02em; margin-top: 5px; font-optical-sizing: auto; white-space: nowrap; color: var(--ink); }
 .stat-value .unit { font-size: 13px; color: var(--ink-faint); font-family: var(--mono); margin-left: 3px; font-weight: 400; }
 
+/* Revenue KPI row: 6 cards as 3-wide × 2 rows so the ₹ value + order-count tag
+   never clip. Reflows to 2-wide then 1-wide on smaller screens. */
+.stat-row--rev { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .stat-row--rev { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .stat-row--rev { grid-template-columns: 1fr; } }
+
 /* Grouped KPI sections (Headline / Operations) */
 .kpi-group { margin-bottom: 18px; }
 .kpi-label {
@@ -512,6 +521,16 @@ body {
   border-bottom: 1px solid var(--line); padding-bottom: 10px;
 }
 .pc-head { position: relative; }
+/* When a category thumbnail is present, align items to centre so image, rank,
+   name and count sit on one tidy row. */
+.pc-head--img { align-items: center; }
+.pc-thumb {
+  flex: none; width: 40px; height: 40px; border-radius: 9px; overflow: hidden;
+  background: var(--paper-2); display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--line);
+}
+.pc-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pc-thumb-icon { font-size: 20px; background: color-mix(in srgb, var(--accent, #0fb6a9) 14%, #fff); border-color: transparent; }
 .pc-rank {
   font-family: var(--mono); font-size: 11px; color: #fff;
   background: var(--accent, #0fb6a9);
@@ -524,6 +543,12 @@ body {
 }
 .pc-count { font-family: var(--mono); font-size: 13px; color: var(--ink); white-space: nowrap; }
 .pc-count em { font-style: normal; color: var(--ink-faint); font-size: 11px; margin-left: 2px; }
+/* Economics strip under the category head: revenue · RTO% · AOV */
+.pc-econ { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; margin: 2px 0 9px; }
+.pc-econ-rev { font-family: var(--display); font-weight: 600; font-size: 16px; letter-spacing: -.01em; color: var(--ink); }
+.pc-econ-rev em { font-style: normal; color: var(--ink-faint); font-size: 11px; font-family: var(--mono); margin-left: 3px; font-weight: 400; }
+.pc-econ-rto { font-family: var(--mono); font-size: 11px; font-weight: 600; margin-left: auto; }
+.pc-econ-aov { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
 .pc-share {
   height: 5px; background: var(--paper-2); border-radius: 3px; overflow: hidden; margin-bottom: 12px;
 }
@@ -1278,6 +1303,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="kpi-label">Operations</div>
         <div class="stat-row stat-row--ops" id="statRow2"></div>
       </div>
+      <div class="kpi-group">
+        <div class="kpi-label">Revenue <span class="hint-inline">order value</span></div>
+        <div class="stat-row stat-row--rev" id="revRow"></div>
+      </div>
 
       <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
       <div class="panel sla-panel">
@@ -1316,6 +1345,26 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="tier-row" id="tierRow"></div>
       </div>
 
+      <!-- Payment mode performance (COD vs Prepaid) (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Payment mode performance</h3>
+          <p id="paySub" class="panel-sub"></p>
+        </div>
+        <div class="table-scroll">
+          <table class="score-table" id="payTable"></table>
+        </div>
+      </div>
+
+      <!-- Orders per day (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Orders per day</h3>
+          <p id="dailySub" class="panel-sub"></p>
+        </div>
+        <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDaily"></canvas></div>
+      </div>
+
       <!-- Score table -->
       <div class="panel">
         <div class="panel-head">
@@ -1338,16 +1387,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
-      <!-- Charts -->
-      <div class="chart-grid">
-        <div class="panel">
-          <div class="panel-head"><h3>Efficiency score</h3></div>
-          <div class="chart-box" style="--h: 320px"><canvas id="cScore"></canvas></div>
+      <!-- Product breakdown -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Product breakdown</h3>
+          <p id="productSub" class="panel-sub"></p>
         </div>
-        <div class="panel">
-          <div class="panel-head"><h3>Pickup → delivery TAT</h3><span class="panel-sub">hours</span></div>
-          <div class="chart-box" style="--h: 320px"><canvas id="cTat"></canvas></div>
-        </div>
+        <div id="productGrid" class="product-grid"></div>
       </div>
 
       <!-- Partner performance per warehouse (NEW) -->
@@ -1404,24 +1450,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
-      <!-- Product breakdown -->
-      <div class="panel">
-        <div class="panel-head">
-          <h3>Product breakdown</h3>
-          <p id="productSub" class="panel-sub"></p>
-        </div>
-        <div id="productGrid" class="product-grid"></div>
-      </div>
-
-      <!-- Business mix -->
-      <div class="panel">
-        <div class="panel-head"><h3>Business mix</h3></div>
-        <div class="mix-grid">
-          <div class="mix-cell"><span class="mix-label">Weight bucket</span><div class="chart-box" style="--h: 190px"><canvas id="cWeight"></canvas></div></div>
-          <div class="mix-cell"><span class="mix-label">Payment mode</span><div class="chart-box" style="--h: 190px"><canvas id="cPay"></canvas></div></div>
-          <div class="mix-cell"><span class="mix-label">Delivery type</span><div class="chart-box" style="--h: 190px"><canvas id="cDtype"></canvas></div></div>
-        </div>
-      </div>
 
     </section>
     </div><!-- /viewEfficiency -->
@@ -1750,6 +1778,15 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   }
   function fmtPct(v) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(1) + "%"; }
   function fmtNum(v, dp) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(dp == null ? 2 : dp); }
+  // Compact \u20b9 in the Indian scale (Cr / L / K) for large revenue figures.
+  function fmtINRc(v) {
+    if (v == null || isNaN(v)) return "\u2014";
+    var a = Math.abs(v), s = v < 0 ? "-" : "";
+    if (a >= 1e7) return s + "\u20b9" + (a / 1e7).toFixed(2) + " Cr";
+    if (a >= 1e5) return s + "\u20b9" + (a / 1e5).toFixed(2) + " L";
+    if (a >= 1e3) return s + "\u20b9" + (a / 1e3).toFixed(1) + "K";
+    return s + "\u20b9" + Math.round(a).toLocaleString();
+  }
 
   function scoreClass(s) {
     if (s == null) return "na";
@@ -2193,7 +2230,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     populateOptions(report.filters);
     renderDataRange(report);
     renderStats(report.summary);
+    renderRevenue(report.summary);
     renderTiers(report.summary);
+    renderPayment(report.payment_perf, report.summary);
     renderFormula(report.weights);
     renderTable(report.carriers);
     renderStatusMatrix(report);
@@ -2202,7 +2241,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     renderDestinations(report);
     renderLanes(report);
     renderWarehouseCarrierPanel(report);
-    renderCharts(report);
+    renderDailyChart(report.daily);
     renderWarehouseChart(report.warehouses);
     renderDestChart(report.destinations);
     renderWhcChart();
@@ -2247,6 +2286,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if (kind === "pct") return v.toFixed(1) + "%";
     if (kind === "hours") return fmtH(v);
     if (kind === "money") return "\u20b9" + Math.round(v).toLocaleString();
+    if (kind === "money_c") return fmtINRc(v);
     return Math.round(v).toLocaleString();
   }
 
@@ -2304,6 +2344,32 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     fillStatGroup($("statRow2"), ops);
   }
 
+  // Revenue KPIs. The four outcome buckets (delivered / RTO / forward pendency /
+  // cancelled) reconcile to the total order value, so Delivered + RTO + Pending
+  // + Cancelled == Order value. Each carries its order count (and share of value)
+  // as the small unit tag so value always reads against the volume behind it.
+  function renderRevenue(s) {
+    function tag(txt) { return ' <span class="unit">' + txt + '</span>'; }
+    function nc(n) { return (n != null ? n.toLocaleString() : "0"); }
+    function countPct(n, pct, noun) {
+      return tag(nc(n) + " " + noun + (pct != null ? " · " + pct.toFixed(1) + "%" : ""));
+    }
+    var cards = [
+      { label: "Order value", value: s.revenue, kind: "money_c",
+        suffix: tag(nc(s.total) + " orders") },
+      { label: "Delivered value", value: s.delivered_value, kind: "money_c", tone: "good",
+        suffix: tag(nc(s.delivered) + " delivered") },
+      { label: "RTO value", value: s.rto_value, kind: "money_c", tone: "bad",
+        suffix: countPct(s.rto, s.rto_value_pct, "orders") },
+      { label: "Forward pendency", value: s.pending_value, kind: "money_c",
+        suffix: countPct(s.pending_orders, s.pending_value_pct, "in transit") },
+      { label: "Cancelled / Lost", value: s.cancelled_value, kind: "money_c", tone: "bad",
+        suffix: countPct(s.cancelled_orders, s.cancelled_value_pct, "orders") },
+      { label: "Avg order value", value: s.aov, kind: "money" }
+    ];
+    fillStatGroup($("revRow"), cards);
+  }
+
   function fillStatGroup(container, cards) {
     if (!container) return;
     container.innerHTML = cards.map(function (c) {
@@ -2321,7 +2387,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Destination city-tier breakdown cards (Tier 1/2/3 by drop pincode).
   function renderTiers(s) {
     var t = (s && s.tiers) || {};
+    var rev = (s && s.tier_revenue) || {};
     var total = s.total || 0;
+    var totalRev = s.revenue || 0;
     var defs = [
       ["Tier 1", "Metros", "t1"],
       ["Tier 2", "Large cities", "t2"],
@@ -2332,20 +2400,68 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var sub = $("tierSub");
     if (sub) {
       sub.textContent = classified.toLocaleString() + " of " + total.toLocaleString() +
-        " shipments classified by drop pincode" +
+        " shipments classified by drop pincode · " + fmtINRc(totalRev) + " total" +
         (unknown ? " · " + unknown.toLocaleString() + " unmapped" : "");
     }
     $("tierRow").innerHTML = defs.map(function (d) {
       var n = t[d[0]] || 0;
+      var r = rev[d[0]] || 0;
       var pct = total ? (n / total * 100) : 0;
+      var revPct = totalRev ? (r / totalRev * 100) : 0;
       return '<div class="tier-card ' + d[2] + '">' +
         '<div class="tier-head"><span class="tier-name">' + d[0] + '</span>' +
         '<span class="tier-cap">' + d[1] + '</span></div>' +
         '<div class="tier-val">' + n.toLocaleString() +
         '<span class="unit">' + pct.toFixed(1) + '%</span></div>' +
         '<div class="tier-bar"><span style="width:' + Math.round(pct) + '%"></span></div>' +
+        '<div class="tier-rev">' + fmtINRc(r) +
+        '<span class="unit">' + revPct.toFixed(1) + '% of value</span></div>' +
         '</div>';
     }).join("");
+  }
+
+  // RTO% colour band: <5% clean, 5–10% watch, >10% problem.
+  function rtoCls(pct) {
+    if (pct == null) return "";
+    if (pct >= 10) return "g-bad";
+    if (pct >= 5) return "g-warn";
+    return "g-good";
+  }
+  function fmtRupee(v) { return v == null || isNaN(v) ? "—" : "₹" + Math.round(v).toLocaleString(); }
+  // RTO% inline colour (used where CSS class specificity would be overridden).
+  function rtoColor(pct) {
+    if (pct == null) return "var(--ink-faint)";
+    if (pct >= 10) return "var(--bad)";
+    if (pct >= 5) return "var(--warn)";
+    return "var(--good)";
+  }
+
+  // Payment-mode performance: COD vs Prepaid. COD usually carries far higher RTO,
+  // so RTO% is colour-coded, and COD cash-in-transit (collectable ₹ owed on COD
+  // orders not yet delivered) is called out in the sub-heading.
+  function renderPayment(rows, s) {
+    if (!$("payTable")) return;
+    rows = rows || [];
+    var head = "<thead><tr><th>Payment</th><th>Orders</th><th>Share</th>" +
+      "<th>Revenue</th><th>AOV</th><th>Delivery success</th><th>RTO %</th>" +
+      "<th>COD in transit</th></tr></thead>";
+    var body = rows.map(function (p) {
+      return "<tr><td class=\"carrier-name\">" + esc(p.group) + "</td>" +
+        '<td class="num">' + p.n.toLocaleString() + "</td>" +
+        '<td class="num">' + fmtPct(p.n_pct) + "</td>" +
+        '<td class="num">' + fmtINRc(p.revenue) + "</td>" +
+        '<td class="num">' + fmtRupee(p.aov) + "</td>" +
+        '<td class="num">' + fmtPct(p.success_rate) + "</td>" +
+        '<td class="num"><span class="' + rtoCls(p.rto_pct) + '">' + fmtPct(p.rto_pct) + "</span></td>" +
+        '<td class="num">' + (p.cod_exposure ? fmtINRc(p.cod_exposure) : "—") + "</td>" +
+        "</tr>";
+    }).join("");
+    $("payTable").innerHTML = head + "<tbody>" + body + "</tbody>";
+    var codExp = rows.reduce(function (a, p) { return a + (p.cod_exposure || 0); }, 0);
+    var sub = $("paySub");
+    if (sub) sub.textContent = codExp > 0
+      ? fmtINRc(codExp) + " COD cash in transit · collectable ₹ owed on COD orders not yet delivered"
+      : "";
   }
 
   function renderFormula(w) {
@@ -2583,12 +2699,33 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<div class="product-empty">Upload an export that includes the Item Names column to see product categories.</div>';
       return;
     }
+    var totalRev = products.reduce(function (a, c) { return a + (c.revenue || 0); }, 0);
     $("productSub").textContent =
       products.length + " categories \u00b7 " + total.toLocaleString() +
-      " shipments \u00b7 grouped from product names";
+      " shipments \u00b7 " + fmtINRc(totalRev) + " \u00b7 ranked by revenue";
 
     // Color cycle for category accents.
     var ACCENTS = ["#0fb6a9", "#1f9d76", "#f2994a", "#5b8def", "#0a8c84", "#e5564b"];
+
+    // Real Frido category images (Shopify CDN); categories without one fall back
+    // to an emoji badge below.
+    var _CDN = "https://cdn.shopify.com/s/files/1/0553/0419/2034/files/";
+    var CATEGORY_IMG = {
+      "Orthotics": _CDN + "Category_1_2_1.jpg?v=1769695217&width=200",
+      "Insoles": _CDN + "Everyday_Insole_Combo_55a98dda-d383-4a27-9f57-39c4a5e8bcab.png?v=1770808742&width=200",
+      "Footwear": _CDN + "WS-01_8b6068d3-4e48-4b4c-8d37-07fd0338d7cb.jpg?v=1753101892&width=200",
+      "Pillows": _CDN + "CNP-Black-01B_4997708e-d0e7-49d3-af3f-fe7d51f06423.jpg?v=1739886430&width=200",
+      "Cushions": _CDN + "Wedge-plus_color-picker-tab_2edb45fe-649c-4966-b706-0d148f3de35d.png?v=1747912121&width=200",
+      "Mattress Topper Protector": _CDN + "UMT_2.jpg?v=1720264311&width=200",
+      "Chairs": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=200"
+    };
+    var CATEGORY_ICON = {
+      "Orthotics": "🩺", "Insoles": "👣", "Footwear": "🥿", "Pillows": "🛏️",
+      "Cushions": "🪑", "Mattress Topper Protector": "🛌", "Mobility Devices": "♿",
+      "Socks": "🧦", "Maternity & Baby Care": "🤰", "Personal Care": "💆",
+      "Accessories": "🎒", "Workspace": "🖥️", "Chairs": "🪑", "Barefoot": "🦶",
+      "Masks": "😷", "Covers": "🛡️", "Others": "📦"
+    };
 
     // Show the first 3 rows of a section; tuck the rest behind a "+N more" toggle.
     function pcRows(rowsHtml) {
@@ -2602,53 +2739,60 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     grid.innerHTML = products.map(function (c, i) {
       var accent = ACCENTS[i % ACCENTS.length];
       var pct = total ? (c.n / total * 100) : 0;
-      var maxSub = c.subs.reduce(function (m, s) { return Math.max(m, s.n); }, 0) || 1;
+      var maxSub = c.subs.reduce(function (m, s) { return Math.max(m, s.revenue || 0); }, 0) || 1;
       var maxAcct = (c.accounts || []).reduce(function (m, a) { return Math.max(m, a.n); }, 0) || 1;
 
-      // Subcategory rows with proportional bars (top 3, rest collapsible).
+      // Product (subcategory) rows: bar proportional to revenue, value shows
+      // revenue with a colour-coded RTO% so high-return products stand out.
       var subRows = c.subs.map(function (s) {
-        var w = Math.round(s.n / maxSub * 100);
-        var sp = c.n ? (s.n / c.n * 100) : 0;
-        return '<div class="pc-row">' +
-          '<span class="pc-row-label" title="' + esc(s.subcategory) + '">' + esc(s.subcategory) + "</span>" +
+        var w = Math.round((s.revenue || 0) / maxSub * 100);
+        return '<div class="pc-row" title="' + esc(s.subcategory) + ' · ' + s.n.toLocaleString() + ' shipments">' +
+          '<span class="pc-row-label">' + esc(s.subcategory) + "</span>" +
           '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '"></span></span>' +
-          '<span class="pc-row-val">' + s.n.toLocaleString() + '<i>' + sp.toFixed(0) + "%</i></span>" +
+          '<span class="pc-row-val">' + fmtINRc(s.revenue) +
+            '<i style="color:' + rtoColor(s.rto_pct) + '">RTO ' + fmtPct(s.rto_pct) + "</i></span>" +
           "</div>";
       });
       var subHtml = pcRows(subRows);
 
-      // Carrier accounts: cap at 6 + "others" rollup, then show top 3 / rest collapsible.
-      var accts = (c.accounts || []).slice();
-      var shown = accts.slice(0, 6);
-      var rest = accts.slice(6);
-      if (rest.length) {
-        var restN = rest.reduce(function (a, x) { return a + x.n; }, 0);
-        shown.push({ account: "+" + rest.length + " others", n: restN, _muted: true });
-      }
-      var acctRows = shown.map(function (a) {
-        var w = Math.round(a.n / maxAcct * 100);
-        var ap = c.n ? (a.n / c.n * 100) : 0;
-        return '<div class="pc-row' + (a._muted ? " pc-muted" : "") + '">' +
-          '<span class="pc-row-label" title="' + esc(a.account) + '">' + esc(a.account) + "</span>" +
-          '<span class="pc-bar"><span class="pc-bar-fill" style="width:' + w + '%;background:' + accent + '99"></span></span>' +
-          '<span class="pc-row-val">' + a.n.toLocaleString() + '<i>' + ap.toFixed(0) + "%</i></span>" +
-          "</div>";
-      });
-      var acctHtml = pcRows(acctRows);
+      // Shipped by: only the single top carrier account by volume.
+      var topAcct = (c.accounts || [])[0];
+      var acctHtml = topAcct
+        ? '<div class="pc-row">' +
+            '<span class="pc-row-label" title="' + esc(topAcct.account) + '">' + esc(topAcct.account) + "</span>" +
+            '<span class="pc-bar"><span class="pc-bar-fill" style="width:100%;background:' + accent + '99"></span></span>' +
+            '<span class="pc-row-val">' + topAcct.n.toLocaleString() +
+              '<i>' + (c.n ? (topAcct.n / c.n * 100).toFixed(0) : "0") + "%</i></span>" +
+          "</div>"
+        : '<div class="pc-row pc-muted"><span class="pc-row-label">—</span></div>';
+
+      // Category thumbnail: real Frido image when we have one, else an emoji badge.
+      var imgUrl = CATEGORY_IMG[c.category];
+      var thumb = imgUrl
+        ? '<span class="pc-thumb"><img src="' + imgUrl + '" alt="" loading="lazy"></span>'
+        : '<span class="pc-thumb pc-thumb-icon" style="--accent:' + accent + '">' +
+            (CATEGORY_ICON[c.category] || "📦") + "</span>";
 
       return '<div class="pc-card">' +
-          '<div class="pc-head" style="--accent:' + accent + '">' +
+          '<div class="pc-head pc-head--img" style="--accent:' + accent + '">' +
+            thumb +
             '<span class="pc-rank">' + (i + 1) + "</span>" +
             '<span class="pc-name">' + esc(c.category) + "</span>" +
             '<span class="pc-count">' + c.n.toLocaleString() +
               ' <em>' + pct.toFixed(1) + "%</em></span>" +
+          "</div>" +
+          '<div class="pc-econ">' +
+            '<span class="pc-econ-rev">' + fmtINRc(c.revenue) +
+              ' <em>' + (c.revenue_pct == null ? "—" : c.revenue_pct.toFixed(1) + "%") + "</em></span>" +
+            '<span class="pc-econ-rto" style="color:' + rtoColor(c.rto_pct) + '">RTO ' + fmtPct(c.rto_pct) + "</span>" +
+            '<span class="pc-econ-aov">AOV ' + fmtRupee(c.aov) + "</span>" +
           "</div>" +
           '<div class="pc-share"><span style="width:' + pct.toFixed(1) + '%;background:' + accent + '"></span></div>' +
           '<div class="pc-section">' +
             '<div class="pc-section-title">Subcategories</div>' + subHtml +
           "</div>" +
           '<div class="pc-section">' +
-            '<div class="pc-section-title">Shipped by</div>' + acctHtml +
+            '<div class="pc-section-title">Top carrier</div>' + acctHtml +
           "</div>" +
         "</div>";
     }).join("");
@@ -2847,35 +2991,87 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       cutout: "58%"
     };
   }
-
-  function renderCharts(report) {
-    var c = report.carriers;
-    var labels = c.map(function (a) { return a.carrier; });
-
-    upsertChart("cScore", {
-      type: "bar",
-      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.score == null ? 0 : a.score; }), backgroundColor: "#0fb6a9", borderRadius: 4, barThickness: "flex", maxBarThickness: 22 }] },
-      options: hbarOpts()
-    });
-
-    upsertChart("cTat", {
-      type: "bar",
-      data: { labels: labels, datasets: [{ data: c.map(function (a) { return a.p2d == null ? 0 : a.p2d; }), backgroundColor: "#1f9d76", borderRadius: 4, barThickness: "flex", maxBarThickness: 22 }] },
-      options: hbarOpts()
-    });
-
-    mixChart("cWeight", report.mix.weight);
-    mixChart("cPay", report.mix.payment);
-    mixChart("cDtype", report.mix.delivery_type);
+  // Vertical bars (index axis on x) for time-series style breakdowns.
+  function vbarOpts(avg) {
+    return {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 850, easing: "easeOutQuart" },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var v = ctx.parsed.y;
+              var s = v.toLocaleString() + " orders";
+              if (avg) {
+                var diff = Math.round(v - avg);
+                s += diff >= 0 ? "  (+" + diff.toLocaleString() + " vs avg)"
+                               : "  (" + diff.toLocaleString() + " vs avg)";
+              }
+              return s;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: FAINT, autoSkip: true, maxRotation: 0, font: { family: "Spline Sans Mono", size: 11 } } },
+        y: { beginAtZero: true, grid: { color: LINE }, ticks: { color: FAINT, precision: 0, font: { family: "Spline Sans Mono" } } }
+      }
+    };
   }
 
-  function mixChart(id, obj) {
-    var labels = Object.keys(obj);
-    var data = labels.map(function (k) { return obj[k]; });
-    upsertChart(id, {
-      type: "doughnut",
-      data: { labels: labels, datasets: [{ data: data, backgroundColor: PALETTE, borderColor: "#ffffff", borderWidth: 2 }] },
-      options: doughnutOpts()
+  // Orders-per-day: vertical bars over the (pickup) date axis so it's easy to
+  // spot which days ran hot and which ran light. The busiest day is highlighted
+  // and the quietest muted; the sub-heading calls out both plus the daily mean.
+  function fmtDay(iso) {
+    var p = (iso || "").split("-");
+    if (p.length !== 3) return iso || "";
+    var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    return MON[(+p[1] - 1) % 12] + " " + (+p[2]);
+  }
+
+  function renderDailyChart(daily) {
+    var sub = $("dailySub");
+    if (!daily || !daily.length) {
+      if (sub) sub.textContent = "";
+      upsertChart("cDaily", {
+        type: "bar", data: { labels: [], datasets: [{ data: [] }] }, options: vbarOpts()
+      });
+      return;
+    }
+    var counts = daily.map(function (d) { return d.n; });
+    var maxN = Math.max.apply(null, counts);
+    var minN = Math.min.apply(null, counts);
+    var total = counts.reduce(function (a, b) { return a + b; }, 0);
+    var avg = total / counts.length;
+
+    var busiest = daily.find(function (d) { return d.n === maxN; });
+    var quietest = daily.find(function (d) { return d.n === minN; });
+
+    if (sub) {
+      sub.textContent = daily.length + " days · busiest " +
+        fmtDay(busiest.date) + " (" + maxN.toLocaleString() + ") · lightest " +
+        fmtDay(quietest.date) + " (" + minN.toLocaleString() + ") · avg " +
+        Math.round(avg).toLocaleString() + "/day";
+    }
+
+    upsertChart("cDaily", {
+      type: "bar",
+      data: {
+        labels: daily.map(function (d) { return fmtDay(d.date); }),
+        datasets: [{
+          label: "Orders",
+          data: counts,
+          backgroundColor: daily.map(function (d) {
+            if (d.n === maxN) return "#e5564b";  // busiest day
+            if (d.n === minN) return "#c4d0da";  // lightest day
+            return "#0fb6a9";
+          }),
+          borderRadius: 4, barThickness: "flex", maxBarThickness: 34
+        }]
+      },
+      options: vbarOpts(avg)
     });
   }
 

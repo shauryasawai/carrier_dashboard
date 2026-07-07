@@ -56,6 +56,12 @@ COLUMNS = {
     # Product info (used to derive category / subcategory). Optional.
     "item_names": ["Item Names", "Item Name", "Product Name"],
     "sku": ["Product SKU Codes", "SKU", "Product SKU Code"],
+    # Declared order/invoice value in ₹ (the sale value of the goods = revenue).
+    # Used for the revenue panel and per-tier revenue. Optional in uploads.
+    "order_value": ["Invoice Value", "Order Value", "Invoice Amount",
+                    "Order Amount", "Invoice Amt", "Total Value"],
+    # COD collectable amount in ₹ (0 for prepaid). Used for COD cash exposure.
+    "cod_value": ["COD Value", "COD Amount", "Collectable Amount", "COD Amt"],
     # Shipment identifiers — optional, used to join carrier invoices back to the
     # shipment master (recover SKU/category for invoices that lack them).
     "awb": ["AWB", "AWB Number", "AWB No", "AWB No.", "Waybill Number", "Tracking Id", "awb_number"],
@@ -392,38 +398,49 @@ def _pickup_slot(dt):
 # are a convenience grouping and can be tuned freely. Anything unmatched falls
 # to ("Others", "Other"). Keywords match as case-insensitive substrings.
 PRODUCT_RULES = [
-    # --- Mobility & assistive devices (the Frido/Arcatron mobility catalogue —
-    # wheelchairs, scooters, bathroom-safety and transfer aids, e.g. the
-    # SHOPIFY_Mobility channel). Placed FIRST so a wheelchair whose name mentions
-    # a "footrest" / "armrest" / "seat" isn't miscategorized as Foot Care /
-    # Cushion, and bath mats don't fall through to "Others". ---
-    ("Mobility Aids", "Wheelchair", ["wheelchair", "wheel chair"]),
-    ("Mobility Aids", "Mobility Scooter", ["mobility scooter", "scooter"]),
-    ("Mobility Aids", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist"]),
-    ("Mobility Aids", "Commode", ["commode"]),
-    ("Mobility Aids", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair"]),
-    ("Mobility Aids", "Recliner Bed", ["recliner"]),
-    ("Mobility Aids", "Accessories", ["castor wheel", "joystick", "footrest", "armrest"]),
-
-    # --- Maternity & Baby Care (first, so a pregnancy/maternity pillow lands
-    # here instead of under Pillows) ---
+    # --- Maternity & Baby Care (FIRST, so a pregnancy/maternity/feeding pillow
+    # lands here instead of under Pillows) ---
     ("Maternity & Baby Care", "Pregnancy Pillow", ["pregnancy", "maternity"]),
     ("Maternity & Baby Care", "Baby Care", ["baby", "infant", "nursing", "feeding pillow", "kids"]),
 
-    # --- Insoles (before Footwears/Orthotics; an insole is its own category) ---
-    ("Insoles", "Insoles", ["insole", "shoe insert", "foot insert"]),
+    # --- Barefoot (Frido's barefoot shoes/socks line — before Footwear & Socks
+    # so a "barefoot sock shoe" doesn't fall into those broader buckets) ---
+    ("Barefoot", "Barefoot", ["barefoot", "sock shoe", "skinners"]),
+
+    # --- Mobility Devices (wheelchairs, scooters, transfer/bathroom aids). Early
+    # so a wheelchair mentioning "footrest"/"seat" isn't read as Foot Care/Cushion. ---
+    ("Mobility Devices", "Wheelchair", ["wheelchair", "wheel chair"]),
+    ("Mobility Devices", "Mobility Scooter", ["mobility scooter", "scooter"]),
+    ("Mobility Devices", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist", "walker", "rollator", "crutch"]),
+    ("Mobility Devices", "Commode", ["commode"]),
+    ("Mobility Devices", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair", "ramp"]),
+
+    # --- Chairs (ergonomic / office / gaming chairs, recliners) ---
+    ("Chairs", "Ergonomic Chair", ["ergonomic chair", "ergo chair", "office chair", "gaming chair", "study chair"]),
+    ("Chairs", "Recliner", ["recliner"]),
+    ("Chairs", "Chair", ["chair"]),
+
+    # --- Workspace (standing desks, laptop tables/stands, workstation gear) ---
+    ("Workspace", "Standing Desk", ["standing desk", "height desk", "adjustable desk"]),
+    ("Workspace", "Desk & Table", ["laptop table", "study table", "work table", "desk", "workstation"]),
+    ("Workspace", "Stand & Mount", ["laptop stand", "monitor stand", "monitor arm", "monitor mount", "laptop mount", "laptop holder", "monitor", "foot rest", "footrest"]),
+
+    # --- Insoles (before Footwear/Orthotics; an insole is its own category) ---
+    ("Insoles", "Insoles", ["insole", "arch support", "shoe insert", "foot insert"]),
 
     # --- Socks ---
     ("Socks", "Socks", ["sock"]),
 
-    # --- Mattress ---
-    ("Mattress", "Mattress", ["mattress"]),
-    ("Mattress", "Topper", ["topper"]),
+    # --- Masks (face / anti-pollution masks; sleep & eye masks -> Personal Care) ---
+    ("Masks", "Face Mask", ["face mask", "n95", "n-95", "anti pollution", "anti-pollution", "pollution mask", "surgical mask"]),
 
-    # --- Footwears ---
-    ("Footwears", "Sandals", ["sandal"]),
-    ("Footwears", "Slippers", ["slipper", "flip flop", "flipflop", "clog"]),
-    ("Footwears", "Shoes", ["shoe", "sneaker", "footwear"]),
+    # --- Mattress Topper Protector ---
+    ("Mattress Topper Protector", "Topper", ["mattress topper", "topper"]),
+    ("Mattress Topper Protector", "Protector", ["mattress protector", "mattress"]),
+
+    # --- Covers (product covers — before Pillows/Cushions so "pillow cover" and
+    # "cushion cover" land here, not in Pillows/Cushions) ---
+    ("Covers", "Covers", ["cuddle cover", "wedge cover", "pillow cover", "cushion cover", "seat cover", "replacement cover", "cover"]),
 
     # --- Pillows ---
     ("Pillows", "Neck Pillow", ["neck pillow", "cervical", "neck contour", "travel pillow"]),
@@ -435,17 +452,28 @@ PRODUCT_RULES = [
     ("Cushions", "Backrest", ["backrest", "back rest", "lumbar cushion", "lumbar"]),
     ("Cushions", "Cushion", ["cushion"]),
 
-    # --- Frido Orthotics (posture, braces, joint & foot supports) ---
-    ("Frido Orthotics", "Posture Corrector", ["posture"]),
-    ("Frido Orthotics", "Knee & Joint Support", ["knee", "ankle", "elbow", "wrist", "shoulder"]),
-    ("Frido Orthotics", "Braces & Wraps", ["brace", "wrap", "lumbo sacral", "sacral", "compression", "support belt", "belt", "support"]),
-    ("Frido Orthotics", "Foot Care", ["bunion", "heel", "plantar", "toe", "arch", "orthotic", "foot"]),
+    # --- Footwear (before Orthotics; "footwear"/"foot" would otherwise hit Foot Care) ---
+    ("Footwear", "Sandals", ["sandal"]),
+    ("Footwear", "Slippers", ["slipper", "flip flop", "flipflop", "clog", "chappal"]),
+    ("Footwear", "Shoes", ["shoe", "sneaker", "footwear"]),
 
-    # --- Personal Care (therapy, masks, nasal, massage, pain relief) ---
-    ("Personal Care", "Masks", ["eye mask", "sleep mask", "mask"]),
+    # --- Orthotics (posture, braces, joint & foot supports) ---
+    ("Orthotics", "Posture Corrector", ["posture"]),
+    ("Orthotics", "Knee & Joint Support", ["knee", "ankle", "elbow", "wrist", "shoulder"]),
+    ("Orthotics", "Braces & Wraps", ["brace", "wrap", "lumbo sacral", "sacral", "compression", "support belt", "belt", "support"]),
+    ("Orthotics", "Foot Care", ["bunion", "heel", "plantar", "toe", "arch", "orthotic", "foot"]),
+
+    # --- Personal Care (therapy, sleep/eye masks, nasal, massage, pain relief) ---
+    ("Personal Care", "Sleep & Eye Mask", ["eye mask", "sleep mask", "mask"]),
     ("Personal Care", "Hot/Cold Therapy", ["therapy", "hot & cold", "cold & hot", "heating pad", "heat pad"]),
     ("Personal Care", "Nasal Care", ["nasal", "nose"]),
-    ("Personal Care", "Massage & Relief", ["massager", "massage", "roller", "pain relief", "pain-relief"]),
+    ("Personal Care", "Massage & Relief", ["massager", "massage", "roller", "pain relief", "pain-relief", "kinesiology", "tape"]),
+    ("Personal Care", "Gloves", ["glove"]),
+
+    # --- Accessories (wallets, straps, bags, combos, spare parts) ---
+    ("Accessories", "Wallet", ["wallet", "card holder", "cardholder"]),
+    ("Accessories", "Spare Parts", ["spare part", "sparepart", "castor wheel", "castor", "joystick"]),
+    ("Accessories", "Accessories", ["strap", "pouch", "bag", "cap", "combo", "accessor"]),
 ]
 
 
@@ -618,6 +646,8 @@ def build_record(get):
     edd = _to_datetime(get("edd_ts"))   # carrier's committed expected delivery date
     attempts = _to_float(get("attempts"))
     weight = _to_float(get("weight"))
+    order_value = _to_float(get("order_value"))  # declared ₹ value of the order
+    cod_value = _to_float(get("cod_value"))       # ₹ to collect on delivery (COD)
     status = str(get("status") or "").strip()
     payment = str(get("payment") or "").strip().upper()
 
@@ -698,6 +728,8 @@ def build_record(get):
         "payment": payment,
         "weight": weight,
         "weight_class": _weight_class(weight),
+        "order_value": order_value,
+        "cod_value": cod_value,
         "pickup_date": pickup.date().isoformat() if pickup else "",
         "pickup_slot": _pickup_slot(pickup),
         "status": status,
@@ -1386,33 +1418,109 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     for _row in lane_agg:
         _row.pop("subscores", None)
 
+    # Single pass over the filtered rows for every count/value reduction (order
+    # counts, the four outcome value buckets, NDD, and the destination city-tier
+    # count+revenue). This replaces ~12 separate generator scans and runs on
+    # every re-filter. The four outcome buckets partition revenue exactly, so
+    # Delivered + RTO + Pending + Cancelled == total (both value and order count).
     total = len(rows)
-    delivered = sum(1 for r in rows if r["delivered"])
-    picked = sum(1 for r in rows if r["picked"])
-    ndd_orders = sum(1 for r in rows if _is_ndd(r["account"]))
-    rto = sum(1 for r in rows if r.get("outcome") == "RTO")
-
-    # Destination city-tier counts (by drop pincode).
+    delivered = picked = ndd_orders = rto = 0
+    pending_orders = cancelled_orders = 0
+    revenue = rto_value = delivered_value = pending_value = cancelled_value = 0.0
     tier_counts = {t: 0 for t in TIER_LEVELS + ["Unknown"]}
+    tier_revenue = {t: 0.0 for t in TIER_LEVELS + ["Unknown"]}
     for r in rows:
-        tier_counts[r.get("tier", "Unknown")] = tier_counts.get(r.get("tier", "Unknown"), 0) + 1
+        val = r.get("order_value") or 0.0
+        revenue += val
+        outcome = r.get("outcome")
+        if r["delivered"]:
+            delivered += 1
+            delivered_value += val
+        if r["picked"]:
+            picked += 1
+        if _is_ndd(r["account"]):
+            ndd_orders += 1
+        if outcome == "RTO":
+            rto += 1
+            rto_value += val
+        elif outcome == "FWD Pendency":
+            pending_orders += 1
+            pending_value += val
+        elif outcome == "Cancelled":
+            cancelled_orders += 1
+            cancelled_value += val
+        t = r.get("tier") or "Unknown"
+        tier_counts[t] = tier_counts.get(t, 0) + 1
+        tier_revenue[t] = tier_revenue.get(t, 0.0) + val
+    aov = (revenue / total) if total else None
 
-    # Business mix breakdowns.
-    def count_by(key_fn):
-        out: dict[str, int] = {}
+    # ---- Payment-mode performance -------------------------------------------
+    # Management KPI block grouped by payment mode. `cod_exposure` (COD only) is
+    # the collectable ₹ on COD orders still in transit — cash owed to the
+    # business that hasn't been collected yet.
+    def _perf_groups(key_fn, cod=False):
+        groups: dict[str, dict] = {}
         for r in rows:
             k = key_fn(r)
-            if k:
-                out[k] = out.get(k, 0) + 1
+            if not k:
+                continue
+            g = groups.get(k)
+            if g is None:
+                g = {"group": k, "n": 0, "picked": 0, "delivered": 0, "rto": 0,
+                     "revenue": 0.0, "cod_exposure": 0.0}
+                groups[k] = g
+            g["n"] += 1
+            g["revenue"] += r.get("order_value") or 0.0
+            if r["picked"]:
+                g["picked"] += 1
+            if r["delivered"]:
+                g["delivered"] += 1
+            if r.get("outcome") == "RTO":
+                g["rto"] += 1
+            if cod and r.get("outcome") == "FWD Pendency":
+                g["cod_exposure"] += r.get("cod_value") or 0.0
+        return groups
+
+    def _perf_rows(groups):
+        out = []
+        for g in groups.values():
+            n = g["n"]
+            out.append({
+                "group": g["group"],
+                "n": n,
+                "n_pct": _round(n / total * 100 if total else None),
+                "revenue": _round(g["revenue"]),
+                "revenue_pct": _round(g["revenue"] / revenue * 100 if revenue else None),
+                "aov": _round(g["revenue"] / n if n else None),
+                "delivered": g["delivered"],
+                "success_rate": _round(g["delivered"] / g["picked"] * 100 if g["picked"] else None),
+                "rto": g["rto"],
+                "rto_pct": _round(g["rto"] / n * 100 if n else None),
+                "cod_exposure": _round(g["cod_exposure"]),
+            })
+        out.sort(key=lambda a: -a["n"])
         return out
 
-    weight_mix = count_by(lambda r: _weight_class(r["weight"]))
-    weight_order = ["Light", "Medium", "Heavy", "Unknown"]
-    weight_mix = {k: weight_mix[k] for k in weight_order if k in weight_mix}
+    payment_perf = _perf_rows(_perf_groups(lambda r: r["payment"] or "(unknown)", cod=True))
 
-    # Product breakdown: category -> subcategory volume tree, plus which carrier
-    # accounts ship each category. Only meaningful when the file carries an Item
-    # Names column; otherwise everything is "Unknown".
+    # Per-day order volume, keyed on the shipment (pickup) date and sorted
+    # chronologically, so the UI can chart which days had more/fewer orders.
+    # `delivered` is tracked alongside the total for an at-a-glance daily split.
+    _daily: dict[str, dict] = {}
+    for r in rows:
+        d = r.get("pickup_date")
+        if not d:
+            continue
+        cell = _daily.setdefault(d, {"date": d, "n": 0, "delivered": 0})
+        cell["n"] += 1
+        if r.get("delivered"):
+            cell["delivered"] += 1
+    daily = [_daily[d] for d in sorted(_daily)]
+
+    # Product economics: category -> subcategory tree carrying volume, revenue
+    # (invoice value) and RTO count so the UI can flag high-return products that
+    # quietly eat margin, plus which carrier accounts ship each category. Only
+    # meaningful when the file carries an Item Names column; else all "Unknown".
     product_tree: dict[str, dict] = {}
     has_products = False
     for r in rows:
@@ -1421,17 +1529,33 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         acct = r.get("account") or "(unknown)"
         if r.get("item_name"):
             has_products = True
+        val = r.get("order_value") or 0.0
+        is_rto = r.get("outcome") == "RTO"
         c = product_tree.setdefault(
-            cat, {"category": cat, "n": 0, "subs": {}, "accts": {}}
+            cat, {"category": cat, "n": 0, "revenue": 0.0, "rto": 0,
+                  "delivered": 0, "picked": 0, "subs": {}, "accts": {}}
         )
         c["n"] += 1
-        c["subs"][sub] = c["subs"].get(sub, 0) + 1
+        c["revenue"] += val
+        if is_rto:
+            c["rto"] += 1
+        if r["delivered"]:
+            c["delivered"] += 1
+        if r["picked"]:
+            c["picked"] += 1
+        s = c["subs"].setdefault(sub, {"n": 0, "revenue": 0.0, "rto": 0})
+        s["n"] += 1
+        s["revenue"] += val
+        if is_rto:
+            s["rto"] += 1
         c["accts"][acct] = c["accts"].get(acct, 0) + 1
     products = []
-    for c in sorted(product_tree.values(), key=lambda x: -x["n"]):
+    # Ranked by revenue so the biggest-money categories lead the view.
+    for c in sorted(product_tree.values(), key=lambda x: -x["revenue"]):
         subs = [
-            {"subcategory": s, "n": n}
-            for s, n in sorted(c["subs"].items(), key=lambda kv: -kv[1])
+            {"subcategory": s, "n": sd["n"], "revenue": _round(sd["revenue"]),
+             "rto_pct": _round(sd["rto"] / sd["n"] * 100 if sd["n"] else None)}
+            for s, sd in sorted(c["subs"].items(), key=lambda kv: -kv[1]["revenue"])
         ]
         accts = [
             {"account": a, "n": n}
@@ -1439,6 +1563,11 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         ]
         products.append({
             "category": c["category"], "n": c["n"],
+            "revenue": _round(c["revenue"]),
+            "revenue_pct": _round(c["revenue"] / revenue * 100 if revenue else None),
+            "rto_pct": _round(c["rto"] / c["n"] * 100 if c["n"] else None),
+            "aov": _round(c["revenue"] / c["n"] if c["n"] else None),
+            "success_rate": _round(c["delivered"] / c["picked"] * 100 if c["picked"] else None),
             "subs": subs, "accounts": accts,
         })
 
@@ -1463,6 +1592,18 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             "ndd_orders": ndd_orders,
             "ndd_pct": _round(ndd_orders / total * 100 if total else None),
             "tiers": tier_counts,
+            "tier_revenue": {k: _round(v) for k, v in tier_revenue.items()},
+            "revenue": _round(revenue),
+            "rto_value": _round(rto_value),
+            "rto_value_pct": _round(rto_value / revenue * 100 if revenue else None),
+            "delivered_value": _round(delivered_value),
+            "pending_value": _round(pending_value),
+            "pending_value_pct": _round(pending_value / revenue * 100 if revenue else None),
+            "pending_orders": pending_orders,
+            "cancelled_value": _round(cancelled_value),
+            "cancelled_value_pct": _round(cancelled_value / revenue * 100 if revenue else None),
+            "cancelled_orders": cancelled_orders,
+            "aov": _round(aov),
             "tat_in": tat_overall["in_tat"],
             "tat_out": tat_overall["out_tat"],
             "tat_in_pct": tat_overall["in_tat_pct"],
@@ -1492,11 +1633,8 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         "lane_min_n": LANE_MIN_N,
         "warehouse_min_n": WAREHOUSE_MIN_N,
         "wh_carrier_min_n": WH_CARRIER_MIN_N,
-        "mix": {
-            "weight": weight_mix,
-            "payment": count_by(lambda r: r["payment"]),
-            "delivery_type": count_by(lambda r: r["delivery_type"]),
-        },
+        "payment_perf": payment_perf,
+        "daily": daily,
         "filters": filter_opts,
         "weights": {k: int(v * 100) for k, v in WEIGHTS.items()},
     }

@@ -33,44 +33,61 @@ from openpyxl import load_workbook
 # --------------------------------------------------------------------------
 CATEGORY_RULES = [
     ("Maternity & Baby Care", ["pregnancy", "maternity", "baby", "infant", "nursing", "feeding pillow"]),
-    ("Workspace", ["standing desk", "desk converter", "desk", "laptop stand", "monitor stand", "footrest"]),
-    ("Mobility & Chairs", ["wheelchair", "commode", "recliner", "ergo chair", "ergonomic chair",
-                            "executive chair", "gaming chair", "office chair", "ergoluxe", "ergo luxe",
-                            "posture plus chair", "chair", "walker", "rollator", "scooter", "transfer lift",
-                            "bed rail", "grab bar", "guardrail", "safety rail", "joystick", "ramp",
-                            "crutch", "mobility"]),
+    ("Barefoot", ["barefoot", "sock shoe", "skinners"]),
+    ("Mobility Devices", ["wheelchair", "commode", "scooter", "walker", "rollator", "transfer lift",
+                          "bed rail", "grab bar", "guardrail", "safety rail", "ramp", "crutch",
+                          "bath mat", "shower stool", "shower chair", "mobility"]),
+    ("Chairs", ["ergo chair", "ergonomic chair", "executive chair", "gaming chair", "office chair",
+                "ergoluxe", "ergo luxe", "posture plus chair", "study chair", "recliner", "chair"]),
+    ("Workspace", ["standing desk", "desk converter", "desk", "laptop table", "study table",
+                   "work table", "laptop stand", "monitor stand", "monitor arm", "monitor mount",
+                   "laptop mount", "laptop holder", "monitor", "workstation", "footrest", "foot rest"]),
     ("Insoles", ["insole", "arch support", "arch cushion", "shoe insert", "foot insert", "arch sports"]),
-    ("Footwears", ["sock shoe", "barefoot", "sandal", "slipper", "chappal", "flip flop", "flipflop",
-                   "clog", "sneaker", "footwear", "shoe"]),
     ("Socks", ["sock"]),
-    ("Mattress", ["mattress", "topper"]),
+    ("Masks", ["face mask", "n95", "n-95", "anti pollution", "anti-pollution", "pollution mask", "surgical mask"]),
+    ("Mattress Topper Protector", ["mattress topper", "mattress protector", "mattress", "topper"]),
+    ("Covers", ["cuddle cover", "wedge cover", "pillow cover", "cushion cover", "seat cover",
+                "replacement cover", "cover"]),
     ("Pillows", ["neck pillow", "cervical", "wedge", "travel pillow", "memory foam pillow",
                  "sleep pillow", "cozy pillow", "pillow"]),
     ("Cushions", ["seat cushion", "coccyx", "donut", "backrest", "back rest", "lumbar", "cushion", "seat"]),
-    ("Frido Orthotics", ["posture", "orthotic", "knee", "ankle", "elbow", "wrist", "shoulder",
-                         "brace", "wrap", "support belt", "lumbo", "sacral", "bunion", "heel",
-                         "plantar", "toe", "compression", "belt", "support"]),
+    ("Footwear", ["sandal", "slipper", "chappal", "flip flop", "flipflop", "clog", "sneaker", "footwear", "shoe"]),
+    ("Orthotics", ["posture", "orthotic", "knee", "ankle", "elbow", "wrist", "shoulder",
+                   "brace", "wrap", "support belt", "lumbo", "sacral", "bunion", "heel",
+                   "plantar", "toe", "compression", "belt", "support"]),
     ("Personal Care", ["eye mask", "sleep mask", "mask", "therapy", "heating pad", "heat pad",
                        "nasal", "nose", "massager", "massage", "roller", "pain relief",
-                       "kinesiology", "tape"]),
-    ("Home & Furnishing", ["bath mat", "doormat", "bed sheet", "blanket", "curtain", "furnishing", "bottle"]),
-    ("Accessories", ["cap", "cover", "pouch", "bag", "strap", "glove", "accessor", "combo"]),
+                       "kinesiology", "tape", "glove"]),
+    ("Accessories", ["cap", "pouch", "bag", "strap", "wallet", "card holder", "cardholder",
+                     "spare part", "sparepart", "castor", "joystick", "accessor", "combo"]),
 ]
 
+# Maps an EXPLICIT category label (e.g. the item-master's own "Category" column
+# value, lower-cased) straight to a Frido website category. Keys cover the exact
+# labels used in item_master.xlsx so SKU-master categories are authoritative.
+# Deliberately NOT mapped (so the product-NAME keyword rules decide instead):
+#   "combo"          — bundles span categories; classify by the product name
+#   "ergo furniture" — split into Chairs vs Workspace by the product name
 EXPLICIT_MAP = {
-    "orthotics": "Frido Orthotics", "orthotic": "Frido Orthotics",
-    "footwear": "Footwears", "footwears": "Footwears",
+    "orthotics": "Orthotics", "orthotic": "Orthotics",
+    "footwear": "Footwear", "footwears": "Footwear", "shoes": "Footwear",
     "insole": "Insoles", "insoles": "Insoles",
     "pillows": "Pillows", "pillow": "Pillows",
     "cushion": "Cushions", "cushions": "Cushions",
-    "mattress": "Mattress", "topper": "Mattress",
+    "mattress topper": "Mattress Topper Protector", "mattress": "Mattress Topper Protector",
+    "topper": "Mattress Topper Protector",
     "socks": "Socks", "sock": "Socks",
-    "cap": "Accessories", "covers": "Accessories", "cover": "Accessories",
-    "accessories": "Accessories", "accessory": "Accessories", "combo": "Accessories", "combos": "Accessories",
-    "eye mask": "Personal Care", "mask": "Personal Care", "masks": "Personal Care",
-    "furnishing": "Home & Furnishing", "home": "Home & Furnishing",
+    "covers": "Covers", "cover": "Covers", "cuddle covers": "Covers", "wedge covers": "Covers",
+    "cap": "Accessories", "accessories": "Accessories", "accessory": "Accessories",
+    "sparepart (chair & mobility)": "Accessories", "sparepart": "Accessories",
+    "gloves": "Accessories", "furnishing": "Accessories",
+    "mask": "Masks", "masks": "Masks",
+    "eye mask": "Personal Care", "personal care": "Personal Care",
     "maternity": "Maternity & Baby Care", "baby": "Maternity & Baby Care",
-    "chairs": "Mobility & Chairs", "chair": "Mobility & Chairs", "mobility": "Mobility & Chairs",
+    "barefoot": "Barefoot",
+    "chairs": "Chairs", "chair": "Chairs",
+    "workspace": "Workspace",
+    "mobility": "Mobility Devices", "wheelchairs": "Mobility Devices", "wheelchair": "Mobility Devices",
 }
 
 
@@ -1050,19 +1067,20 @@ def parse_invoice(data, filename=""):
 # --------------------------------------------------------------------------
 _CDN = "https://cdn.shopify.com/s/files/1/0553/0419/2034/files/"
 CATEGORY_IMAGES = {
-    "Frido Orthotics": _CDN + "Category_1_2_1.jpg?v=1769695217&width=400",
+    "Orthotics": _CDN + "Category_1_2_1.jpg?v=1769695217&width=400",
     "Insoles": _CDN + "Everyday_Insole_Combo_55a98dda-d383-4a27-9f57-39c4a5e8bcab.png?v=1770808742&width=400",
-    "Footwears": _CDN + "WS-01_8b6068d3-4e48-4b4c-8d37-07fd0338d7cb.jpg?v=1753101892&width=400",
+    "Footwear": _CDN + "WS-01_8b6068d3-4e48-4b4c-8d37-07fd0338d7cb.jpg?v=1753101892&width=400",
     "Pillows": _CDN + "CNP-Black-01B_4997708e-d0e7-49d3-af3f-fe7d51f06423.jpg?v=1739886430&width=400",
     "Cushions": _CDN + "Wedge-plus_color-picker-tab_2edb45fe-649c-4966-b706-0d148f3de35d.png?v=1747912121&width=400",
-    "Mattress": _CDN + "UMT_2.jpg?v=1720264311&width=400",
-    "Mobility & Chairs": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=400",
+    "Mattress Topper Protector": _CDN + "UMT_2.jpg?v=1720264311&width=400",
+    "Chairs": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=400",
 }
 CATEGORY_ICONS = {
-    "Frido Orthotics": "🩺", "Insoles": "👣", "Footwears": "🥿", "Pillows": "🛏️",
-    "Cushions": "🪑", "Mattress": "🛌", "Mobility & Chairs": "♿", "Socks": "🧦",
+    "Orthotics": "🩺", "Insoles": "👣", "Footwear": "🥿", "Pillows": "🛏️",
+    "Cushions": "🪑", "Mattress Topper Protector": "🛌", "Mobility Devices": "♿", "Socks": "🧦",
     "Maternity & Baby Care": "🤰", "Personal Care": "💆", "Accessories": "🎒",
-    "Workspace": "🖥️", "Home & Furnishing": "🏠", "Others": "📦",
+    "Workspace": "🖥️", "Chairs": "🪑", "Barefoot": "🦶", "Masks": "😷",
+    "Covers": "🛡️", "Others": "📦",
 }
 
 

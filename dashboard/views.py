@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import re
 
 from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
@@ -51,6 +52,33 @@ def _default_master():
     _MASTER_CACHE["mtime"] = st.st_mtime
     _MASTER_CACHE["maps"] = maps
     return maps
+
+def _apply_master_categories(records):
+    """Override each shipment's category/subcategory from the item master
+    (SKU -> Frido category), which is the authoritative product taxonomy. Falls
+    back to the existing name-derived category when the SKU isn't in the master.
+    Called once when a fresh record set is loaded (BigQuery or upload)."""
+    dm = _default_master()
+    sku2cat = dict(dm.get("sku2cat") or {})
+    sku2cat.update(_INVOICE_CACHE.get("sku2cat") or {})
+    if not sku2cat:
+        return
+    for r in records:
+        raw = (r.get("sku") or "").strip()
+        if not raw:
+            continue
+        # A shipment line can list several SKUs; use the first one the master
+        # recognises so the category reflects the actual product shipped.
+        for tok in re.split(r"[,;|/]+", raw):
+            key = tok.strip().upper()
+            hit = sku2cat.get(key)
+            if hit:
+                cat, name = hit[0], hit[1]
+                if cat and cat != "Others":
+                    r["category"] = cat
+                    r["subcategory"] = name or r.get("subcategory") or cat
+                break
+
 
 # client can re-filter without re-uploading. Single-process dev use.
 # "window" is the date range the loaded data covers (BigQuery load window),
@@ -523,6 +551,7 @@ def process_upload(request):
             return JsonResponse(
                 {"error": "No data rows found in the file."}, status=400
             )
+        _apply_master_categories(records)
         _CACHE["records"] = records
         _CACHE["window"] = None  # uploaded file has no BigQuery load window
 
@@ -834,6 +863,7 @@ def load_bigquery(request):
             {"error": "BigQuery returned no rows for the selected date range."},
             status=400,
         )
+    _apply_master_categories(records)
     _CACHE["records"] = records
     # The authoritative window the UI shows: the picked range, or the lookback.
     if use_range:

@@ -48,6 +48,8 @@ DEFAULT_COLUMN_MAP = {
     "attempts": "out_for_delivery_attempts",
     "item_names": "items",
     "sku": "product_sku_code",         # product SKU code(s) for the shipment
+    "order_value": "invoice_value",    # declared order/invoice value (revenue, ₹)
+    "cod_value": "cod_value",           # cash-on-delivery collectable amount (₹)
 }
 
 _IDENT = re.compile(r"^[A-Za-z0-9_-]+$")
