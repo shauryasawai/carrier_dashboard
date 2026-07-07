@@ -8,12 +8,11 @@ google-cloud-bigquery
 google-auth
 # Google Drive ingestion (pull invoice files from a shared Drive folder).
 google-api-python-client
-# NOTE: the fast columnar download (BigQuery Storage API + Arrow) is intentionally
-# NOT installed. The target project's service account doesn't have the BigQuery
-# Storage Read API enabled, and in that case `to_arrow(create_bqstorage_client=True)`
-# can return an EMPTY table without raising — silently dropping all rows. Staying
-# on the REST download keeps results correct. The invoice enrichment is kept fast
-# instead by filtering to the invoice's carrier and only deriving products for the
-# invoice's AWBs. If you later enable the Storage Read API for the SA, you can add:
+# pyarrow enables the fast COLUMNAR download in bq._records_from_arrow via
+# to_arrow(create_bqstorage_client=False) — a REST-based Arrow download that
+# does NOT require the BigQuery Storage Read API, yet parses a month of rows far
+# faster than iterating one Python Row object per record. If the code can't
+# import pyarrow it transparently falls back to the slower REST row iteration,
+# so this dependency is safe to drop if the Vercel bundle-size limit is hit.
 google-cloud-bigquery-storage
-#   pyarrow
+pyarrow>=14

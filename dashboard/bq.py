@@ -417,28 +417,51 @@ def _records_from_arrow(query_job) -> list | None:
     (pyarrow, google-cloud-bigquery-storage) aren't installed or anything goes
     wrong, so the caller can fall back to plain row iteration.
     """
+    result = query_job.result()
+    table = None
+    # Tier 1 — BigQuery Storage Read API (true columnar streaming, the fastest).
+    # Only works if the API is enabled for the service account; when it isn't,
+    # to_arrow can return a silent 0-row table, so we only accept a non-empty
+    # result here and otherwise fall through to the REST-based Arrow download.
     try:
-        # create_bqstorage_client=True uses the Storage API when available and
-        # transparently falls back to REST (still needs pyarrow for to_arrow).
-        table = query_job.result().to_arrow(create_bqstorage_client=True)
-    except Exception:  # noqa: BLE001 - any import/runtime issue -> use REST path
-        return None
+        t = result.to_arrow(create_bqstorage_client=True)
+        if t.num_rows > 0:
+            table = t
+    except Exception:  # noqa: BLE001 - Storage API/deps unavailable -> next tier
+        table = None
+    # Tier 2 — REST-based Arrow (needs only pyarrow, NOT the Storage API). Still
+    # parses far faster than iterating one Python Row object per record. If
+    # pyarrow isn't installed, to_arrow raises and we fall back to row iteration.
+    if table is None:
+        try:
+            table = result.to_arrow(create_bqstorage_client=False)
+        except Exception:  # noqa: BLE001 -> caller uses plain row iteration
+            return None
 
-    # Guard against a silent empty result: if the Storage Read API isn't enabled
-    # for the service account, to_arrow can return a 0-row table without raising.
-    # Treat that as "fast path unavailable" so the caller falls back to REST and
-    # we never silently drop all rows.
+    # A genuinely empty window returns [] (no double-query); None means the fast
+    # path is unavailable so the caller iterates rows over REST instead.
     if table.num_rows == 0:
-        return None
+        return []
 
-    # Materialize each aliased column once; build records by row index. Column
-    # names are the logical aliases, so they feed kpi.build_record directly.
+    # Materialize each aliased column once (bulk C->Python), then build records
+    # by row index through a single reused getter (avoids allocating a closure
+    # per row). Column names are the logical aliases, so they feed build_record.
     columns = {name: table.column(name).to_pylist() for name in table.schema.names}
+    n = table.num_rows
     records = []
-    for i in range(table.num_rows):
-        rec = kpi.build_record(lambda key, _i=i: _col_value(columns, key, _i))
+    append = records.append
+    build = kpi.build_record
+    _state = {"i": 0}
+
+    def _get(key, _cols=columns, _s=_state):
+        col = _cols.get(key)
+        return col[_s["i"]] if col is not None else None
+
+    for i in range(n):
+        _state["i"] = i
+        rec = build(_get)
         if rec is not None:
-            records.append(rec)
+            append(rec)
     return records
 
 
