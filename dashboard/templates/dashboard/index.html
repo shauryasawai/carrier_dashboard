@@ -1143,7 +1143,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <span class="loading-ring"></span>
         <img class="loading-logo-img" src="https://cdn.shopify.com/s/files/1/0553/0419/2034/files/Layer_1_1.png?v=1739439173" alt="Frido">
       </div>
-      <h2 class="loading-title" id="loadingTitle">Loading Shipment Data</h2>
+      <h2 class="loading-title" id="loadingTitle">Loading Business Data</h2>
       <p class="loading-sub" id="loadingSub">Please wait while we fetch your data…</p>
       <div class="loading-track"><span class="loading-fill" id="loadingFill"></span></div>
       <div class="loading-pct" id="loadingPct">0%</div>
@@ -1335,10 +1335,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <div class="panel ai-panel">
         <div class="panel-head">
           <h3>Business summary <span class="ai-badge">AI</span></h3>
-          <p class="panel-sub">Short overview of the selected date range — what's working and what needs attention</p>
+          <p class="panel-sub">Short overview — what's working and what needs attention</p>
           <button type="button" class="btn-secondary" id="aiGenBtn">✦ Generate summary</button>
         </div>
-        <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview of the current date range and filters.</div>
+        <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview</div>
       </div>
 
       <!-- Destination city-tier breakdown -->
@@ -2056,7 +2056,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       label = "Fetching the last " + lastLookback + " days from BigQuery";
     }
 
-    showLoading("Loading Shipment Data", "Please wait while we fetch your data…");
+    showLoading("Loading Business Data", "Please wait while we fetch your data…");
     setHint(label + "…", null);
     if (btn) { btn.disabled = true; btn.textContent = "Loading…"; }
     if (rbtn) rbtn.disabled = true;
