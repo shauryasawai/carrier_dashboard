@@ -2268,12 +2268,24 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     });
   }
 
+  // Reset the AI summary to its empty prompt. Called on every data change
+  // (load / re-filter) so a previously generated summary can't linger and
+  // misrepresent a different filter slice — it's regenerated on demand against
+  // whatever filters are currently applied.
+  function resetAiSummary() {
+    var box = $("aiSummary");
+    if (!box) return;
+    box.className = "ai-summary ai-empty";
+    box.innerHTML = 'Click <strong>Generate summary</strong> for an AI overview of the current filters';
+  }
+
   function render(report, opts) {
     // On a re-filter we skip the entrance animations and update charts in place
     // (no destroy/recreate) so the refresh feels instant. A fresh dataset load
     // (opts omitted) animates as before.
     animateMode = !(opts && opts.refilter);
     lastReport = report;
+    resetAiSummary();
     populateOptions(report.filters);
     renderDataRange(report);
     renderStats(report.summary);
