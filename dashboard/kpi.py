@@ -1431,6 +1431,34 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     # count+revenue). This replaces ~12 separate generator scans and runs on
     # every re-filter. The four outcome buckets partition revenue exactly, so
     # Delivered + RTO + Pending + Cancelled == total (both value and order count).
+    # ---- Revenue de-duplication --------------------------------------------
+    # invoice_value is an ORDER-level figure that the source stamps onto every
+    # AWB of the order, so summing it per shipment double-counts multi-package
+    # orders. Count each distinct (order_id, value) once: identical values on the
+    # same order collapse to a single contribution, while genuinely different
+    # per-AWB values still add up (real multi-item orders). Rows with no order id
+    # can't be de-duped, so each keeps its own value. `_rev` is the per-row
+    # revenue contribution every ₹ rollup below uses instead of raw order_value.
+    _seen_rev = set()
+    _order_ids = set()
+    _rev_no_oid = 0
+    for r in rows:
+        oid = r.get("order_id") or ""
+        v = r.get("order_value") or 0.0
+        if oid:
+            _order_ids.add(oid)
+            key = (oid, v)
+            if key in _seen_rev:
+                r["_rev"] = 0.0
+            else:
+                _seen_rev.add(key)
+                r["_rev"] = v
+        else:
+            _rev_no_oid += 1
+            r["_rev"] = v
+    # Distinct order units (for a true average ORDER value, not per-shipment).
+    order_units = len(_order_ids) + _rev_no_oid
+
     total = len(rows)
     delivered = picked = ndd_orders = rto = 0
     pending_orders = cancelled_orders = 0
@@ -1438,7 +1466,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     tier_counts = {t: 0 for t in TIER_LEVELS + ["Unknown"]}
     tier_revenue = {t: 0.0 for t in TIER_LEVELS + ["Unknown"]}
     for r in rows:
-        val = r.get("order_value") or 0.0
+        val = r.get("_rev") or 0.0
         revenue += val
         outcome = r.get("outcome")
         if r["delivered"]:
@@ -1460,7 +1488,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         t = r.get("tier") or "Unknown"
         tier_counts[t] = tier_counts.get(t, 0) + 1
         tier_revenue[t] = tier_revenue.get(t, 0.0) + val
-    aov = (revenue / total) if total else None
+    aov = (revenue / order_units) if order_units else None
 
     # ---- Payment-mode performance -------------------------------------------
     # Management KPI block grouped by payment mode. `cod_exposure` (COD only) is
@@ -1478,7 +1506,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
                      "revenue": 0.0, "cod_exposure": 0.0}
                 groups[k] = g
             g["n"] += 1
-            g["revenue"] += r.get("order_value") or 0.0
+            g["revenue"] += r.get("_rev") or 0.0
             if r["picked"]:
                 g["picked"] += 1
             if r["delivered"]:
@@ -1524,7 +1552,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             continue
         cell = _daily.setdefault(d, {"date": d, "n": 0, "delivered": 0, "revenue": 0.0})
         cell["n"] += 1
-        cell["revenue"] += r.get("order_value") or 0.0
+        cell["revenue"] += r.get("_rev") or 0.0
         if r.get("delivered"):
             cell["delivered"] += 1
     daily = [{**_daily[d], "revenue": _round(_daily[d]["revenue"])} for d in sorted(_daily)]
@@ -1541,7 +1569,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         acct = r.get("account") or "(unknown)"
         if r.get("item_name"):
             has_products = True
-        val = r.get("order_value") or 0.0
+        val = r.get("_rev") or 0.0   # de-duplicated revenue (see revenue block)
         is_rto = r.get("outcome") == "RTO"
         c = product_tree.setdefault(
             cat, {"category": cat, "n": 0, "revenue": 0.0, "rto": 0,

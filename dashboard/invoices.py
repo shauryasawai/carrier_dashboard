@@ -1175,22 +1175,26 @@ def _attach_products(items, awb2prod, order2prod):
     return matched
 
 
-def _attach_values(items, awb2value, order2value):
+def _attach_values(items, awb2value, order2value, awb2order=None):
     """Tag each invoice line with its shipment's declared order value (selling
-    price), joined on AWB (falling back to order id). Lines with no match keep
-    order_value = None and are excluded from the freight-to-value ratio."""
+    price), joined on AWB (falling back to order id). Also stamp an `order_key`
+    (the shipment's order id, from awb2order when the line carries none) so the
+    product table can de-duplicate order-level value across a multi-AWB order.
+    Lines with no value match keep order_value = None and are excluded from the
+    freight-to-value ratio."""
     awb2value = awb2value or {}
     order2value = order2value or {}
+    awb2order = awb2order or {}
     for it in items:
         val = None
         awb = it.get("awb")
         if awb and awb in awb2value:
             val = awb2value[awb]
-        if val is None:
-            oid = (it.get("order_id") or "").strip().upper()
-            if oid and oid in order2value:
-                val = order2value[oid]
+        oid = (it.get("order_id") or "").strip().upper()
+        if val is None and oid and oid in order2value:
+            val = order2value[oid]
         it["order_value"] = val
+        it["order_key"] = oid or (awb2order.get(awb) if awb else "") or ""
 
 
 def _build_subcategory_analysis(items):
@@ -1249,11 +1253,23 @@ def _build_product_analysis(items, top=500):
     prod = {}
     total_spend = total_weight = total_value = 0.0
     total_ship = 0
+    # De-duplicate selling value the same way revenue is: an order's invoice
+    # value is stamped on each of its AWBs, so count each (order, value) once.
+    # Shipping spend and shipment counts stay per-AWB (they're genuinely per
+    # shipment); only the selling-value denominator is de-duplicated.
+    seen_val = set()
     for i in items:
         amt = i["amount"]
         n = i["shipments"]
         wt = i.get("weight_kg") or 0.0
-        val = i.get("order_value") or 0.0
+        raw_val = i.get("order_value") or 0.0
+        okey = i.get("order_key") or ""
+        if okey and (okey, raw_val) in seen_val:
+            val = 0.0
+        else:
+            if okey:
+                seen_val.add((okey, raw_val))
+            val = raw_val
         total_spend += amt
         total_ship += n
         total_weight += wt
@@ -1563,7 +1579,7 @@ def build_carrier_comparison(items, tds_rate=2.0):
 def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
                       awb2lane=None, order2lane=None,
                       awb2prod=None, order2prod=None, sku2vol=None,
-                      awb2value=None, order2value=None):
+                      awb2value=None, order2value=None, awb2order=None):
     if awb2cat or sku2cat:
         _enrich(items, awb2cat or {}, sku2cat or {})
 
@@ -1572,7 +1588,7 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
     prod_matched = _attach_products(items, awb2prod, order2prod)
     # Join each line to its shipment's declared order value (selling price) so
     # shipping spend can be shown as a % of item value in the product table.
-    _attach_values(items, awb2value, order2value)
+    _attach_values(items, awb2value, order2value, awb2order)
     subcategory_analysis = _build_subcategory_analysis(items)
     subcategory_analysis["matched_lines"] = prod_matched
     subcategory_analysis["total_lines"] = len(items)

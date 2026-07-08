@@ -98,7 +98,7 @@ _INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {},
                   "awb2prod": {}, "order2prod": {}, "prod_window": None,
                   # BigQuery declared order value (selling price) by awb/order,
                   # so invoice shipping cost can be shown as a % of item value.
-                  "awb2value": {}, "order2value": {},
+                  "awb2value": {}, "order2value": {}, "awb2order": {},
                   # Item master SKU -> volumetric/billable weight (kg), from an
                   # uploaded master file, for weight over-charge detection.
                   "sku2vol": {}}
@@ -129,6 +129,7 @@ def _reset_invoice_cache():
     _INVOICE_CACHE["order2prod"] = {}
     _INVOICE_CACHE["awb2value"] = {}
     _INVOICE_CACHE["order2value"] = {}
+    _INVOICE_CACHE["awb2order"] = {}
     _INVOICE_CACHE["prod_window"] = None
     _INVOICE_CACHE["sku2vol"] = {}
 
@@ -167,7 +168,7 @@ def _refresh_invoice_product_map():
     inv_awbs = {it["awb"] for it in items if it.get("awb")}
     inv_carriers = {it.get("carrier") for it in items if it.get("carrier")}
     try:
-        awb2prod, order2prod, awb2value, order2value = bq.fetch_awb_product_map(
+        awb2prod, order2prod, awb2value, order2value, awb2order = bq.fetch_awb_product_map(
             lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers)
     except Exception:  # noqa: BLE001 - enrichment is best-effort; never block upload
         logger.exception("Invoice BigQuery enrichment failed")
@@ -176,6 +177,7 @@ def _refresh_invoice_product_map():
     _INVOICE_CACHE["order2prod"] = order2prod
     _INVOICE_CACHE["awb2value"] = awb2value
     _INVOICE_CACHE["order2value"] = order2value
+    _INVOICE_CACHE["awb2order"] = awb2order
     _INVOICE_CACHE["prod_window"] = {"from": lo.isoformat(), "to": hi.isoformat(),
                                      "awbs": len(awb2prod)}
 
@@ -237,6 +239,7 @@ def _invoice_report(carrier_filter=None):
         awb2lane=awb2lane, order2lane=order2lane,
         awb2prod=awb2prod, order2prod=order2prod,
         awb2value=awb2value, order2value=order2value,
+        awb2order=_INVOICE_CACHE.get("awb2order") or {},
         sku2vol=eff_sku2vol)
     report["master"] = {
         "sku_count": len(eff_sku2vol),

@@ -501,11 +501,12 @@ def _page_size() -> int | None:
 def fetch_awb_product_map(date_from: str, date_to: str,
                           limit: int | None = None,
                           awbs: set | None = None,
-                          carriers: set | None = None) -> tuple[dict, dict, dict, dict]:
-    """Return (awb2prod, order2prod, awb2value, order2value) for shipments in the
-    [date_from, date_to] window (YYYY-MM-DD), filtered on the configured
-    date/partition column. The *value maps hold each shipment's declared order
-    value (invoice_value = product selling price).
+                          carriers: set | None = None) -> tuple[dict, dict, dict, dict, dict]:
+    """Return (awb2prod, order2prod, awb2value, order2value, awb2order) for
+    shipments in the [date_from, date_to] window (YYYY-MM-DD), filtered on the
+    configured date/partition column. The *value maps hold each shipment's
+    declared order value (invoice_value = product selling price); awb2order maps
+    each AWB to its order id for order-level de-duplication.
 
     Each value is (category, subcategory, sku, item_name), with category /
     subcategory derived from the item names via kpi._product_category — the same
@@ -586,6 +587,9 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # AWB/order -> declared order value (invoice_value = the product's selling
     # price), so invoice shipping cost can be expressed as a % of item value.
     awb2value, order2value = {}, {}
+    # AWB -> order id, so invoice lines (which often carry no order id of their
+    # own, e.g. BlueDart) can be grouped by order to de-duplicate selling value.
+    awb2order = {}
 
     def _emit(awb_raw, sku_raw, items_raw, order_raw, value_raw):
         if awb_raw is None:
@@ -605,11 +609,13 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             val = float(value_raw) if value_raw not in (None, "") else None
         except (TypeError, ValueError):
             val = None
+        oid = str(order_raw or "").strip().upper()
         if awb and in_want:
             awb2prod[awb] = prod
             if val is not None:
                 awb2value[awb] = val
-        oid = str(order_raw or "").strip().upper()
+            if oid:
+                awb2order[awb] = oid
         if oid:
             order2prod.setdefault(oid, prod)
             if val is not None:
@@ -625,7 +631,7 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     for row in job.result(page_size=_page_size()):
         _emit(row.get("awb"), row.get("sku"), row.get("items"),
               row.get("order_id"), row.get("order_value"))
-    return awb2prod, order2prod, awb2value, order2value
+    return awb2prod, order2prod, awb2value, order2value, awb2order
 
 
 def fetch_records(lookback_days: int | None = None,

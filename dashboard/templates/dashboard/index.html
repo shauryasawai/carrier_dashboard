@@ -1983,6 +1983,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       return;
     }
     setHint("Reading " + file.name + "\u2026", null);
+    resetAllFilters({ silent: true });   // new dataset \u2192 start with filters cleared
     var fd = currentFilters();
     fd.append("file", file);
     post(fd)
@@ -2057,6 +2058,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var useRange = !!(opts.from && opts.to);
 
     var btn = $("bqLoadBtn"), rbtn = $("bqReloadBtn");
+    // New data window → start clean: clear all filters so the fetched data is
+    // unfiltered (they'd otherwise be sent with the request and carried over).
+    resetAllFilters({ silent: true });
     var fd = currentFilters();
     var label;
     if (useRange) {
@@ -2147,6 +2151,24 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       if (menu) menu.innerHTML = "";   // drop stale options
       mselText(m);                      // reset the button label to "All …"
     });
+  }
+
+  // Clear EVERY filter to its default (all dropdowns unchecked, pickup dates
+  // blank) so a fresh dataset starts unfiltered. Pass { silent: true } to skip
+  // the re-filter request — used when a data load will render the report itself.
+  function resetAllFilters(opts) {
+    opts = opts || {};
+    document.querySelectorAll(".msel").forEach(function (m) {
+      m.querySelectorAll("input[type=checkbox]").forEach(function (cb) { cb.checked = false; });
+      mselText(m);
+    });
+    if ($("fDateFrom")) $("fDateFrom").value = "";
+    if ($("fDateTo")) $("fDateTo").value = "";
+    if (typeof updateAdvCount === "function") updateAdvCount();
+    // Recompute the dashboard against the now-unfiltered dataset so the numbers,
+    // charts and tables reset too — not just the filter controls. Skipped in the
+    // silent (data-load) case because the load renders the fresh report itself.
+    if (!opts.silent && loaded) refilter();
   }
 
   function populateOptions(filters) {
@@ -3373,20 +3395,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     });
   }
   if ($("resetFiltersBtn")) {
-    $("resetFiltersBtn").addEventListener("click", function () {
-      // Reset every dropdown to its default: all options cleared = no
-      // constraint, so both forward and reverse-pickup shipments are shown.
-      document.querySelectorAll(".msel").forEach(function (m) {
-        m.querySelectorAll("input[type=checkbox]").forEach(function (cb) {
-          cb.checked = false;
-        });
-        mselText(m);
-      });
-      if ($("fDateFrom")) $("fDateFrom").value = "";
-      if ($("fDateTo")) $("fDateTo").value = "";
-      updateAdvCount();
-      scheduleRefilter();
-    });
+    // Reset every dropdown + pickup dates, then re-filter the current dataset.
+    $("resetFiltersBtn").addEventListener("click", function () { resetAllFilters(); });
   }
   updateAdvCount();
 
