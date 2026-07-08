@@ -55,6 +55,11 @@ MIDDLEWARE = [
     # WhiteNoise serves collected static files in production (right after
     # SecurityMiddleware, before everything else).
     "whitenoise.middleware.WhiteNoiseMiddleware",
+    # Compress dynamic responses. The report JSON is large and is re-fetched on
+    # every filter/date change; gzip cuts it several-fold. Placed after WhiteNoise
+    # so static assets keep serving their own pre-compressed copies — this only
+    # affects dynamic responses. No secrets/reflected input in the body (no BREACH risk).
+    "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",

@@ -848,6 +848,7 @@ NDD_ACCOUNT_KEYWORDS = (
 NDD_ACCOUNT_EXACT = {"test"}
 
 
+@lru_cache(maxsize=8192)
 def _is_ndd(account) -> bool:
     a = (account or "").strip().lower()
     if a in NDD_ACCOUNT_EXACT:
@@ -886,6 +887,14 @@ def filter_records(records, delivery_type="all", zone="all", payment="all",
     tier_set = _filter_set(tier)
     channel_set = _filter_set(channel)
 
+    # Fast path: nothing is actually constrained (the common initial/unfiltered
+    # load), so skip a full scan + list copy and hand back the record set as-is.
+    if (dt_set is None and zone_set is None and pay_set is None and wh_set is None
+            and acct_set is None and wt_set is None and slot_set is None
+            and tier_set is None and channel_set is None
+            and not date_from and not date_to):
+        return records
+
     out = []
     for r in records:
         if dt_set is not None and r["delivery_type"] not in dt_set:
@@ -918,44 +927,38 @@ def filter_records(records, delivery_type="all", zone="all", payment="all",
     return out
 
 
-def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> list[dict]:
-    """Group records by any field and compute the standard KPI block.
+def _kpi_accumulate(groups, r, key, label_field, extra_fields):
+    """Fold one record `r` into its KPI `groups` bucket under `key` (creating the
+    bucket on first sight). Shared by aggregate_by and the single-pass collector
+    so both build byte-for-byte identical group state."""
+    g = groups.get(key)
+    if g is None:
+        g = {
+            label_field: key, "n": 0, "picked": 0, "delivered": 0,
+            "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": [],
+        }
+        for out_name, rec_key in extra_fields:
+            g[out_name] = r.get(rec_key, "")
+        groups[key] = g
+    g["n"] += 1
+    if r["picked"]:
+        g["picked"] += 1
+    if r["delivered"]:
+        g["delivered"] += 1
+        if r["attempts"] == 1:
+            g["first_attempt"] += 1
+    if r["o2s"] is not None:
+        g["o2s"].append(r["o2s"])
+    if r["p2o"] is not None:
+        g["p2o"].append(r["p2o"])
+    if r["p2d"] is not None:
+        g["p2d"].append(r["p2d"])
+    if r["attempts"] is not None:
+        g["att"].append(r["attempts"])
 
-    extra_fields: optional list of (out_name, record_key) to carry the first
-    seen value of a record field onto each group row (e.g. carry the city
-    label onto a warehouse group).
-    """
-    extra_fields = extra_fields or []
-    groups: dict[str, dict] = {}
-    for r in records:
-        key = r.get(key_field) or ""
-        if key == "":
-            continue
-        g = groups.get(key)
-        if g is None:
-            g = {
-                label_field: key, "n": 0, "picked": 0, "delivered": 0,
-                "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": [],
-            }
-            for out_name, rec_key in extra_fields:
-                g[out_name] = r.get(rec_key, "")
-            groups[key] = g
-        g["n"] += 1
-        if r["picked"]:
-            g["picked"] += 1
-        if r["delivered"]:
-            g["delivered"] += 1
-            if r["attempts"] == 1:
-                g["first_attempt"] += 1
-        if r["o2s"] is not None:
-            g["o2s"].append(r["o2s"])
-        if r["p2o"] is not None:
-            g["p2o"].append(r["p2o"])
-        if r["p2d"] is not None:
-            g["p2d"].append(r["p2d"])
-        if r["attempts"] is not None:
-            g["att"].append(r["attempts"])
 
+def _kpi_finalize(groups, label_field, extra_fields) -> list[dict]:
+    """Turn accumulated KPI `groups` into the standard per-group result rows."""
     result = []
     for g in groups.values():
         row = {
@@ -974,6 +977,23 @@ def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> 
             row[out_name] = g.get(out_name, "")
         result.append(row)
     return result
+
+
+def aggregate_by(records, key_field, label_field="group", extra_fields=None) -> list[dict]:
+    """Group records by any field and compute the standard KPI block.
+
+    extra_fields: optional list of (out_name, record_key) to carry the first
+    seen value of a record field onto each group row (e.g. carry the city
+    label onto a warehouse group).
+    """
+    extra_fields = extra_fields or []
+    groups: dict[str, dict] = {}
+    for r in records:
+        key = r.get(key_field) or ""
+        if key == "":
+            continue
+        _kpi_accumulate(groups, r, key, label_field, extra_fields)
+    return _kpi_finalize(groups, label_field, extra_fields)
 
 
 def aggregate_by_carrier(records) -> list[dict]:
@@ -1068,7 +1088,7 @@ DESTINATION_MIN_N = WAREHOUSE_MIN_N
 LANE_MIN_N = 15
 
 
-def aggregate_warehouse_carrier(records) -> list[dict]:
+def aggregate_warehouse_carrier(records, by_wh=None) -> list[dict]:
     """Warehouse x carrier-account matrix.
 
     One row per (pickup pincode, carrier account) pair. Each row carries the
@@ -1079,12 +1099,14 @@ def aggregate_warehouse_carrier(records) -> list[dict]:
     wants.
     """
     rows = []
-    # Bucket records by warehouse first.
-    by_wh: dict[str, list] = {}
-    for r in records:
-        if not r["pickup_pin"]:
-            continue
-        by_wh.setdefault(r["pickup_pin"], []).append(r)
+    # Bucket records by warehouse first (or reuse a bucket dict already built by
+    # the single-pass collector so we don't scan the rows a second time).
+    if by_wh is None:
+        by_wh = {}
+        for r in records:
+            if not r["pickup_pin"]:
+                continue
+            by_wh.setdefault(r["pickup_pin"], []).append(r)
 
     for pin, recs in by_wh.items():
         agg = aggregate_by(
@@ -1116,13 +1138,20 @@ def aggregate_status_matrix(records, key_field="account") -> list[dict]:
         key = r.get(key_field) or ""
         if key == "":
             continue
-        g = groups.get(key)
-        if g is None:
-            g = {"key": key, "n": 0, "counts": {o: 0 for o in OUTCOMES}}
-            groups[key] = g
-        g["n"] += 1
-        g["counts"][r["outcome"]] += 1
+        _status_accumulate(groups, r, key)
+    return _status_finalize(groups)
 
+
+def _status_accumulate(groups, r, key):
+    g = groups.get(key)
+    if g is None:
+        g = {"key": key, "n": 0, "counts": {o: 0 for o in OUTCOMES}}
+        groups[key] = g
+    g["n"] += 1
+    g["counts"][r["outcome"]] += 1
+
+
+def _status_finalize(groups) -> list[dict]:
     result = []
     for g in groups.values():
         n = g["n"]
@@ -1142,7 +1171,6 @@ def aggregate_pendency_matrix(records, key_field="account") -> dict:
     account's pendency total. Returns the rows plus the ordered column list so
     the frontend can render a stable header.
     """
-    cols = PENDENCY_STATES + ["Other"]
     groups: dict[str, dict] = {}
     for r in records:
         if r["outcome"] != "FWD Pendency":
@@ -1150,13 +1178,24 @@ def aggregate_pendency_matrix(records, key_field="account") -> dict:
         key = r.get(key_field) or ""
         if key == "":
             continue
-        g = groups.get(key)
-        if g is None:
-            g = {"key": key, "n": 0, "counts": {c: 0 for c in cols}}
-            groups[key] = g
-        g["n"] += 1
-        g["counts"][r["pendency_state"]] += 1
+        _pendency_accumulate(groups, r, key)
+    return _pendency_finalize(groups)
 
+
+_PENDENCY_COLS = PENDENCY_STATES + ["Other"]
+
+
+def _pendency_accumulate(groups, r, key):
+    g = groups.get(key)
+    if g is None:
+        g = {"key": key, "n": 0, "counts": {c: 0 for c in _PENDENCY_COLS}}
+        groups[key] = g
+    g["n"] += 1
+    g["counts"][r["pendency_state"]] += 1
+
+
+def _pendency_finalize(groups) -> dict:
+    cols = _PENDENCY_COLS
     rows = []
     for g in groups.values():
         n = g["n"]
@@ -1244,34 +1283,42 @@ def aggregate_tat_matrix(records, key_field="account") -> list[dict]:
     return rows
 
 
-def tat_summary(records) -> dict:
-    """Overall promised-TAT compliance across the filtered record set."""
-    statuses = tat_rules.TAT_STATUSES
-    counts = {s: 0 for s in statuses}
-    delivered = 0
+def _tat_new_state() -> dict:
+    return {"counts": {s: 0 for s in tat_rules.TAT_STATUSES},
+            "delivered": 0, "out_delivered": 0, "out_pending": 0, "margins": []}
+
+
+def _tat_accumulate(state, r):
     # Out of TAT splits into two kinds: shipments that were DELIVERED but later
     # than promised ("delivered late"), and active forward-pendency shipments
     # not yet delivered whose age already passed the promise ("pending breach").
-    out_delivered = 0
-    out_pending = 0
-    margins = []
-    for r in records:
-        st = r.get("tat_status") or "No rule"
-        counts[st] += 1
-        if st == "Out of TAT":
-            if r["delivered"]:
-                out_delivered += 1
-            else:
-                out_pending += 1
+    st = r.get("tat_status") or "No rule"
+    state["counts"][st] += 1
+    if st == "Out of TAT":
         if r["delivered"]:
-            delivered += 1
-        if r.get("tat_margin") is not None:
-            margins.append(r["tat_margin"])
-    block = _tat_block(counts, delivered, margins)
-    block["statuses"] = statuses
-    block["out_delivered"] = out_delivered
-    block["out_pending"] = out_pending
+            state["out_delivered"] += 1
+        else:
+            state["out_pending"] += 1
+    if r["delivered"]:
+        state["delivered"] += 1
+    if r.get("tat_margin") is not None:
+        state["margins"].append(r["tat_margin"])
+
+
+def _tat_finalize(state) -> dict:
+    block = _tat_block(state["counts"], state["delivered"], state["margins"])
+    block["statuses"] = tat_rules.TAT_STATUSES
+    block["out_delivered"] = state["out_delivered"]
+    block["out_pending"] = state["out_pending"]
     return block
+
+
+def tat_summary(records) -> dict:
+    """Overall promised-TAT compliance across the filtered record set."""
+    state = _tat_new_state()
+    for r in records:
+        _tat_accumulate(state, r)
+    return _tat_finalize(state)
 
 
 # Filter-bar option lists (zones / accounts / warehouses / date bounds) depend
@@ -1345,6 +1392,9 @@ def reclassify(records) -> None:
     """Recompute tat_status / promised_tat / tat_margin in place for every
     record, using the inputs stored on each row. Called after the user changes
     a carrier's SLA (override) so the dashboard re-scores without re-querying."""
+    # TAT scoring changes in place -> invalidate any cached reports for this set.
+    global _REPORT_GEN
+    _REPORT_GEN += 1
     for r in records:
         outcome = r.get("outcome")
         status, promised, margin = tat_rules.classify(
@@ -1361,23 +1411,244 @@ def reclassify(records) -> None:
         r["tat_status"], r["promised_tat"], r["tat_margin"] = status, promised, margin
 
 
+# In-process cache of the built report, keyed on the loaded record-set identity
+# plus the active filter arguments. Toggling a filter and returning to a prior
+# state (or a plain reload with the same filters) then becomes an instant cache
+# hit instead of a full recompute. Invalidated automatically when a new record
+# set is loaded (its list identity changes) or when reclassify() re-scores the
+# TAT status in place (the generation counter is bumped).
+_REPORT_GEN = 0
+_REPORT_CACHE = {"records": None, "gen": None, "entries": {}}
+
+
+def _report_cache_key(delivery_type, zone, payment, warehouse, account, weight,
+                      slot, date_from, date_to, tier, channel):
+    """Hashable, order-independent key for a filter selection (multi-select
+    values arrive as lists, so sort them; two selections that filter to the same
+    rows map to the same key)."""
+    def norm(v):
+        if isinstance(v, (list, tuple, set)):
+            return tuple(sorted(str(x) for x in v))
+        return v
+    return tuple(norm(v) for v in (
+        delivery_type, zone, payment, warehouse, account, weight, slot,
+        date_from, date_to, tier, channel))
+
+
+def _report_cache_get(records, key):
+    c = _REPORT_CACHE
+    if c["records"] is not records or c["gen"] != _REPORT_GEN:
+        return None
+    return c["entries"].get(key)
+
+
+def _report_cache_put(records, key, report):
+    c = _REPORT_CACHE
+    if c["records"] is not records or c["gen"] != _REPORT_GEN:
+        c["records"] = records
+        c["gen"] = _REPORT_GEN
+        c["entries"] = {}
+    c["entries"][key] = report
+
+
+def _aggregate_all(rows):
+    """ONE pass over the filtered rows building every row-grouping the report
+    needs: the carrier / warehouse / destination / lane KPI groups, the
+    per-account status and FWD-pendency matrices, the overall TAT summary, and
+    the warehouse->rows buckets for the warehouse x carrier matrix. Replaces
+    eight separate scans of `rows` with a single scan.
+
+    The per-row accumulation is INLINED (rather than calling _kpi_accumulate /
+    _status_accumulate / etc. once per grouping per row) because a per-row Python
+    function call costs more than the extra loops it would save; the logic here
+    is deliberately identical to those helpers, and _kpi_finalize / _status_
+    finalize / _pendency_finalize / _tat_finalize turn the accumulated state into
+    the exact same result the standalone aggregate_* functions produce."""
+    carrier_g: dict = {}
+    wh_g: dict = {}
+    dest_g: dict = {}
+    lane_g: dict = {}
+    status_g: dict = {}
+    pend_g: dict = {}
+    by_wh: dict = {}
+    tat_counts = {s: 0 for s in tat_rules.TAT_STATUSES}
+    tat_delivered = tat_out_delivered = tat_out_pending = 0
+    tat_margins: list = []
+
+    for r in rows:
+        picked = r["picked"]
+        delivered = r["delivered"]
+        att = r["attempts"]
+        o2s = r["o2s"]
+        p2o = r["p2o"]
+        p2d = r["p2d"]
+        outcome = r["outcome"]
+
+        # --- carrier / warehouse / destination / lane KPI groups ---
+        ck = r["carrier"]
+        if ck:
+            g = carrier_g.get(ck)
+            if g is None:
+                g = {"carrier": ck, "n": 0, "picked": 0, "delivered": 0,
+                     "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
+                carrier_g[ck] = g
+            g["n"] += 1
+            if picked:
+                g["picked"] += 1
+            if delivered:
+                g["delivered"] += 1
+                if att == 1:
+                    g["first_attempt"] += 1
+            if o2s is not None:
+                g["o2s"].append(o2s)
+            if p2o is not None:
+                g["p2o"].append(p2o)
+            if p2d is not None:
+                g["p2d"].append(p2d)
+            if att is not None:
+                g["att"].append(att)
+
+        wk = r["pickup_pin"]
+        if wk:
+            g = wh_g.get(wk)
+            if g is None:
+                g = {"pickup_pin": wk, "n": 0, "picked": 0, "delivered": 0,
+                     "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": [],
+                     "warehouse": r.get("warehouse", ""), "city": r.get("city", "")}
+                wh_g[wk] = g
+            g["n"] += 1
+            if picked:
+                g["picked"] += 1
+            if delivered:
+                g["delivered"] += 1
+                if att == 1:
+                    g["first_attempt"] += 1
+            if o2s is not None:
+                g["o2s"].append(o2s)
+            if p2o is not None:
+                g["p2o"].append(p2o)
+            if p2d is not None:
+                g["p2d"].append(p2d)
+            if att is not None:
+                g["att"].append(att)
+            bucket = by_wh.get(wk)
+            if bucket is None:
+                by_wh[wk] = [r]
+            else:
+                bucket.append(r)
+
+        dk = r["drop_city"]
+        if dk:
+            g = dest_g.get(dk)
+            if g is None:
+                g = {"drop_city": dk, "n": 0, "picked": 0, "delivered": 0,
+                     "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
+                dest_g[dk] = g
+            g["n"] += 1
+            if picked:
+                g["picked"] += 1
+            if delivered:
+                g["delivered"] += 1
+                if att == 1:
+                    g["first_attempt"] += 1
+            if o2s is not None:
+                g["o2s"].append(o2s)
+            if p2o is not None:
+                g["p2o"].append(p2o)
+            if p2d is not None:
+                g["p2d"].append(p2d)
+            if att is not None:
+                g["att"].append(att)
+
+        lk = r["lane"]
+        if lk:
+            g = lane_g.get(lk)
+            if g is None:
+                g = {"lane": lk, "n": 0, "picked": 0, "delivered": 0,
+                     "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
+                lane_g[lk] = g
+            g["n"] += 1
+            if picked:
+                g["picked"] += 1
+            if delivered:
+                g["delivered"] += 1
+                if att == 1:
+                    g["first_attempt"] += 1
+            if o2s is not None:
+                g["o2s"].append(o2s)
+            if p2o is not None:
+                g["p2o"].append(p2o)
+            if p2d is not None:
+                g["p2d"].append(p2d)
+            if att is not None:
+                g["att"].append(att)
+
+        # --- per-account status matrix (+ FWD-pendency sub-states) ---
+        ak = r.get("account") or ""
+        if ak:
+            g = status_g.get(ak)
+            if g is None:
+                g = {"key": ak, "n": 0, "counts": {o: 0 for o in OUTCOMES}}
+                status_g[ak] = g
+            g["n"] += 1
+            g["counts"][outcome] += 1
+            if outcome == "FWD Pendency":
+                gp = pend_g.get(ak)
+                if gp is None:
+                    gp = {"key": ak, "n": 0,
+                          "counts": {c: 0 for c in _PENDENCY_COLS}}
+                    pend_g[ak] = gp
+                gp["n"] += 1
+                gp["counts"][r["pendency_state"]] += 1
+
+        # --- overall TAT summary ---
+        st = r.get("tat_status") or "No rule"
+        tat_counts[st] += 1
+        if st == "Out of TAT":
+            if delivered:
+                tat_out_delivered += 1
+            else:
+                tat_out_pending += 1
+        if delivered:
+            tat_delivered += 1
+        if r.get("tat_margin") is not None:
+            tat_margins.append(r["tat_margin"])
+
+    tat_state = {"counts": tat_counts, "delivered": tat_delivered,
+                 "out_delivered": tat_out_delivered,
+                 "out_pending": tat_out_pending, "margins": tat_margins}
+    return {"carrier": carrier_g, "warehouse": wh_g, "dest": dest_g,
+            "lane": lane_g, "status": status_g, "pend": pend_g,
+            "by_wh": by_wh, "tat": tat_state}
+
+
 def build_report(records, delivery_type="all", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
                  slot="all", date_from="", date_to="", tier="all",
                  channel="all") -> dict:
     """Top-level entry: filter, aggregate, score, and assemble the payload."""
+    _ckey = _report_cache_key(delivery_type, zone, payment, warehouse, account,
+                              weight, slot, date_from, date_to, tier, channel)
+    _cached = _report_cache_get(records, _ckey)
+    if _cached is not None:
+        return _cached
+
     rows = filter_records(records, delivery_type, zone, payment,
                           warehouse, account, weight,
                           slot, date_from, date_to, tier=tier, channel=channel)
-    agg = attach_scores(aggregate_by_carrier(rows))
+
+    # Every per-row grouping the report needs is collected in a single scan.
+    acc = _aggregate_all(rows)
+
+    agg = attach_scores(_kpi_finalize(acc["carrier"], "carrier", ()))
     agg.sort(key=lambda a: (a["score"] is None, -(a["score"] or 0)))
 
     # Warehouse-wise breakdown, keyed on pickup pincode but labelled by city.
     # Same KPI block and scoring, with a volume threshold so the long tail of
     # tiny pincodes doesn't generate noisy ranks.
     wh = attach_scores(
-        aggregate_by(rows, "pickup_pin", "pickup_pin",
-                     extra_fields=[("warehouse", "warehouse"), ("city", "city")]),
+        _kpi_finalize(acc["warehouse"], "pickup_pin",
+                      (("warehouse", "warehouse"), ("city", "city"))),
         min_n=WAREHOUSE_MIN_N,
     )
     wh.sort(key=lambda a: -a["n"])  # warehouses ranked by volume
@@ -1386,24 +1657,24 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     if TOP_N_WAREHOUSES is not None:
         wh = wh[:TOP_N_WAREHOUSES]
 
-    # Warehouse x carrier matrix (the new partner-per-warehouse view).
-    wh_carrier = aggregate_warehouse_carrier(rows)
+    # Warehouse x carrier matrix (reusing the buckets built in the scan above).
+    wh_carrier = aggregate_warehouse_carrier(rows, by_wh=acc["by_wh"])
 
     # Status-outcome matrix per carrier account (the ops pivot), plus the
     # FWD-Pendency sub-state breakdown.
-    status_matrix = aggregate_status_matrix(rows, "account")
-    pendency_matrix = aggregate_pendency_matrix(rows, "account")
+    status_matrix = _status_finalize(acc["status"])
+    pendency_matrix = _pendency_finalize(acc["pend"])
 
     # Promised-TAT (SLA) compliance counts for the current filter slice. This is
     # computed over the already-filtered rows, so it reflects the SELECTED date
     # range (not the whole loaded window). Surfaced as two summary cards
     # (In TAT / Out of TAT); only lanes with a mapped rule (Blue Dart) count.
-    tat_overall = tat_summary(rows)
+    tat_overall = _tat_finalize(acc["tat"])
 
     # Destination rollup: same KPI block + scoring, grouped by the drop city
     # (where the parcel is going), ranked by volume and truncated to top-N.
     dest_agg = attach_scores(
-        aggregate_by(rows, "drop_city", "drop_city"), min_n=DESTINATION_MIN_N
+        _kpi_finalize(acc["dest"], "drop_city", ()), min_n=DESTINATION_MIN_N
     )
     dest_agg.sort(key=lambda a: -a["n"])
     _round_metrics(dest_agg)
@@ -1411,7 +1682,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
 
     # Lane rollup: pickup city -> drop city pairs. Highest-volume lanes first.
     lane_agg = attach_scores(
-        aggregate_by(rows, "lane", "lane"), min_n=LANE_MIN_N
+        _kpi_finalize(acc["lane"], "lane", ()), min_n=LANE_MIN_N
     )
     lane_agg.sort(key=lambda a: -a["n"])
     _round_metrics(lane_agg)
@@ -1442,22 +1713,6 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     _seen_rev = set()
     _order_ids = set()
     _rev_no_oid = 0
-    for r in rows:
-        oid = r.get("order_id") or ""
-        v = r.get("order_value") or 0.0
-        if oid:
-            _order_ids.add(oid)
-            key = (oid, v)
-            if key in _seen_rev:
-                r["_rev"] = 0.0
-            else:
-                _seen_rev.add(key)
-                r["_rev"] = v
-        else:
-            _rev_no_oid += 1
-            r["_rev"] = v
-    # Distinct order units (for a true average ORDER value, not per-shipment).
-    order_units = len(_order_ids) + _rev_no_oid
 
     total = len(rows)
     delivered = picked = ndd_orders = rto = 0
@@ -1465,8 +1720,30 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     revenue = rto_value = delivered_value = pending_value = cancelled_value = 0.0
     tier_counts = {t: 0 for t in TIER_LEVELS + ["Unknown"]}
     tier_revenue = {t: 0.0 for t in TIER_LEVELS + ["Unknown"]}
+    # Averages accumulated inline as (sum, count of non-None) instead of building
+    # three throwaway lists and scanning the rows three more times via _mean().
+    _p2o_sum = _p2d_sum = _o2s_sum = 0.0
+    _p2o_n = _p2d_n = _o2s_n = 0
+    # ONE pass now computes each row's de-duplicated revenue (_rev) AND every
+    # count/value reduction below AND the three timing averages — folding what
+    # used to be the revenue-dedup loop, the summary loop and three _mean() list
+    # comprehensions (five full scans of `rows`) into a single scan.
     for r in rows:
-        val = r.get("_rev") or 0.0
+        oid = r.get("order_id") or ""
+        v = r.get("order_value") or 0.0
+        if oid:
+            _order_ids.add(oid)
+            key = (oid, v)
+            if key in _seen_rev:
+                val = 0.0
+            else:
+                _seen_rev.add(key)
+                val = v
+        else:
+            _rev_no_oid += 1
+            val = v
+        r["_rev"] = val
+
         revenue += val
         outcome = r.get("outcome")
         if r["delivered"]:
@@ -1488,35 +1765,30 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         t = r.get("tier") or "Unknown"
         tier_counts[t] = tier_counts.get(t, 0) + 1
         tier_revenue[t] = tier_revenue.get(t, 0.0) + val
+
+        p2o_v = r["p2o"]
+        if p2o_v is not None:
+            _p2o_sum += p2o_v
+            _p2o_n += 1
+        p2d_v = r["p2d"]
+        if p2d_v is not None:
+            _p2d_sum += p2d_v
+            _p2d_n += 1
+        o2s_v = r["o2s"]
+        if o2s_v is not None:
+            _o2s_sum += o2s_v
+            _o2s_n += 1
+    # Distinct order units (for a true average ORDER value, not per-shipment).
+    order_units = len(_order_ids) + _rev_no_oid
     aov = (revenue / order_units) if order_units else None
+    avg_p2o = (_p2o_sum / _p2o_n) if _p2o_n else None
+    avg_p2d = (_p2d_sum / _p2d_n) if _p2d_n else None
+    avg_o2s = (_o2s_sum / _o2s_n) if _o2s_n else None
 
     # ---- Payment-mode performance -------------------------------------------
     # Management KPI block grouped by payment mode. `cod_exposure` (COD only) is
     # the collectable ₹ on COD orders still in transit — cash owed to the
     # business that hasn't been collected yet.
-    def _perf_groups(key_fn, cod=False):
-        groups: dict[str, dict] = {}
-        for r in rows:
-            k = key_fn(r)
-            if not k:
-                continue
-            g = groups.get(k)
-            if g is None:
-                g = {"group": k, "n": 0, "picked": 0, "delivered": 0, "rto": 0,
-                     "revenue": 0.0, "cod_exposure": 0.0}
-                groups[k] = g
-            g["n"] += 1
-            g["revenue"] += r.get("_rev") or 0.0
-            if r["picked"]:
-                g["picked"] += 1
-            if r["delivered"]:
-                g["delivered"] += 1
-            if r.get("outcome") == "RTO":
-                g["rto"] += 1
-            if cod and r.get("outcome") == "FWD Pendency":
-                g["cod_exposure"] += r.get("cod_value") or 0.0
-        return groups
-
     def _perf_rows(groups):
         out = []
         for g in groups.values():
@@ -1537,58 +1809,89 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         out.sort(key=lambda a: -a["n"])
         return out
 
-    payment_perf = _perf_rows(_perf_groups(lambda r: r["payment"] or "(unknown)", cod=True))
-
-    # Per-day order volume + revenue, keyed on the WINDOW/partition date — the
-    # same date the load window and the headline "Shipments" card count on — so
-    # every bar sits inside the selected range and the chart totals reconcile
-    # with the KPI cards. Falls back to pickup, then order date for uploaded
-    # files (no partition date). Rows with none of the three are omitted.
-    # Sorted chronologically.
+    # Payment-mode performance, the per-day order series and the product-category
+    # tree are all built together in ONE pass over `rows` (previously three
+    # separate scans):
+    #   * pay_groups   -> payment-mode KPI block; cod_exposure = collectable ₹ on
+    #                     COD orders still in transit (cash owed, not yet collected)
+    #   * _daily       -> per-day order volume + revenue, keyed on the WINDOW/
+    #                     partition date (falls back to pickup, then order date for
+    #                     uploaded files) so every bar sits inside the selected
+    #                     range and the chart totals reconcile with the KPI cards
+    #   * product_tree -> category -> subcategory economics (volume, revenue, RTO)
+    #                     plus which carrier accounts ship each category
+    pay_groups: dict[str, dict] = {}
     _daily: dict[str, dict] = {}
-    for r in rows:
-        d = r.get("window_date") or r.get("pickup_date") or r.get("order_date")
-        if not d:
-            continue
-        cell = _daily.setdefault(d, {"date": d, "n": 0, "delivered": 0, "revenue": 0.0})
-        cell["n"] += 1
-        cell["revenue"] += r.get("_rev") or 0.0
-        if r.get("delivered"):
-            cell["delivered"] += 1
-    daily = [{**_daily[d], "revenue": _round(_daily[d]["revenue"])} for d in sorted(_daily)]
-
-    # Product economics: category -> subcategory tree carrying volume, revenue
-    # (invoice value) and RTO count so the UI can flag high-return products that
-    # quietly eat margin, plus which carrier accounts ship each category. Only
-    # meaningful when the file carries an Item Names column; else all "Unknown".
     product_tree: dict[str, dict] = {}
     has_products = False
     for r in rows:
+        val = r.get("_rev") or 0.0   # de-duplicated revenue (see revenue block)
+        outcome = r.get("outcome")
+        is_rto = outcome == "RTO"
+        deliv = r["delivered"]
+        pick = r["picked"]
+
+        # -- payment-mode performance (key is never blank -> no rows skipped) --
+        pk = r["payment"] or "(unknown)"
+        g = pay_groups.get(pk)
+        if g is None:
+            g = {"group": pk, "n": 0, "picked": 0, "delivered": 0, "rto": 0,
+                 "revenue": 0.0, "cod_exposure": 0.0}
+            pay_groups[pk] = g
+        g["n"] += 1
+        g["revenue"] += val
+        if pick:
+            g["picked"] += 1
+        if deliv:
+            g["delivered"] += 1
+        if is_rto:
+            g["rto"] += 1
+        if outcome == "FWD Pendency":
+            g["cod_exposure"] += r.get("cod_value") or 0.0
+
+        # -- per-day volume + revenue (rows with no usable date are omitted) --
+        d = r.get("window_date") or r.get("pickup_date") or r.get("order_date")
+        if d:
+            cell = _daily.get(d)
+            if cell is None:
+                cell = {"date": d, "n": 0, "delivered": 0, "revenue": 0.0}
+                _daily[d] = cell
+            cell["n"] += 1
+            cell["revenue"] += val
+            if deliv:
+                cell["delivered"] += 1
+
+        # -- product economics tree --
         cat = r.get("category") or "Unknown"
         sub = r.get("subcategory") or "Unknown"
         acct = r.get("account") or "(unknown)"
         if r.get("item_name"):
             has_products = True
-        val = r.get("_rev") or 0.0   # de-duplicated revenue (see revenue block)
-        is_rto = r.get("outcome") == "RTO"
-        c = product_tree.setdefault(
-            cat, {"category": cat, "n": 0, "revenue": 0.0, "rto": 0,
-                  "delivered": 0, "picked": 0, "subs": {}, "accts": {}}
-        )
+        c = product_tree.get(cat)
+        if c is None:
+            c = {"category": cat, "n": 0, "revenue": 0.0, "rto": 0,
+                 "delivered": 0, "picked": 0, "subs": {}, "accts": {}}
+            product_tree[cat] = c
         c["n"] += 1
         c["revenue"] += val
         if is_rto:
             c["rto"] += 1
-        if r["delivered"]:
+        if deliv:
             c["delivered"] += 1
-        if r["picked"]:
+        if pick:
             c["picked"] += 1
-        s = c["subs"].setdefault(sub, {"n": 0, "revenue": 0.0, "rto": 0})
+        s = c["subs"].get(sub)
+        if s is None:
+            s = {"n": 0, "revenue": 0.0, "rto": 0}
+            c["subs"][sub] = s
         s["n"] += 1
         s["revenue"] += val
         if is_rto:
             s["rto"] += 1
         c["accts"][acct] = c["accts"].get(acct, 0) + 1
+
+    payment_perf = _perf_rows(pay_groups)
+    daily = [{**_daily[d], "revenue": _round(_daily[d]["revenue"])} for d in sorted(_daily)]
     products = []
     # Ranked by revenue so the biggest-money categories lead the view.
     for c in sorted(product_tree.values(), key=lambda x: -x["revenue"]):
@@ -1618,15 +1921,15 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     # don't change between filters, so this is cached per loaded dataset.
     filter_opts = _filter_options(records)
 
-    return {
+    report = {
         "summary": {
             "total": total,
             "picked": picked,
             "delivered": delivered,
             "success_rate": _round(delivered / picked * 100 if picked else None),
-            "avg_p2o": _round(_mean([r["p2o"] for r in rows])),
-            "avg_p2d": _round(_mean([r["p2d"] for r in rows])),
-            "avg_o2s": _round(_mean([r["o2s"] for r in rows])),
+            "avg_p2o": _round(avg_p2o),
+            "avg_p2d": _round(avg_p2d),
+            "avg_o2s": _round(avg_o2s),
             "carriers": len(agg),
             "warehouses": wh_total_count,
             "ndd_orders": ndd_orders,
@@ -1678,3 +1981,5 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         "filters": filter_opts,
         "weights": {k: int(v * 100) for k, v in WEIGHTS.items()},
     }
+    _report_cache_put(records, _ckey, report)
+    return report
