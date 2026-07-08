@@ -1175,6 +1175,24 @@ def _attach_products(items, awb2prod, order2prod):
     return matched
 
 
+def _attach_values(items, awb2value, order2value):
+    """Tag each invoice line with its shipment's declared order value (selling
+    price), joined on AWB (falling back to order id). Lines with no match keep
+    order_value = None and are excluded from the freight-to-value ratio."""
+    awb2value = awb2value or {}
+    order2value = order2value or {}
+    for it in items:
+        val = None
+        awb = it.get("awb")
+        if awb and awb in awb2value:
+            val = awb2value[awb]
+        if val is None:
+            oid = (it.get("order_id") or "").strip().upper()
+            if oid and oid in order2value:
+                val = order2value[oid]
+        it["order_value"] = val
+
+
 def _build_subcategory_analysis(items):
     """Spend (with GST) and shipment counts grouped by sub-category, plus a
     matched/unmatched summary. Lines with no joined sub-category fall into the
@@ -1229,23 +1247,26 @@ def _build_product_analysis(items, top=500):
     item name shown for readability. Lines with no SKU fall into a single
     "(no SKU / unmatched)" bucket so totals reconcile to the invoice total."""
     prod = {}
-    total_spend = total_weight = 0.0
+    total_spend = total_weight = total_value = 0.0
     total_ship = 0
     for i in items:
         amt = i["amount"]
         n = i["shipments"]
         wt = i.get("weight_kg") or 0.0
+        val = i.get("order_value") or 0.0
         total_spend += amt
         total_ship += n
         total_weight += wt
+        total_value += val
         sku = (i.get("sku") or "").strip()
         name = (i.get("product") or i.get("sku_name") or "").strip()
         key = sku.upper() or "(no SKU / unmatched)"
         g = prod.setdefault(key, {"sku": sku, "name": name, "spend": 0.0,
-                                  "shipments": 0, "weight": 0.0})
+                                  "shipments": 0, "weight": 0.0, "sell_value": 0.0})
         g["spend"] += amt
         g["shipments"] += n
         g["weight"] += wt
+        g["sell_value"] += val
         if not g["name"] and name:
             g["name"] = name
         if not g["sku"] and sku:
@@ -1258,6 +1279,9 @@ def _build_product_analysis(items, top=500):
             "spend": round(g["spend"], 2),
             "shipments": g["shipments"],
             "weight": round(g["weight"], 1),
+            # Total declared order value (selling price) across this product's
+            # matched shipments; None when nothing matched so the % blanks out.
+            "sell_value": round(g["sell_value"], 2) if g["sell_value"] else None,
             "share": round(g["spend"] / total_spend * 100, 1) if total_spend else 0,
         })
     return {
@@ -1267,6 +1291,7 @@ def _build_product_analysis(items, top=500):
         "total_spend": round(total_spend, 2),
         "total_shipments": total_ship,
         "total_weight": round(total_weight, 1),
+        "total_sell_value": round(total_value, 2) if total_value else None,
     }
 
 
@@ -1537,13 +1562,17 @@ def build_carrier_comparison(items, tds_rate=2.0):
 
 def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
                       awb2lane=None, order2lane=None,
-                      awb2prod=None, order2prod=None, sku2vol=None):
+                      awb2prod=None, order2prod=None, sku2vol=None,
+                      awb2value=None, order2value=None):
     if awb2cat or sku2cat:
         _enrich(items, awb2cat or {}, sku2cat or {})
 
     # Join each line to the SKU / sub-category of its shipment (from loaded
     # BigQuery data) so spend can be analysed by product sub-category.
     prod_matched = _attach_products(items, awb2prod, order2prod)
+    # Join each line to its shipment's declared order value (selling price) so
+    # shipping spend can be shown as a % of item value in the product table.
+    _attach_values(items, awb2value, order2value)
     subcategory_analysis = _build_subcategory_analysis(items)
     subcategory_analysis["matched_lines"] = prod_matched
     subcategory_analysis["total_lines"] = len(items)

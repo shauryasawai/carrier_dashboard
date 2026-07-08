@@ -96,6 +96,9 @@ _INVOICE_CACHE = {"items": [], "files": [], "awb2cat": {}, "sku2cat": {},
                   # BigQuery product enrichment fetched by invoice date window
                   # (awb/order -> (category, subcategory, sku, item_name)).
                   "awb2prod": {}, "order2prod": {}, "prod_window": None,
+                  # BigQuery declared order value (selling price) by awb/order,
+                  # so invoice shipping cost can be shown as a % of item value.
+                  "awb2value": {}, "order2value": {},
                   # Item master SKU -> volumetric/billable weight (kg), from an
                   # uploaded master file, for weight over-charge detection.
                   "sku2vol": {}}
@@ -109,6 +112,11 @@ _LANE_CACHE = {"records": None, "maps": None}
 # with sub-category / SKU. Rebuilt only when the record set changes.
 _PROD_CACHE = {"records": None, "maps": None}
 
+# Cached value maps (AWB/order -> declared order value = selling price), built
+# from the loaded shipment data as a fallback when no invoice-date enrichment
+# has been fetched. Rebuilt only when the record set changes.
+_VALUE_CACHE = {"records": None, "maps": None}
+
 
 def _reset_invoice_cache():
     _INVOICE_CACHE["items"] = []
@@ -119,6 +127,8 @@ def _reset_invoice_cache():
     _INVOICE_CACHE["report_cache"] = {}
     _INVOICE_CACHE["awb2prod"] = {}
     _INVOICE_CACHE["order2prod"] = {}
+    _INVOICE_CACHE["awb2value"] = {}
+    _INVOICE_CACHE["order2value"] = {}
     _INVOICE_CACHE["prod_window"] = None
     _INVOICE_CACHE["sku2vol"] = {}
 
@@ -157,13 +167,15 @@ def _refresh_invoice_product_map():
     inv_awbs = {it["awb"] for it in items if it.get("awb")}
     inv_carriers = {it.get("carrier") for it in items if it.get("carrier")}
     try:
-        awb2prod, order2prod = bq.fetch_awb_product_map(
+        awb2prod, order2prod, awb2value, order2value = bq.fetch_awb_product_map(
             lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers)
     except Exception:  # noqa: BLE001 - enrichment is best-effort; never block upload
         logger.exception("Invoice BigQuery enrichment failed")
         return
     _INVOICE_CACHE["awb2prod"] = awb2prod
     _INVOICE_CACHE["order2prod"] = order2prod
+    _INVOICE_CACHE["awb2value"] = awb2value
+    _INVOICE_CACHE["order2value"] = order2value
     _INVOICE_CACHE["prod_window"] = {"from": lo.isoformat(), "to": hi.isoformat(),
                                      "awbs": len(awb2prod)}
 
@@ -174,6 +186,15 @@ def _invoice_product_maps():
     if _INVOICE_CACHE.get("awb2prod"):
         return _INVOICE_CACHE["awb2prod"], _INVOICE_CACHE.get("order2prod") or {}
     return _product_maps()
+
+
+def _invoice_value_maps():
+    """AWB/order -> declared order value (selling price). Prefer the
+    BigQuery-by-invoice-date enrichment (covers the full invoice window); fall
+    back to the loaded shipment record set."""
+    if _INVOICE_CACHE.get("awb2value"):
+        return _INVOICE_CACHE["awb2value"], _INVOICE_CACHE.get("order2value") or {}
+    return _value_maps()
 
 
 def _invoice_report(carrier_filter=None):
@@ -202,6 +223,7 @@ def _invoice_report(carrier_filter=None):
 
     awb2lane, order2lane = _lane_maps()
     awb2prod, order2prod = _invoice_product_maps()
+    awb2value, order2value = _invoice_value_maps()
     # Merge the persisted default item master with any master uploaded this
     # session (session entries override), so weight-dispute comparison works
     # without re-uploading the master every time.
@@ -214,6 +236,7 @@ def _invoice_report(carrier_filter=None):
         eff_awb2cat, eff_sku2cat,
         awb2lane=awb2lane, order2lane=order2lane,
         awb2prod=awb2prod, order2prod=order2prod,
+        awb2value=awb2value, order2value=order2value,
         sku2vol=eff_sku2vol)
     report["master"] = {
         "sku_count": len(eff_sku2vol),
@@ -283,6 +306,29 @@ def _product_maps():
     _PROD_CACHE["records"] = recs
     _PROD_CACHE["maps"] = (awb2prod, order2prod)
     return awb2prod, order2prod
+
+
+def _value_maps():
+    """Build AWB -> declared order value (selling price) and order-id -> same
+    from the loaded shipment data. Used as a fallback for the invoice product
+    table's freight-to-value ratio when no invoice-date enrichment is present."""
+    recs = _CACHE.get("records") or []
+    if _VALUE_CACHE["records"] is recs and _VALUE_CACHE["maps"] is not None:
+        return _VALUE_CACHE["maps"]
+    awb2value, order2value = {}, {}
+    for r in recs:
+        val = r.get("order_value")
+        if not val:
+            continue
+        awb = r.get("awb")
+        if awb:
+            awb2value[invoices._norm_awb(awb)] = val
+        oid = (r.get("order_id") or "").strip().upper()
+        if oid:
+            order2value.setdefault(oid, val)
+    _VALUE_CACHE["records"] = recs
+    _VALUE_CACHE["maps"] = (awb2value, order2value)
+    return awb2value, order2value
 
 
 def login_view(request):

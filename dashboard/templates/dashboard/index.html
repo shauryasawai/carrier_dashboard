@@ -157,22 +157,30 @@ body {
 
 .btn-ghost {
   cursor: pointer; background: transparent; border: 1px solid var(--line-strong);
-  color: var(--ink-soft); font-family: var(--mono); font-size: 12px;
-  padding: 7px 14px; border-radius: 7px; margin-left: auto; transition: all .15s;
+  color: var(--ink-soft); font-family: var(--mono); font-size: 11.5px;
+  padding: 6px 12px; border-radius: 7px; margin-left: auto; transition: all .15s;
 }
 .btn-ghost:hover { border-color: var(--ink); color: var(--ink); }
 
-/* Source toolbar (data window + load controls) */
+/* Unified control panel: data window + filters grouped into one compact card */
+.control-panel {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow);
+  padding: 12px 16px; margin-bottom: 20px;
+}
+
+/* Source toolbar (data window + load controls) — a slim strip on top */
 .toolbar {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  flex-wrap: wrap; gap: 14px 20px; margin-bottom: 20px;
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 8px 16px;
+  margin: 0 0 10px; padding-bottom: 10px; border-bottom: 1px solid var(--line);
 }
-.toolbar-window { display: flex; flex-direction: column; }
+.toolbar-window { display: flex; flex-direction: row; align-items: center; gap: 10px; }
 .toolbar-label {
-  font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+  font-family: var(--mono); font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-faint); margin: 0; white-space: nowrap;
 }
-.toolbar-actions { display: flex; gap: 10px; align-items: center; }
+.toolbar-actions { display: flex; gap: 8px; align-items: center; }
 .toolbar-actions .btn-ghost { margin-left: 0; }
 
 /* Carrier filter dropdown (Carrier cost analysis toolbar) */
@@ -192,24 +200,22 @@ body {
 .inv-carrier-filter select:hover { border-color: var(--ink); color: var(--ink); }
 .inv-carrier-filter select:focus { outline: none; border-color: var(--accent); }
 
-/* Filters — tidy responsive grid so every control aligns on a baseline. */
-.filters {
-  padding-bottom: 22px; margin-bottom: 24px; border-bottom: 1px solid var(--line);
-}
+/* Filters — dense grid inside the control panel; no extra chrome of its own. */
+.filters { padding: 0; margin: 0; border: none; }
 .filter-primary, .filter-advanced {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 14px 18px; align-items: end;
 }
-/* Filters in two usability rows. Row 1 (primary, most-changed): channel name +
+/* Filters in two dense rows. Row 1 (primary, most-changed): channel name +
    carrier account + warehouse + payment + Reset. Row 2 (secondary, finer
-   slices): tier, zone, weight, pickup time, and the date range. */
+   slices): tier, zone, weight, pickup time, and the pickup date range. */
 .filter-row {
   display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
-  gap: 12px 14px; align-items: end;
+  gap: 8px 12px; align-items: end;
 }
 .filter-row--secondary {
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  margin-top: 14px; padding-top: 16px; border-top: 1px dashed var(--line);
+  margin-top: 9px; padding-top: 9px; border-top: 1px dashed var(--line);
 }
 .filter-row .filter { min-width: 0; }
 .filter-row .filter-actions { display: flex; align-items: center; }
@@ -287,30 +293,31 @@ body {
   font-family: var(--display); font-weight: 500; font-size: 16px; letter-spacing: -.01em; color: var(--ink-soft); }
 .tier-rev .unit { font-size: 10.5px; color: var(--ink-faint); font-family: var(--mono); margin-left: 6px; font-weight: 400; }
 .filter label {
-  display: block; font-family: var(--mono); font-size: 11px; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 6px;
+  display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: 3px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .filter select {
-  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
   background: var(--card); border: 1px solid var(--line-strong);
-  border-radius: 8px; padding: 8px 12px; min-width: 150px; cursor: pointer;
+  border-radius: 7px; padding: 6px 10px; min-width: 0; cursor: pointer;
   appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' fill='none' stroke='%234a463e' stroke-width='1.6'%3E%3Cpath d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
-  background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
+  background-repeat: no-repeat; background-position: right 10px center; padding-right: 28px;
 }
 .filter select:focus { outline: none; border-color: var(--accent); }
 .filter input[type="date"] {
-  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
   background: var(--card); border: 1px solid var(--line-strong);
-  border-radius: 8px; padding: 7px 12px; min-width: 150px; cursor: pointer;
+  border-radius: 7px; padding: 5px 10px; min-width: 0; cursor: pointer;
 }
 .filter input[type="date"]:focus { outline: none; border-color: var(--accent); }
 
 /* Data-window calendar range (single range picker, re-queries BigQuery) */
 .win-input {
-  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
   background: var(--card); border: 1px solid var(--line-strong);
-  border-radius: 8px; padding: 8px 12px; min-width: 230px; cursor: pointer;
+  border-radius: 7px; padding: 6px 12px; min-width: 210px; cursor: pointer;
 }
 .win-input:focus { outline: none; border-color: var(--accent); }
 .win-input:disabled { opacity: .55; cursor: default; }
@@ -336,11 +343,11 @@ body {
 
 .msel { position: relative; }
 .msel-toggle {
-  display: flex; align-items: center; justify-content: space-between; gap: 10px;
-  width: 100%; min-width: 150px; cursor: pointer; text-align: left;
-  font-family: var(--sans); font-size: 14px; color: var(--ink);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  width: 100%; min-width: 0; cursor: pointer; text-align: left;
+  font-family: var(--sans); font-size: 13px; color: var(--ink);
   background: var(--card); border: 1px solid var(--line-strong);
-  border-radius: 8px; padding: 8px 12px;
+  border-radius: 7px; padding: 6px 10px;
   transition: border-color .15s;
 }
 .msel-toggle:hover { border-color: var(--ink-faint); }
@@ -771,13 +778,18 @@ body {
   transition: opacity .6s ease, transform .6s cubic-bezier(.22,.61,.36,1); }
 .reveal.in-view { opacity: 1; transform: none; }
 
-/* Keep the filter bar (and its open dropdowns) above everything below it. */
+/* The data-window card scrolls away normally; only the filter bar is frozen. */
+.control-panel { margin-bottom: 12px; }
+/* Toolbar is now the card's only content — drop its filter divider/spacing. */
+.control-panel .toolbar { margin: 0; padding-bottom: 0; border-bottom: none; }
+/* Freeze just the filter bar to the top on scroll (its containing block is the
+   tall dashboard section, so it stays pinned the whole way down). It — and its
+   open dropdowns — stay above everything scrolling beneath it. */
 .filters {
-  position: sticky; top: 0; z-index: 30;
-  background: var(--paper);
-  background: color-mix(in srgb, var(--paper) 94%, transparent);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  padding-top: 14px; box-shadow: 0 10px 18px -16px rgba(16,38,58,.5);
+  position: sticky; top: 10px; z-index: 30;
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow), 0 12px 20px -16px rgba(16,38,58,.55);
 }
 .stat-row { position: relative; z-index: 1; }
 .msel.open { position: relative; z-index: 40; }
@@ -916,13 +928,13 @@ body {
 
 /* Date-range banner: slim single line */
 .data-range { padding: 6px 12px; }
-.toolbar { margin-bottom: 10px; gap: 8px 18px; }
-.toolbar-label { margin-bottom: 3px; }
+.toolbar { margin: 0 0 10px; gap: 8px 16px; }
+.toolbar-label { margin: 0; }
 
-/* Filters: tighter grid + controls */
-.filters { padding-bottom: 12px; margin-bottom: 14px; }
+/* Filters: dense grid; its own compact card so it can freeze independently */
+.filters { padding: 12px 16px; margin: 0 0 20px; }
 .filter-primary, .filter-advanced { gap: 9px 14px; }
-.filter label { margin-bottom: 3px; font-size: 10px; }
+.filter label { margin-bottom: 3px; font-size: 9.5px; }
 .filter select, .filter input[type="date"], .msel-toggle, .win-input { padding: 6px 10px; }
 
 /* Stat cards: a touch shorter */
@@ -1204,8 +1216,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     <!-- Dashboard -->
     <section id="dashboard" class="dashboard" hidden>
 
-      <!-- Source toolbar: the BigQuery data window + load controls, kept apart
-           from the analytical filters below. -->
+      <!-- Data-window card: BigQuery window + load controls. Scrolls away
+           normally (not frozen). -->
+      <div class="control-panel">
       <div class="toolbar">
         <div class="toolbar-window filter-window">
           <span class="toolbar-label">Data window <span class="hint-inline">re-queries BigQuery</span></span>
@@ -1217,9 +1230,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <button class="btn-ghost" id="reuploadBtn">⬆ Upload file</button>
         </div>
       </div>
+      </div><!-- /control-panel -->
 
-      <!-- Filter bar. Every categorical filter is a multi-select checkbox
-           dropdown (.msel); leaving one empty means "all". -->
+      <!-- Filter bar (frozen on scroll). Every categorical filter is a
+           multi-select checkbox dropdown (.msel); leaving one empty means "all". -->
       <div class="filters">
         <!-- All filters in a single row. -->
         <div class="filter-row">
@@ -1315,6 +1329,16 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
             <input type="date" id="fDateTo">
           </div>
         </div>
+      </div><!-- /filters -->
+
+      <!-- AI business summary (NEW) — sits directly below the frozen filter bar -->
+      <div class="panel ai-panel">
+        <div class="panel-head">
+          <h3>Business summary <span class="ai-badge">AI</span></h3>
+          <p class="panel-sub">Short overview — what's working and what needs attention</p>
+          <button type="button" class="btn-secondary" id="aiGenBtn">✦ Generate summary</button>
+        </div>
+        <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview</div>
       </div>
 
       <!-- Summary stats, grouped: headline KPIs then operational detail -->
@@ -1329,16 +1353,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <div class="kpi-group">
         <div class="kpi-label">Revenue <span class="hint-inline">order value</span></div>
         <div class="stat-row stat-row--rev" id="revRow"></div>
-      </div>
-
-      <!-- AI business summary (NEW) -->
-      <div class="panel ai-panel">
-        <div class="panel-head">
-          <h3>Business summary <span class="ai-badge">AI</span></h3>
-          <p class="panel-sub">Short overview — what's working and what needs attention</p>
-          <button type="button" class="btn-secondary" id="aiGenBtn">✦ Generate summary</button>
-        </div>
-        <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview</div>
       </div>
 
       <!-- Destination city-tier breakdown -->
@@ -4073,13 +4087,16 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       '<th scope="col" class="num">Cost / shipment</th>' +
       '<th scope="col" class="num">Avg charged wt (kg)</th>' +
       '<th scope="col" class="num">Charge / kg</th>' +
-      '<th scope="col" class="num">Share</th>' +
+      '<th scope="col" class="num" title="Shipping spend as a % of the product\'s selling value (invoice value)">Freight % of value</th>' +
       '</tr></thead>';
     var body = rows.length ? rows.map(function (r, i) {
       var unmatched = !r.sku;
       var perShip = r.shipments ? (r.spend / r.shipments) : null;
       var avgKg = r.shipments ? ((r.weight || 0) / r.shipments) : null;
       var perKg = r.weight ? (r.spend / r.weight) : null;
+      // Freight as a % of selling value: shipping spend ÷ declared order value
+      // (invoice_value) for this product's shipments.
+      var freightPct = r.sell_value ? (r.spend / r.sell_value * 100) : null;
       return '<tr' + (unmatched ? ' class="recon-unmatched"' : '') + '>' +
         '<td class="rank">' + (i + 1) + '</td>' +
         '<td>' + esc(r.name) + '</td>' +
@@ -4089,13 +4106,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<td class="num">' + (perShip != null ? inr(perShip) : '—') + '</td>' +
         '<td class="num">' + (avgKg != null ? avgKg.toFixed(2) : '—') + '</td>' +
         '<td class="num">' + (perKg != null ? inr(perKg) : '—') + '</td>' +
-        '<td class="num">' + (r.share != null ? r.share.toFixed(1) + '%' : '—') + '</td>' +
+        '<td class="num">' + (freightPct != null ? freightPct.toFixed(1) + '%' : '—') + '</td>' +
         '</tr>';
     }).join("") : '<tr><td class="empty" colspan="9">No products match “' + esc(q) + '”.</td></tr>';
 
     var totPerShip = pa.total_shipments ? (pa.total_spend / pa.total_shipments) : null;
     var totAvgKg = pa.total_shipments ? ((pa.total_weight || 0) / pa.total_shipments) : null;
     var totPerKg = pa.total_weight ? (pa.total_spend / pa.total_weight) : null;
+    var totFreightPct = pa.total_sell_value ? (pa.total_spend / pa.total_sell_value * 100) : null;
     var foot = q ? '' : '<tfoot><tr class="recon-foot">' +
       '<th scope="row" colspan="3">Total · ' + pa.product_total.toLocaleString("en-IN") + ' products</th>' +
       '<td class="num"><b>' + (pa.total_shipments || 0).toLocaleString("en-IN") + '</b></td>' +
@@ -4103,7 +4121,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       '<td class="num"><b>' + (totPerShip != null ? inr(totPerShip) : '—') + '</b></td>' +
       '<td class="num"><b>' + (totAvgKg != null ? totAvgKg.toFixed(2) : '—') + '</b></td>' +
       '<td class="num"><b>' + (totPerKg != null ? inr(totPerKg) : '—') + '</b></td>' +
-      '<td class="num">100%</td>' +
+      '<td class="num"><b>' + (totFreightPct != null ? totFreightPct.toFixed(1) + '%' : '—') + '</b></td>' +
       '</tr></tfoot>';
     $("invSubcatTable").innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
   }

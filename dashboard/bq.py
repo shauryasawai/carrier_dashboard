@@ -501,9 +501,11 @@ def _page_size() -> int | None:
 def fetch_awb_product_map(date_from: str, date_to: str,
                           limit: int | None = None,
                           awbs: set | None = None,
-                          carriers: set | None = None) -> tuple[dict, dict]:
-    """Return (awb2prod, order2prod) for shipments in the [date_from, date_to]
-    window (YYYY-MM-DD), filtered on the configured date/partition column.
+                          carriers: set | None = None) -> tuple[dict, dict, dict, dict]:
+    """Return (awb2prod, order2prod, awb2value, order2value) for shipments in the
+    [date_from, date_to] window (YYYY-MM-DD), filtered on the configured
+    date/partition column. The *value maps hold each shipment's declared order
+    value (invoice_value = product selling price).
 
     Each value is (category, subcategory, sku, item_name), with category /
     subcategory derived from the item names via kpi._product_category — the same
@@ -532,7 +534,8 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     sku_col = cmap.get("sku", "product_sku_code")
     items_col = cmap.get("item_names", "items")
     order_col = cmap.get("order_id", "order_id")
-    for c in (awb_col, sku_col, items_col, order_col):
+    val_col = cmap.get("order_value", "invoice_value")
+    for c in (awb_col, sku_col, items_col, order_col, val_col):
         _check_identifier(str(c))
 
     where = _range_predicate(project, dataset, table, date_from, date_to)
@@ -557,7 +560,8 @@ def fetch_awb_product_map(date_from: str, date_to: str,
 
     sql = (
         f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
-        f"`{items_col}` AS items, `{order_col}` AS order_id "
+        f"`{items_col}` AS items, `{order_col}` AS order_id, "
+        f"`{val_col}` AS order_value "
         f"FROM `{project}.{dataset}.{table}` "
         f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}"
     )
@@ -579,8 +583,11 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     client = _client()
     job = client.query(sql)
     awb2prod, order2prod = {}, {}
+    # AWB/order -> declared order value (invoice_value = the product's selling
+    # price), so invoice shipping cost can be expressed as a % of item value.
+    awb2value, order2value = {}, {}
 
-    def _emit(awb_raw, sku_raw, items_raw, order_raw):
+    def _emit(awb_raw, sku_raw, items_raw, order_raw, value_raw):
         if awb_raw is None:
             return
         awb = _norm_re.sub("", str(awb_raw).strip().upper())
@@ -594,11 +601,19 @@ def fetch_awb_product_map(date_from: str, date_to: str,
         sku = str(sku_raw or "").strip()
         cat, sub = _cat(items_text)
         prod = (cat, sub, sku, items_text)
+        try:
+            val = float(value_raw) if value_raw not in (None, "") else None
+        except (TypeError, ValueError):
+            val = None
         if awb and in_want:
             awb2prod[awb] = prod
+            if val is not None:
+                awb2value[awb] = val
         oid = str(order_raw or "").strip().upper()
         if oid:
             order2prod.setdefault(oid, prod)
+            if val is not None:
+                order2value.setdefault(oid, val)
 
     # Stream rows over the REST API (large page size to cut round-trips). The
     # carrier filter (in SQL) and the AWB filter (in _emit) keep this fast: only
@@ -608,8 +623,9 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # account it can yield an empty table without raising, silently dropping all
     # enrichment.
     for row in job.result(page_size=_page_size()):
-        _emit(row.get("awb"), row.get("sku"), row.get("items"), row.get("order_id"))
-    return awb2prod, order2prod
+        _emit(row.get("awb"), row.get("sku"), row.get("items"),
+              row.get("order_id"), row.get("order_value"))
+    return awb2prod, order2prod, awb2value, order2value
 
 
 def fetch_records(lookback_days: int | None = None,
