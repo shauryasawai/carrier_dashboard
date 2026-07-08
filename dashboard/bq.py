@@ -38,6 +38,8 @@ DEFAULT_COLUMN_MAP = {
     "drop_city": "drop_city",
     "pickup_ts": "pickup_date",
     "order_ts": "order_date",          # order-received time (O2S processing time)
+    "window_ts": "partition_date",     # load-window/partition date (= the day the
+                                       # KPI cards count on); drives the per-day chart
     "delivery_ts": "delivery_date",
     "ofd1_ts": "out_for_delivery_1st_attempt",
     "edd_ts": "expected_delivery_date_by_courier_partner",

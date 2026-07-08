@@ -641,6 +641,7 @@ def build_record(get):
 
     pickup = _to_datetime(get("pickup_ts"))
     order = _to_datetime(get("order_ts"))   # order-received time, for O2S
+    win = _to_datetime(get("window_ts"))    # load-window/partition date (BQ only)
     ofd1 = _to_datetime(get("ofd1_ts"))
     delivery = _to_datetime(get("delivery_ts"))
     edd = _to_datetime(get("edd_ts"))   # carrier's committed expected delivery date
@@ -731,6 +732,13 @@ def build_record(get):
         "order_value": order_value,
         "cod_value": cod_value,
         "pickup_date": pickup.date().isoformat() if pickup else "",
+        # Order-placed date (every order has one, even before pickup). Kept for
+        # the O2S metric and as the per-day chart fallback for uploaded files.
+        "order_date": order.date().isoformat() if order else "",
+        # Load-window/partition date — the same day the load window and the
+        # headline KPI cards count on. Drives the orders-per-day chart so it
+        # reconciles with the "Shipments" total. Empty for uploaded files.
+        "window_date": win.date().isoformat() if win else "",
         "pickup_slot": _pickup_slot(pickup),
         "status": status,
         "outcome": outcome,
@@ -1503,19 +1511,23 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
 
     payment_perf = _perf_rows(_perf_groups(lambda r: r["payment"] or "(unknown)", cod=True))
 
-    # Per-day order volume, keyed on the shipment (pickup) date and sorted
-    # chronologically, so the UI can chart which days had more/fewer orders.
-    # `delivered` is tracked alongside the total for an at-a-glance daily split.
+    # Per-day order volume + revenue, keyed on the WINDOW/partition date — the
+    # same date the load window and the headline "Shipments" card count on — so
+    # every bar sits inside the selected range and the chart totals reconcile
+    # with the KPI cards. Falls back to pickup, then order date for uploaded
+    # files (no partition date). Rows with none of the three are omitted.
+    # Sorted chronologically.
     _daily: dict[str, dict] = {}
     for r in rows:
-        d = r.get("pickup_date")
+        d = r.get("window_date") or r.get("pickup_date") or r.get("order_date")
         if not d:
             continue
-        cell = _daily.setdefault(d, {"date": d, "n": 0, "delivered": 0})
+        cell = _daily.setdefault(d, {"date": d, "n": 0, "delivered": 0, "revenue": 0.0})
         cell["n"] += 1
+        cell["revenue"] += r.get("order_value") or 0.0
         if r.get("delivered"):
             cell["delivered"] += 1
-    daily = [_daily[d] for d in sorted(_daily)]
+    daily = [{**_daily[d], "revenue": _round(_daily[d]["revenue"])} for d in sorted(_daily)]
 
     # Product economics: category -> subcategory tree carrying volume, revenue
     # (invoice value) and RTO count so the UI can flag high-return products that

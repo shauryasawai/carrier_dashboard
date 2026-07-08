@@ -1443,6 +1443,18 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
+      <!-- Lane analysis (NEW) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Top lanes (pickup → drop)</h3>
+          <p id="laneSub" class="panel-sub"></p>
+          <input type="search" class="panel-search" id="laneSearch" placeholder="Search lane…" autocomplete="off">
+        </div>
+        <div class="table-scroll">
+          <table class="score-table" id="laneTable"></table>
+        </div>
+      </div>
+
       <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
       <div class="panel sla-panel">
         <div class="panel-head sla-head">
@@ -1468,18 +1480,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <div class="table-scroll">
             <table class="sla-table" id="slaTable"></table>
           </div>
-        </div>
-      </div>
-
-      <!-- Lane analysis (NEW) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h3>Top lanes (pickup → drop)</h3>
-          <p id="laneSub" class="panel-sub"></p>
-          <input type="search" class="panel-search" id="laneSearch" placeholder="Search lane…" autocomplete="off">
-        </div>
-        <div class="table-scroll">
-          <table class="score-table" id="laneTable"></table>
         </div>
       </div>
 
@@ -1812,14 +1812,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   }
   function fmtPct(v) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(1) + "%"; }
   function fmtNum(v, dp) { return v == null || isNaN(v) ? "\u2014" : v.toFixed(dp == null ? 2 : dp); }
-  // Compact \u20b9 in the Indian scale (Cr / L / K) for large revenue figures.
+  // Compact \u20b9 in the Indian scale \u2014 only Crores and Lakhs (no thousands), so
+  // revenue reads consistently across the whole dashboard.
   function fmtINRc(v) {
     if (v == null || isNaN(v)) return "\u2014";
     var a = Math.abs(v), s = v < 0 ? "-" : "";
     if (a >= 1e7) return s + "\u20b9" + (a / 1e7).toFixed(2) + " Cr";
-    if (a >= 1e5) return s + "\u20b9" + (a / 1e5).toFixed(2) + " L";
-    if (a >= 1e3) return s + "\u20b9" + (a / 1e3).toFixed(1) + "K";
-    return s + "\u20b9" + Math.round(a).toLocaleString();
+    return s + "\u20b9" + (a / 1e5).toFixed(2) + " L";
   }
 
   function scoreClass(s) {
@@ -3054,6 +3053,43 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     };
   }
 
+  // Orders-per-day chart: order bars on the left axis + a revenue line on the
+  // right axis, with both values in the shared tooltip.
+  function dailyOpts(avg) {
+    return {
+      responsive: true, maintainAspectRatio: false,
+      animation: { duration: 850, easing: "easeOutQuart" },
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, position: "top", align: "end",
+          labels: { color: FAINT, boxWidth: 10, usePointStyle: true, font: { family: "Spline Sans Mono", size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              if (ctx.dataset.label === "Revenue") return "Revenue: " + fmtINRc(ctx.parsed.y);
+              var v = ctx.parsed.y, s = v.toLocaleString() + " orders";
+              if (avg) {
+                var diff = Math.round(v - avg);
+                s += diff >= 0 ? "  (+" + diff.toLocaleString() + " vs avg)"
+                               : "  (" + diff.toLocaleString() + " vs avg)";
+              }
+              return s;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: FAINT, autoSkip: true, maxRotation: 0, font: { family: "Spline Sans Mono", size: 11 } } },
+        y: { beginAtZero: true, position: "left", grid: { color: LINE },
+             ticks: { color: FAINT, precision: 0, font: { family: "Spline Sans Mono" } },
+             title: { display: true, text: "Orders", color: FAINT, font: { family: "Spline Sans Mono", size: 10 } } },
+        y1: { beginAtZero: true, position: "right", grid: { display: false },
+              ticks: { color: FAINT, font: { family: "Spline Sans Mono" }, callback: function (v) { return fmtINRc(v); } },
+              title: { display: true, text: "Revenue", color: FAINT, font: { family: "Spline Sans Mono", size: 10 } } }
+      }
+    };
+  }
+
   // Orders-per-day: vertical bars over the (pickup) date axis so it's easy to
   // spot which days ran hot and which ran light. The busiest day is highlighted
   // and the quietest muted; the sub-heading calls out both plus the daily mean.
@@ -3075,10 +3111,12 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       return;
     }
     var counts = daily.map(function (d) { return d.n; });
+    var revenues = daily.map(function (d) { return d.revenue || 0; });
     var maxN = Math.max.apply(null, counts);
     var minN = Math.min.apply(null, counts);
     var total = counts.reduce(function (a, b) { return a + b; }, 0);
     var avg = total / counts.length;
+    var totalRev = revenues.reduce(function (a, b) { return a + b; }, 0);
 
     var busiest = daily.find(function (d) { return d.n === maxN; });
     var quietest = daily.find(function (d) { return d.n === minN; });
@@ -3087,25 +3125,33 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       sub.textContent = daily.length + " days · busiest " +
         fmtDay(busiest.date) + " (" + maxN.toLocaleString() + ") · lightest " +
         fmtDay(quietest.date) + " (" + minN.toLocaleString() + ") · avg " +
-        Math.round(avg).toLocaleString() + "/day";
+        Math.round(avg).toLocaleString() + "/day · " + fmtINRc(totalRev) + " total";
     }
 
     upsertChart("cDaily", {
       type: "bar",
       data: {
         labels: daily.map(function (d) { return fmtDay(d.date); }),
-        datasets: [{
-          label: "Orders",
-          data: counts,
-          backgroundColor: daily.map(function (d) {
-            if (d.n === maxN) return "#e5564b";  // busiest day
-            if (d.n === minN) return "#c4d0da";  // lightest day
-            return "#0fb6a9";
-          }),
-          borderRadius: 4, barThickness: "flex", maxBarThickness: 34
-        }]
+        datasets: [
+          {
+            label: "Orders", yAxisID: "y", order: 2,
+            data: counts,
+            backgroundColor: daily.map(function (d) {
+              if (d.n === maxN) return "#e5564b";  // busiest day
+              if (d.n === minN) return "#c4d0da";  // lightest day
+              return "#0fb6a9";
+            }),
+            borderRadius: 4, barThickness: "flex", maxBarThickness: 34
+          },
+          {
+            label: "Revenue", type: "line", yAxisID: "y1", order: 1,
+            data: revenues,
+            borderColor: "#5b8def", backgroundColor: "#5b8def",
+            borderWidth: 2, tension: 0.3, pointRadius: 2.5, pointHoverRadius: 4, fill: false
+          }
+        ]
       },
-      options: vbarOpts(avg)
+      options: dailyOpts(avg)
     });
   }
 
