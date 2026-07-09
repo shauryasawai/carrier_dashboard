@@ -380,10 +380,10 @@ def _report_response(request, empty_msg):
     # The single authoritative date range for the loaded data (BigQuery load
     # window). None for uploaded files; the frontend falls back to pickup span.
     report["load_window"] = _CACHE.get("window")
-    # The orders-per-day series is keyed on the window/partition date — the same
-    # dimension the load window and the headline "Shipments" card count on — so
-    # every bar falls inside the selected range and the chart's order/revenue
-    # totals reconcile with the headline KPI. (See build_report's daily block.)
+    # The orders-per-day series is keyed on the ORDER date — the same dimension
+    # every KPI card and the date filter now count on — so every bar falls inside
+    # the selected order-date range and the chart's order/revenue totals reconcile
+    # with the headline KPI. (See build_report's daily block.)
     return JsonResponse(report)
 
 

@@ -216,28 +216,40 @@ def _coerce_date(date_expr: str, kind: str) -> str:
     return date_expr
 
 
+# Filter on ORDER DATE (day the order was placed) so KPIs reconcile with
+# order-date sales reports. order_date is an ISO string -> cast to DATE.
+# partition_date (always >= order_date) is kept only to prune partitions cheaply.
+_ORDER_DATE_SQL = "DATE(SAFE_CAST(`order_date` AS TIMESTAMP))"
+
+
+def _prune(project, dataset, table, lo: str) -> str:
+    """`AND partition_date >= lo - 3d` to skip partitions the window can't touch
+    ('' when the table has no partition column)."""
+    col, typ = _partition_column(project, dataset, table)
+    if not col:
+        return ""
+    _check_identifier(col)
+    lo_buf = f"DATE_SUB({lo}, INTERVAL 3 DAY)"
+    kind = (typ or "").upper()
+    if kind in ("TIMESTAMP", "DATETIME"):
+        lo_buf = f"{kind}({lo_buf})"
+    return f" AND `{col}` >= {lo_buf}"
+
+
 def _lookback_predicate(project, dataset, table, days: int) -> str:
-    """SQL WHERE predicate constraining the query to the last `days` days."""
-    cutoff = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)"
-    col_sql, kind = _filter_column_sql(project, dataset, table)
-    return f"{col_sql} >= {_coerce_date(cutoff, kind)}"
+    """Orders placed in the last `days` days, by order_date."""
+    lo = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)"
+    return f"{_ORDER_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}"
 
 
 def _range_predicate(project, dataset, table, date_from, date_to) -> str:
-    """SQL WHERE predicate for an explicit, inclusive [date_from, date_to]
-    calendar range (either bound may be omitted). For TIMESTAMP/DATETIME
-    columns the upper bound uses `< next_day` so the whole end day is included.
-    """
-    col_sql, kind = _filter_column_sql(project, dataset, table)
+    """Inclusive [date_from, date_to] order-date range (either bound optional)."""
     parts = []
     if date_from:
-        parts.append(f"{col_sql} >= {_coerce_date(_date_literal(date_from), kind)}")
+        lo = _date_literal(date_from)
+        parts.append(f"{_ORDER_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}")
     if date_to:
-        if kind in ("TIMESTAMP", "DATETIME"):
-            hi_next = f"DATE_ADD({_date_literal(date_to)}, INTERVAL 1 DAY)"
-            parts.append(f"{col_sql} < {_coerce_date(hi_next, kind)}")
-        else:
-            parts.append(f"{col_sql} <= {_date_literal(date_to)}")
+        parts.append(f"{_ORDER_DATE_SQL} <= {_date_literal(date_to)}")
     return " AND ".join(parts) if parts else "TRUE"
 
 

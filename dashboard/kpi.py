@@ -929,13 +929,15 @@ def filter_records(records, delivery_type="all", zone="all", payment="all",
             continue
         if slot_set is not None and r["pickup_slot"] not in slot_set:
             continue
-        # Date range is inclusive on both ends; rows with no pickup date are
-        # dropped only when a bound is set.
+        # Date range is inclusive on both ends and is applied to the ORDER date
+        # (the day the customer placed the order) so the selected range matches
+        # order-date-based sales reports. Rows with no order date are dropped
+        # only when a bound is set (they can't be attributed to a calendar day).
         if date_from:
-            if not r["pickup_date"] or r["pickup_date"] < date_from:
+            if not r["order_date"] or r["order_date"] < date_from:
                 continue
         if date_to:
-            if not r["pickup_date"] or r["pickup_date"] > date_to:
+            if not r["order_date"] or r["order_date"] > date_to:
                 continue
         out.append(r)
     return out
@@ -1787,10 +1789,11 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     # separate scans):
     #   * pay_groups   -> payment-mode KPI block; cod_exposure = collectable ₹ on
     #                     COD orders still in transit (cash owed, not yet collected)
-    #   * _daily       -> per-day order volume + revenue, keyed on the WINDOW/
-    #                     partition date (falls back to pickup, then order date for
+    #   * _daily       -> per-day order volume + revenue, keyed on the ORDER
+    #                     date (falls back to pickup, then window date for
     #                     uploaded files) so every bar sits inside the selected
-    #                     range and the chart totals reconcile with the KPI cards
+    #                     order-date range and the chart totals reconcile with
+    #                     the KPI cards
     #   * product_tree -> category -> subcategory economics (volume, revenue, RTO)
     #                     plus which carrier accounts ship each category
     pay_groups: dict[str, dict] = {}
@@ -1823,7 +1826,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             g["cod_exposure"] += r.get("cod_value") or 0.0
 
         # -- per-day volume + revenue (rows with no usable date are omitted) --
-        d = r.get("window_date") or r.get("pickup_date") or r.get("order_date")
+        d = r.get("order_date") or r.get("pickup_date") or r.get("window_date")
         if d:
             cell = _daily.get(d)
             if cell is None:
