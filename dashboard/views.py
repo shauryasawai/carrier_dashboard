@@ -119,19 +119,14 @@ _VALUE_CACHE = {"records": None, "maps": None}
 
 
 def _reset_invoice_cache():
-    _INVOICE_CACHE["items"] = []
-    _INVOICE_CACHE["files"] = []
-    _INVOICE_CACHE["awb2cat"] = {}
-    _INVOICE_CACHE["sku2cat"] = {}
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
-    _INVOICE_CACHE["awb2prod"] = {}
-    _INVOICE_CACHE["order2prod"] = {}
-    _INVOICE_CACHE["awb2value"] = {}
-    _INVOICE_CACHE["order2value"] = {}
-    _INVOICE_CACHE["awb2order"] = {}
     _INVOICE_CACHE["prod_window"] = None
-    _INVOICE_CACHE["sku2vol"] = {}
+    for key in ("items", "files"):
+        _INVOICE_CACHE[key] = []
+    for key in ("awb2cat", "sku2cat", "sku2vol",
+                "awb2prod", "order2prod", "awb2value", "order2value", "awb2order"):
+        _INVOICE_CACHE[key] = {}
 
 
 def _refresh_invoice_product_map():
@@ -256,82 +251,49 @@ def _invoice_report(carrier_filter=None):
     return report
 
 
-def _lane_maps():
-    """Build AWB -> (pickup_pin, drop_pin) and order-id -> lane maps from the
-    loaded shipment data, so invoice lines can be matched to their lane. Uses
-    the same AWB normalization as the invoice parser so keys line up."""
+def _shipment_maps(cache, value_for):
+    """Build (awb_map, order_map) from the loaded shipment records, caching by
+    record-set identity so tens of thousands of rows aren't rescanned on every
+    invoice filter/refresh. `value_for(r)` returns the value to store, or None to
+    skip the row. Uses the invoice parser's AWB normalization so keys line up."""
     recs = _CACHE.get("records") or []
-    # Rebuild only when the shipment record set changes (identity check); avoids
-    # rescanning tens of thousands of rows on every invoice filter/refresh.
-    if _LANE_CACHE["records"] is recs and _LANE_CACHE["maps"] is not None:
-        return _LANE_CACHE["maps"]
-    awb2lane, order2lane = {}, {}
+    if cache["records"] is recs and cache["maps"] is not None:
+        return cache["maps"]
+    awb_map, order_map = {}, {}
     for r in recs:
-        pin = r.get("pickup_pin") or ""
-        drop = r.get("drop_pin") or ""
-        if not (pin and drop):
+        val = value_for(r)
+        if val is None:
             continue
-        lane = (pin, drop)
         awb = r.get("awb")
         if awb:
-            awb2lane[invoices._norm_awb(awb)] = lane
+            awb_map[invoices._norm_awb(awb)] = val
         oid = (r.get("order_id") or "").strip().upper()
         if oid:
-            order2lane.setdefault(oid, lane)
-    _LANE_CACHE["records"] = recs
-    _LANE_CACHE["maps"] = (awb2lane, order2lane)
-    return awb2lane, order2lane
+            order_map.setdefault(oid, val)
+    cache["records"] = recs
+    cache["maps"] = (awb_map, order_map)
+    return awb_map, order_map
+
+
+def _lane_maps():
+    def value_for(r):
+        pin, drop = r.get("pickup_pin") or "", r.get("drop_pin") or ""
+        return (pin, drop) if (pin and drop) else None
+    return _shipment_maps(_LANE_CACHE, value_for)
 
 
 def _product_maps():
-    """Build AWB -> (category, subcategory, sku, item_name) and order-id -> same
-    from the loaded shipment data, so invoice lines can be enriched with the
-    product sub-category / SKU pulled from BigQuery. Uses the same AWB
-    normalization as the invoice parser so keys line up."""
-    recs = _CACHE.get("records") or []
-    if _PROD_CACHE["records"] is recs and _PROD_CACHE["maps"] is not None:
-        return _PROD_CACHE["maps"]
-    awb2prod, order2prod = {}, {}
-    for r in recs:
+    def value_for(r):
         sub = (r.get("subcategory") or "").strip()
         sku = (r.get("sku") or "").strip()
         cat = (r.get("category") or "").strip()
         name = (r.get("item_name") or "").strip()
-        if not (sub or sku or cat or name):
-            continue
-        prod = (cat, sub, sku, name)
-        awb = r.get("awb")
-        if awb:
-            awb2prod[invoices._norm_awb(awb)] = prod
-        oid = (r.get("order_id") or "").strip().upper()
-        if oid:
-            order2prod.setdefault(oid, prod)
-    _PROD_CACHE["records"] = recs
-    _PROD_CACHE["maps"] = (awb2prod, order2prod)
-    return awb2prod, order2prod
+        return (cat, sub, sku, name) if (sub or sku or cat or name) else None
+    return _shipment_maps(_PROD_CACHE, value_for)
 
 
 def _value_maps():
-    """Build AWB -> declared order value (selling price) and order-id -> same
-    from the loaded shipment data. Used as a fallback for the invoice product
-    table's freight-to-value ratio when no invoice-date enrichment is present."""
-    recs = _CACHE.get("records") or []
-    if _VALUE_CACHE["records"] is recs and _VALUE_CACHE["maps"] is not None:
-        return _VALUE_CACHE["maps"]
-    awb2value, order2value = {}, {}
-    for r in recs:
-        val = r.get("order_value")
-        if not val:
-            continue
-        awb = r.get("awb")
-        if awb:
-            awb2value[invoices._norm_awb(awb)] = val
-        oid = (r.get("order_id") or "").strip().upper()
-        if oid:
-            order2value.setdefault(oid, val)
-    _VALUE_CACHE["records"] = recs
-    _VALUE_CACHE["maps"] = (awb2value, order2value)
-    return awb2value, order2value
+    return _shipment_maps(_VALUE_CACHE, lambda r: r.get("order_value") or None)
 
 
 def login_view(request):

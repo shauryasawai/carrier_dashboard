@@ -266,6 +266,18 @@ def _cell(row, idx):
     return row[idx]
 
 
+def _scan_header(rows, scan, match):
+    """Scan the first `scan` rows for the header row `match(cells_set)` accepts,
+    returning (idx, colmap) or (None, None). `cells_set` is the set of
+    normalized header cells for that row."""
+    for i in range(min(scan, len(rows))):
+        cells = set(_nh(c) for c in (rows[i] or []))
+        if match(cells):
+            cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
+            return i, cmap
+    return None, None
+
+
 # --------------------------------------------------------------------------
 # carrier inference
 # --------------------------------------------------------------------------
@@ -440,13 +452,7 @@ def _parse_frido_prime(sheets, filename):
     month (from picked_date), and Amount with GST is derived at +18%."""
     GST = 1.18
     for name, rows in sheets:
-        idx, cmap = None, None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if "awb_number" in cells and "product_cat" in cells and "total_charges" in cells:
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c: {"awb_number", "product_cat", "total_charges"} <= c)
         if idx is None:
             continue
         awb_i = cmap.get("awb_number")
@@ -491,13 +497,8 @@ def _parse_frido_prime(sheets, filename):
 
 def _parse_bluedart_b2b(sheets, filename):
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if "net" in cells and "skus" in cells and ("awb no." in cells or "cawbno" in cells):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c: "net" in c and "skus" in c
+                                 and ("awb no." in c or "cawbno" in c))
         if idx is None:
             continue
         out = []
@@ -534,14 +535,8 @@ def _parse_bluedart_b2c(sheets, filename):
     scan the first several rows of each sheet for it."""
     out = []
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(15, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if ("cinvoicenbr" in cells and "cawbno" in cells
-                    and ("gross total" in cells or "with gst" in cells)):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 15, lambda c: "cinvoicenbr" in c and "cawbno" in c
+                                 and ("gross total" in c or "with gst" in c))
         if idx is None:
             continue
         amt_i = _first(cmap, ["gross total", "with gst"])
@@ -585,14 +580,8 @@ def _parse_skyair(sheets, filename):
     exports also carry SKU Name. No invoice-number column, so the file is treated
     as one invoice for the billing month taken from the file name."""
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if ("awb" in cells and "total" in cells
-                    and ("before tax" in cells or "round weight" in cells or "sku name" in cells)):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c: "awb" in c and "total" in c
+                                 and ("before tax" in c or "round weight" in c or "sku name" in c))
         if idx is None:
             continue
         awb_i = cmap.get("awb")
@@ -641,13 +630,8 @@ def _parse_swift(sheets, filename):
     so every line on the sheet shares that invoice number. SKU(s) and product
     name are parsed from the Product Description: '[sku] {name} {qty}'."""
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(8, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if "swift id" in cells and "awb" in cells and ("cost" in cells or "billing date" in cells):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 8, lambda c: "swift id" in c and "awb" in c
+                                 and ("cost" in c or "billing date" in c))
         if idx is None:
             continue
         amt_i = _first(cmap, ["cost", "cost incl gst", "freight", "shipping cost"])
@@ -709,13 +693,7 @@ def _parse_delhivery(sheets, filename):
     text fields in Excel formulas (`="..."`) which are unwrapped. The invoice
     number is the serial_number (one per file)."""
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(6, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if "waybill_num" in cells and "total_amount" in cells and "gross_amount" in cells:
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 6, lambda c: {"waybill_num", "total_amount", "gross_amount"} <= c)
         if idx is None:
             continue
         awb_i = cmap.get("waybill_num")
@@ -771,15 +749,9 @@ def _parse_urbanbolt(sheets, filename):
     (with GST). No invoice-number column, so the file is one invoice for the
     billing month (file name, falling back to the Shipment Date)."""
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if ("awb no" in cells and "total amount" in cells
-                    and ("freight subtotal" in cells or "gst amount" in cells
-                         or "chg. weight" in cells or "chg weight" in cells)):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c: "awb no" in c and "total amount" in c
+                                 and ("freight subtotal" in c or "gst amount" in c
+                                      or "chg. weight" in c or "chg weight" in c))
         if idx is None:
             continue
         awb_i = _first(cmap, ["awb no", "awb number", "awb"])
@@ -823,14 +795,8 @@ def _parse_safexpress(sheets, filename):
     Waybill Number (AWB) / Pickup Date / Charge Weight (kg) / Total Freight
     (ex GST) / GST Amount / Grand Total (with GST). One bill per file."""
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if ("waybill number" in cells and "grand total" in cells
-                    and ("bill number" in cells or "total freight" in cells)):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c: "waybill number" in c and "grand total" in c
+                                 and ("bill number" in c or "total freight" in c))
         if idx is None:
             continue
         awb_i = cmap.get("waybill number")
@@ -879,14 +845,8 @@ def _parse_elasticrun(sheets, filename):
     client_invoice_date."""
     GST = 1.18
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(4, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            if ("transaction_id" in cells and "total_charge" in cells
-                    and "client_invoice_number" in cells):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 4, lambda c:
+                                 {"transaction_id", "total_charge", "client_invoice_number"} <= c)
         if idx is None:
             continue
         awb_i = cmap.get("transaction_id")
@@ -905,8 +865,7 @@ def _parse_elasticrun(sheets, filename):
             inv_no = _s(_cell(row, inv_i))
             if not awb or charge is None or not inv_no:
                 continue
-            _, _, mkey = _invoice_period(_cell(row, svc_i))
-            _, mlabel, _ = _invoice_period(_cell(row, svc_i))
+            _, mlabel, mkey = _invoice_period(_cell(row, svc_i))
             dlabel, _, _ = _invoice_period(_cell(row, invdate_i))
             out.append({
                 "carrier": "ElasticRun", "awb": awb, "order_id": "",
@@ -993,19 +952,17 @@ def _parse_master(sheets):
     weight column (used to flag carrier weight over-charges)."""
     awb2cat, sku2cat, sku2vol = {}, {}, {}
     found = False
+
+    # Reached only after every invoice adapter declined, so we don't need to
+    # exclude files that merely carry an (empty) amount column.
+    def _is_master(cells):
+        has_cat = "category" in cells
+        has_awb = any(k in cells for k in AWB_KEYS)
+        has_sku = any(k in cells for k in ("sku_list", "sku code", "product code", "skus", "sku"))
+        return (has_cat or has_sku) and (has_awb or has_sku)
+
     for name, rows in sheets:
-        idx = cmap = None
-        for i in range(min(6, len(rows))):
-            cells = set(_nh(c) for c in (rows[i] or []))
-            has_cat = ("category" in cells)
-            has_awb = any(k in cells for k in AWB_KEYS)
-            has_sku = any(k in cells for k in ["sku_list", "sku code", "product code", "skus", "sku"])
-            # Reached only after every invoice adapter declined, so we don't need
-            # to exclude files that merely carry an (empty) amount column.
-            if (has_cat or has_sku) and (has_awb or has_sku):
-                idx = i
-                cmap = {_nh(c): j for j, c in enumerate(rows[i] or []) if _nh(c)}
-                break
+        idx, cmap = _scan_header(rows, 6, _is_master)
         if idx is None:
             continue
         awb_i = _first(cmap, AWB_KEYS)
@@ -1088,6 +1045,18 @@ def _avg(spend, n):
     return round(spend / n, 1) if n else None
 
 
+def _join(it, by_awb, by_order):
+    """Look up an invoice line in the shipment maps: by AWB first, then by
+    upper-cased order id. Returns the matched value (or None)."""
+    awb = it.get("awb")
+    if awb and awb in by_awb:
+        return by_awb[awb]
+    oid = (it.get("order_id") or "").strip().upper()
+    if oid and oid in by_order:
+        return by_order[oid]
+    return None
+
+
 def _enrich(items, awb2cat, sku2cat):
     """Fill category / product / sku for weak rows using the master maps. A
     master category only overrides when it is a real (non-'Others') value."""
@@ -1125,14 +1094,7 @@ def _attach_lanes(items, awb2lane, order2lane):
     order2lane = order2lane or {}
     matched = 0
     for it in items:
-        lane = None
-        awb = it.get("awb")
-        if awb and awb in awb2lane:
-            lane = awb2lane[awb]
-        if lane is None:
-            oid = (it.get("order_id") or "").strip().upper()
-            if oid and oid in order2lane:
-                lane = order2lane[oid]
+        lane = _join(it, awb2lane, order2lane)
         it["pickup_pin"], it["drop_pin"] = lane if lane else ("", "")
         if lane:
             matched += 1
@@ -1149,14 +1111,7 @@ def _attach_products(items, awb2prod, order2prod):
     order2prod = order2prod or {}
     matched = 0
     for it in items:
-        prod = None
-        awb = it.get("awb")
-        if awb and awb in awb2prod:
-            prod = awb2prod[awb]
-        if prod is None:
-            oid = (it.get("order_id") or "").strip().upper()
-            if oid and oid in order2prod:
-                prod = order2prod[oid]
+        prod = _join(it, awb2prod, order2prod)
         if prod:
             cat, sub, sku, name = prod
             it["subcategory"] = sub or it.get("subcategory") or ""
@@ -1186,13 +1141,14 @@ def _attach_values(items, awb2value, order2value, awb2order=None):
     order2value = order2value or {}
     awb2order = awb2order or {}
     for it in items:
-        val = None
         awb = it.get("awb")
+        oid = (it.get("order_id") or "").strip().upper()
         if awb and awb in awb2value:
             val = awb2value[awb]
-        oid = (it.get("order_id") or "").strip().upper()
-        if val is None and oid and oid in order2value:
+        elif oid and oid in order2value:
             val = order2value[oid]
+        else:
+            val = None
         it["order_value"] = val
         it["order_key"] = oid or (awb2order.get(awb) if awb else "") or ""
 

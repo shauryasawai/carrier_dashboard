@@ -348,7 +348,6 @@ def _weight_class(grams):
     return "Heavy"
 
 
-# Time-of-day slots for the pickup timestamp. Boundaries are by hour:
 # Time-of-day slots for the pickup timestamp. Hourly between 12pm and 5pm,
 # with open buckets before noon and after 5pm:
 #   Before 12pm : hour < 12
@@ -500,6 +499,12 @@ def _product_category(item_name):
 # strict partition, so per-carrier shares sum to 100%.
 # ---------------------------------------------------------------------------
 OUTCOMES = ["Delivered", "FWD Pendency", "RTO", "Cancelled"]
+
+# A still-"pending" order that was never picked up and is at least this many days
+# old (measured from its order-placed date) is presumed lost and reclassified from
+# FWD Pendency to Cancelled. Orders younger than this may simply be awaiting
+# pickup, so they are left unchanged.
+LOST_ORDER_AGE_DAYS = 30
 
 # Latest Status values treated as terminal cancellations (not pendency).
 _CANCELLED_STATUSES = {
@@ -687,6 +692,15 @@ def build_record(get):
     age_days = (now.date() - pickup.date()).days if pickup else None
     if age_days is not None and age_days < 0:
         age_days = None
+    # Presumed-lost reclassification: an order still in FWD Pendency that was
+    # never picked up and is at least LOST_ORDER_AGE_DAYS old (by order-placed
+    # date) will never move, so treat it as Cancelled / Lost instead of pending.
+    # This shifts its order value out of the FWD Pendency revenue bucket into
+    # Cancelled / Lost. Younger, not-yet-picked orders are left as pending.
+    if outcome == "FWD Pendency" and pickup is None:
+        order_age_days = (now.date() - order.date()).days if order else None
+        if order_age_days is not None and order_age_days >= LOST_ORDER_AGE_DAYS:
+            outcome = "Cancelled"
     forward_pending = outcome == "FWD Pendency"
     # First out-for-delivery attempt timing (pickup->OFD1), used to score RTO
     # shipments: they were attempted but returned, so judge the carrier on when
@@ -752,7 +766,7 @@ def build_record(get):
         "picked": pickup is not None,
         "delivered": delivered_flag,
         "attempts": attempts,
-        "p2o": _hours_between(pickup, ofd1),
+        "p2o": p2o,
         "p2d": p2d,
         # O2S: order-received -> pickup processing time, in hours. Order date is
         # often date-only, so this is effectively (pickup - order midnight).
@@ -1458,12 +1472,27 @@ def _aggregate_all(rows):
     the warehouse->rows buckets for the warehouse x carrier matrix. Replaces
     eight separate scans of `rows` with a single scan.
 
-    The per-row accumulation is INLINED (rather than calling _kpi_accumulate /
-    _status_accumulate / etc. once per grouping per row) because a per-row Python
-    function call costs more than the extra loops it would save; the logic here
-    is deliberately identical to those helpers, and _kpi_finalize / _status_
-    finalize / _pendency_finalize / _tat_finalize turn the accumulated state into
-    the exact same result the standalone aggregate_* functions produce."""
+    The logic here is deliberately identical to _kpi_accumulate /
+    _status_accumulate / etc.; _kpi_finalize / _status_finalize /
+    _pendency_finalize / _tat_finalize turn the accumulated state into the exact
+    same result the standalone aggregate_* functions produce."""
+    def fold(g, picked, delivered, att, o2s, p2o, p2d):
+        g["n"] += 1
+        if picked:
+            g["picked"] += 1
+        if delivered:
+            g["delivered"] += 1
+            if att == 1:
+                g["first_attempt"] += 1
+        if o2s is not None:
+            g["o2s"].append(o2s)
+        if p2o is not None:
+            g["p2o"].append(p2o)
+        if p2d is not None:
+            g["p2d"].append(p2d)
+        if att is not None:
+            g["att"].append(att)
+
     carrier_g: dict = {}
     wh_g: dict = {}
     dest_g: dict = {}
@@ -1492,21 +1521,7 @@ def _aggregate_all(rows):
                 g = {"carrier": ck, "n": 0, "picked": 0, "delivered": 0,
                      "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
                 carrier_g[ck] = g
-            g["n"] += 1
-            if picked:
-                g["picked"] += 1
-            if delivered:
-                g["delivered"] += 1
-                if att == 1:
-                    g["first_attempt"] += 1
-            if o2s is not None:
-                g["o2s"].append(o2s)
-            if p2o is not None:
-                g["p2o"].append(p2o)
-            if p2d is not None:
-                g["p2d"].append(p2d)
-            if att is not None:
-                g["att"].append(att)
+            fold(g, picked, delivered, att, o2s, p2o, p2d)
 
         wk = r["pickup_pin"]
         if wk:
@@ -1516,21 +1531,7 @@ def _aggregate_all(rows):
                      "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": [],
                      "warehouse": r.get("warehouse", ""), "city": r.get("city", "")}
                 wh_g[wk] = g
-            g["n"] += 1
-            if picked:
-                g["picked"] += 1
-            if delivered:
-                g["delivered"] += 1
-                if att == 1:
-                    g["first_attempt"] += 1
-            if o2s is not None:
-                g["o2s"].append(o2s)
-            if p2o is not None:
-                g["p2o"].append(p2o)
-            if p2d is not None:
-                g["p2d"].append(p2d)
-            if att is not None:
-                g["att"].append(att)
+            fold(g, picked, delivered, att, o2s, p2o, p2d)
             bucket = by_wh.get(wk)
             if bucket is None:
                 by_wh[wk] = [r]
@@ -1544,21 +1545,7 @@ def _aggregate_all(rows):
                 g = {"drop_city": dk, "n": 0, "picked": 0, "delivered": 0,
                      "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
                 dest_g[dk] = g
-            g["n"] += 1
-            if picked:
-                g["picked"] += 1
-            if delivered:
-                g["delivered"] += 1
-                if att == 1:
-                    g["first_attempt"] += 1
-            if o2s is not None:
-                g["o2s"].append(o2s)
-            if p2o is not None:
-                g["p2o"].append(p2o)
-            if p2d is not None:
-                g["p2d"].append(p2d)
-            if att is not None:
-                g["att"].append(att)
+            fold(g, picked, delivered, att, o2s, p2o, p2d)
 
         lk = r["lane"]
         if lk:
@@ -1567,21 +1554,7 @@ def _aggregate_all(rows):
                 g = {"lane": lk, "n": 0, "picked": 0, "delivered": 0,
                      "first_attempt": 0, "o2s": [], "p2o": [], "p2d": [], "att": []}
                 lane_g[lk] = g
-            g["n"] += 1
-            if picked:
-                g["picked"] += 1
-            if delivered:
-                g["delivered"] += 1
-                if att == 1:
-                    g["first_attempt"] += 1
-            if o2s is not None:
-                g["o2s"].append(o2s)
-            if p2o is not None:
-                g["p2o"].append(p2o)
-            if p2d is not None:
-                g["p2d"].append(p2d)
-            if att is not None:
-                g["att"].append(att)
+            fold(g, picked, delivered, att, o2s, p2o, p2d)
 
         # --- per-account status matrix (+ FWD-pendency sub-states) ---
         ak = r.get("account") or ""

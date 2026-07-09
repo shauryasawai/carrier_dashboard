@@ -62,6 +62,11 @@ _DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 TAT_STATUSES = ["In TAT", "Out of TAT", "No rule", "Pending"]
 
 
+def _digits(value) -> str:
+    """Digits-only string of `value` (drops any non-numeric characters)."""
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
 # ---------------------------------------------------------------------------
 # Carrier registration. First matching entry wins. A shipment matches an entry
 # when its carrier name contains any `carrier_contains` token (skipped if that
@@ -278,7 +283,7 @@ def warehouse_for_pin(pin: str) -> str:
     """Resolve a pickup pincode to its Frido warehouse code (or '' if unknown)."""
     if not pin:
         return ""
-    digits = "".join(ch for ch in str(pin) if ch.isdigit())
+    digits = _digits(pin)
     if len(digits) < 3:
         return ""
     if digits in WAREHOUSE_FOR_PIN:
@@ -306,8 +311,7 @@ def _lookup_tat(lookup, ent, pickup_pin, payment, drop_pin):
             table = wh_node
     if not table:
         return None
-    drop = "".join(ch for ch in str(drop_pin or "") if ch.isdigit())
-    return table.get(drop)
+    return table.get(_digits(drop_pin))
 
 
 # ---------------------------------------------------------------------------
@@ -366,9 +370,9 @@ def _override_lookup_from_rows(rows):
         if raw in ("", "ANY"):
             origin = "ANY"
         else:
-            d = "".join(ch for ch in raw if ch.isdigit())
+            d = _digits(raw)
             origin = d if len(d) == 6 else None
-        pin = "".join(ch for ch in str(row.get("pincode") or "") if ch.isdigit())
+        pin = _digits(row.get("pincode"))
         tat = _norm_tat(row.get("tat"))
         if origin is None or len(pin) != 6 or tat is None:
             continue
@@ -422,9 +426,10 @@ def carriers_meta() -> list:
     _ensure_overrides_loaded()
     out = []
     for e in _CARRIERS:
-        ov = _OVERRIDES.get(carrier_key(e["name"]))
+        key = carrier_key(e["name"])
+        ov = _OVERRIDES.get(key)
         out.append({
-            "name": e["name"], "key": carrier_key(e["name"]), "unit": e["unit"],
+            "name": e["name"], "key": key, "unit": e["unit"],
             "has_override": ov is not None,
             "rule_count": len(ov["rows"]) if ov else 0,
         })
@@ -442,8 +447,8 @@ def _promised(entry_idx: int, pickup_pin: str, payment: str, drop_pin: str):
     ov = _override_for(entry_idx)
     if ov is not None:
         lk = ov["lookup"]
-        drop = "".join(ch for ch in str(drop_pin or "") if ch.isdigit())
-        pk = "".join(ch for ch in str(pickup_pin or "") if ch.isdigit())
+        drop = _digits(drop_pin)
+        pk = _digits(pickup_pin)
         # Match the exact pickup pincode, then any "ANY"-origin rules.
         for w in (pk, "ANY"):
             node = lk.get(w)
@@ -537,10 +542,11 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
     # Built-in fallbacks (default TAT, city-to-city) apply only when the carrier
     # is NOT under a user override; an override replaces the SLA entirely.
     overridden = _override_for(idx) is not None
+    ent = _CARRIERS[idx]
     if promised is None and not overridden:
         # No per-lane rule; fall back to the carrier's default TAT if it has one
         # (e.g. Delhivery NDD -> 3 days), otherwise the lane is unscored.
-        promised = _CARRIERS[idx].get("default_tat")
+        promised = ent.get("default_tat")
     if promised is None and not overridden:
         # Still nothing: try the city-to-city lane table (e.g. GoSwift) so a
         # pickup that never resolved to a warehouse can still be scored.
@@ -551,12 +557,12 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
     # Optional per-carrier offset added to the promised TAT (e.g. Shadowfax
     # "test" parcels run ~1.4kg, above the <=1kg Prime band, so they're held to
     # NDD+1 -> tat_offset_days=1). A manual override is exact, so no offset then.
-    offset = _CARRIERS[idx].get("tat_offset_days")
+    offset = ent.get("tat_offset_days")
     if offset and not overridden:
         promised += offset
 
-    unit = _CARRIERS[idx]["unit"]
-    basis = _CARRIERS[idx].get("measure_on", "ofd1")
+    unit = ent["unit"]
+    basis = ent.get("measure_on", "ofd1")
 
     if basis == "delivery":
         # Score pickup -> DELIVERY (e.g. Delhivery NDD, to track its NSL metric).
@@ -585,7 +591,7 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
     if actual is not None:
         # Optional grace: also In TAT if OFD1 is within N elapsed hours of pickup
         # (e.g. Skye Air: same calendar day OR within 15h).
-        grace = _CARRIERS[idx].get("ofd1_grace_hours")
+        grace = ent.get("ofd1_grace_hours")
         on_time = (actual <= promised) or (
             grace is not None and ofd1_hours is not None and ofd1_hours <= grace)
         return ("In TAT" if on_time else "Out of TAT", promised, promised - actual)

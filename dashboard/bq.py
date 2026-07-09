@@ -8,16 +8,19 @@ from datetime import date, timedelta
 
 from . import kpi
 
-# --- Target table (override via env) ----------------------------------------
+_TRUE_VALUES = ("1", "true", "yes", "on")
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "0").strip().lower() in _TRUE_VALUES
 
 
 # Hard upper bound on the lookback window. Configurable so memory/timeout-
 # constrained hosts (e.g. Vercel, where each request re-queries because the
 # in-memory cache doesn't persist) can clamp it small, e.g. BQ_MAX_LOOKBACK_DAYS=7.
 def _max_lookback_days() -> int:
-    raw = os.environ.get("BQ_MAX_LOOKBACK_DAYS")
     try:
-        return max(1, int(raw))
+        return max(1, int(os.environ.get("BQ_MAX_LOOKBACK_DAYS")))
     except (TypeError, ValueError):
         return 366
 
@@ -76,10 +79,8 @@ def _column_map() -> dict:
 
 
 def _table_ref():
-    project = os.environ.get("BQ_PROJECT")
-    dataset = os.environ.get("BQ_DATASET")
-    table = os.environ.get("BQ_TABLE")
-    return project, dataset, table
+    return (os.environ.get("BQ_PROJECT"), os.environ.get("BQ_DATASET"),
+            os.environ.get("BQ_TABLE"))
 
 
 def _date_column() -> str:
@@ -92,9 +93,7 @@ def _date_is_string() -> bool:
     '2024-05-11' or '2024-05-11 10:30:00' (BigQuery can't compare STRING >= DATE
     directly, so we cast it; this disables partition pruning, so prefer a real
     DATE partition column when one is available)."""
-    return os.environ.get("BQ_DATE_COLUMN_IS_STRING", "0").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    return _env_flag("BQ_DATE_COLUMN_IS_STRING")
 
 
 def _probe_disabled() -> bool:
@@ -107,9 +106,7 @@ def _probe_disabled() -> bool:
     the probe can never help, so set BQ_DISABLE_PARTITION_PROBE=1 to skip it and
     fall straight through to the configured BQ_DATE_COLUMN predicate.
     """
-    return os.environ.get("BQ_DISABLE_PARTITION_PROBE", "0").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    return _env_flag("BQ_DISABLE_PARTITION_PROBE")
 
 
 @functools.lru_cache(maxsize=8)
@@ -135,20 +132,18 @@ def _partition_column(project: str, dataset: str, table: str) -> tuple:
 
     # No-API fast paths: avoid the get_table round-trip when we can.
     if explicit:
-        ptype = os.environ.get("BQ_PARTITION_COLUMN_TYPE", "DATE")
-        return (explicit, ptype)
+        return (explicit, os.environ.get("BQ_PARTITION_COLUMN_TYPE", "DATE"))
     if _probe_disabled():
         return (None, None)
 
     try:
-        client = _client()
-        tbl = client.get_table(f"{project}.{dataset}.{table}")
+        tbl = _client().get_table(f"{project}.{dataset}.{table}")
     except Exception:  # noqa: BLE001 - metadata is best-effort; degrade gracefully
-        return (explicit, _column_type_lookup(None, explicit)) if explicit else (None, None)
+        return (None, None)
 
     tp = getattr(tbl, "time_partitioning", None)
     rp = getattr(tbl, "range_partitioning", None)
-    field = explicit or (tp.field if tp else None) or (rp.field if rp else None)
+    field = (tp.field if tp else None) or (rp.field if rp else None)
     if field is None:
         # Ingestion-time partitioning exposes a TIMESTAMP pseudo-column.
         return ("_PARTITIONTIME", "TIMESTAMP") if tp is not None else (None, None)
@@ -293,9 +288,8 @@ def build_query(lookback_days: int | None = None, limit: int | None = None,
     _check_identifier(dataset)
     _check_identifier(table)
 
-    cmap = _column_map()
     select_parts = []
-    for logical, column in cmap.items():
+    for logical, column in _column_map().items():
         _check_identifier(str(column))
         select_parts.append(f"`{column}` AS `{logical}`")
 
@@ -449,7 +443,6 @@ def _records_from_arrow(query_job) -> list | None:
     # by row index through a single reused getter (avoids allocating a closure
     # per row). Column names are the logical aliases, so they feed build_record.
     columns = {name: table.column(name).to_pylist() for name in table.schema.names}
-    n = table.num_rows
     records = []
     append = records.append
     build = kpi.build_record
@@ -459,17 +452,12 @@ def _records_from_arrow(query_job) -> list | None:
         col = _cols.get(key)
         return col[_s["i"]] if col is not None else None
 
-    for i in range(n):
+    for i in range(table.num_rows):
         _state["i"] = i
         rec = build(_get)
         if rec is not None:
             append(rec)
     return records
-
-
-def _col_value(columns: dict, key: str, i: int):
-    col = columns.get(key)
-    return col[i] if col is not None else None
 
 
 # Opt-in in-process cache of fetched records, keyed by (lookback_days, limit).
@@ -481,9 +469,8 @@ _RESULT_CACHE: dict[tuple, tuple] = {}
 
 
 def _cache_ttl() -> int:
-    raw = os.environ.get("BQ_CACHE_TTL_SECONDS")
     try:
-        return max(0, int(raw))
+        return max(0, int(os.environ.get("BQ_CACHE_TTL_SECONDS")))
     except (TypeError, ValueError):
         return 0
 
@@ -545,14 +532,13 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # shipments (e.g. BlueDart) instead of every courier in the window. Tokens
     # are sanitised to [a-z0-9] so they can't inject SQL; matched as a prefix on
     # the carrier column (so "BlueDart" also catches "Bluedart Reverse").
-    import re as _re
     carrier_pred = ""
     if carriers:
         car_col = cmap.get("carrier", "courier_partner")
         _check_identifier(str(car_col))
         toks = set()
         for c in carriers:
-            tok = _re.sub(r"[^a-z0-9]", "", _re.split(r"[ _\-/]", str(c).strip().lower())[0])
+            tok = re.sub(r"[^a-z0-9]", "", re.split(r"[ _\-/]", str(c).strip().lower())[0])
             if tok:
                 toks.add(tok)
         if toks:
@@ -569,8 +555,7 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     if limit:
         sql += f" LIMIT {int(limit)}"
 
-    import re as _re
-    _norm_re = _re.compile(r"\.0$")
+    _norm_re = re.compile(r"\.0$")
     want = awbs or None
     _cat_memo = {}
 
