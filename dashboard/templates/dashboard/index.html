@@ -1450,6 +1450,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <h3>Destination rollup</h3>
           <p id="destSub" class="panel-sub"></p>
           <input type="search" class="panel-search" id="destSearch" placeholder="Search destination…" autocomplete="off">
+          <button type="button" class="btn-ghost" id="destToggle" aria-expanded="false" style="margin-left:8px; align-self:center;">Explore full list ▾</button>
         </div>
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDest"></canvas></div>
         <div class="table-scroll">
@@ -1786,6 +1787,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   var loaded = false;
   var lastReport = null;       // keep the latest report for the warehouse picker
   var whcSelection = "";       // currently selected warehouse in the partner-per-warehouse panel
+  var destShowAll = false;     // Destination rollup: false = top-N only, true = full list
   var animateMode = true;      // false on re-filter -> instant render (no count-up/grow)
   var chartReg = {};           // live Chart.js instances, reused across re-filters
 
@@ -2175,8 +2177,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       return { value: w.value, text: w.label + " (" + (w.n || 0).toLocaleString() + ")" };
     });
 
-    // Cap the date pickers at the latest pickup date (no future dates), but
-    // leave the lower bound open so earlier dates can still be selected.
+    // Cap the date pickers at the latest order-placed date (no future dates),
+    // but leave the lower bound open so earlier dates can still be selected.
     if (!dateBoundsSet && filters.date_max) {
       var from = $("fDateFrom"), to = $("fDateTo");
       from.max = filters.date_max; to.max = filters.date_max;
@@ -2332,7 +2334,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       lo = w.from; hi = w.to; label = "Date range";
       note = (w.days != null) ? ("last " + w.days + " days") : "";
     } else {
-      lo = f.date_min; hi = f.date_max; label = "Pickup dates"; note = "";
+      lo = f.date_min; hi = f.date_max; label = "Order dates"; note = "";
     }
     if (!lo && !hi) { box.hidden = true; return; }
     var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
@@ -2620,6 +2622,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var all = opts.items || [];
     var minN = opts.minN;
     var topN = opts.topN;
+    var showAll = !!opts.showAll;   // full list vs top-N (ignored while searching)
     var total = opts.total != null ? opts.total : all.length;
     var q = (($(opts.searchId).value) || "").trim().toLowerCase();
 
@@ -2627,26 +2630,39 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var rankOf = {};
     all.forEach(function (d, i) { rankOf[d[opts.labelKey]] = i + 1; });
 
+    // Shipments each subset accounts for (the "count" alongside the row count).
+    function sumN(list) {
+      return list.reduce(function (a, d) { return a + (d.n || 0); }, 0);
+    }
+    var allShip = sumN(all);
+
     var matches = q
       ? all.filter(function (d) {
           return String(d[opts.labelKey] || "").toLowerCase().indexOf(q) !== -1;
         })
-      : all.slice(0, topN || all.length);
+      : (showAll ? all.slice() : all.slice(0, topN || all.length));
     var shown = matches.slice(0, SEARCH_CAP);
+    var shownShip = sumN(shown);
+    var pct = allShip ? Math.round(shownShip / allShip * 100) : 0;
+    var capNote = matches.length > shown.length ? " · showing first " + shown.length : "";
 
     if (q) {
       $(opts.subId).textContent =
         matches.length.toLocaleString() + " match" + (matches.length === 1 ? "" : "es") +
         " of " + total.toLocaleString() + " " + opts.noun +
-        (matches.length > shown.length ? " · showing first " + shown.length : "");
+        " · " + shownShip.toLocaleString() + " shipments" + capNote;
+    } else if (showAll) {
+      $(opts.subId).textContent =
+        "all " + total.toLocaleString() + " " + opts.noun +
+        " · " + shownShip.toLocaleString() + " shipments" + capNote +
+        " · ranked by volume";
     } else {
-      var scored = all.filter(function (d) { return d.score != null; }).length;
       var lead = (topN != null && total > shown.length)
         ? ("top " + shown.length + " of " + total.toLocaleString() + " " + opts.noun)
         : (total.toLocaleString() + " " + opts.noun);
       $(opts.subId).textContent =
-        lead + " · " + scored + " scored (≥" + minN + " shipments) · " +
-        opts.tail + " · ranked by volume";
+        lead + " · " + shownShip.toLocaleString() + " of " + allShip.toLocaleString() +
+        " shipments (" + pct + "%) · ranked by volume";
     }
 
     var head = "<thead><tr><th></th><th>" + opts.colLabel + "</th><th>Score</th><th>Shipments</th>" +
@@ -2676,7 +2692,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       topN: report.destination_top_n, minN: report.warehouse_min_n,
       labelKey: "drop_city", noun: "destinations", colLabel: "Destination",
       tail: "by drop city", subId: "destSub", tableId: "destTable",
-      searchId: "destSearch",
+      searchId: "destSearch", showAll: destShowAll,
     });
   }
 
@@ -3408,9 +3424,19 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Forward delivery type).
   document.querySelectorAll(".msel").forEach(function (m) { mselText(m); });
 
-  // Per-panel search: filter the (full) destination / lane lists client-side,
+  // Per-panel search: filter the (full) destination list client-side,
   // re-rendering from the cached report so no server round-trip is needed.
   $("destSearch").addEventListener("input", function () {
+    if (lastReport) renderDestinations(lastReport);
+  });
+
+  // "Explore full list" toggle: expand the destination table from the top-N
+  // slice to every destination (still client-side, from the cached report).
+  $("destToggle").addEventListener("click", function () {
+    destShowAll = !destShowAll;
+    var topN = (lastReport && lastReport.destination_top_n) || 12;
+    this.textContent = destShowAll ? ("Show top " + topN + " ▴") : "Explore full list ▾";
+    this.setAttribute("aria-expanded", destShowAll ? "true" : "false");
     if (lastReport) renderDestinations(lastReport);
   });
 
