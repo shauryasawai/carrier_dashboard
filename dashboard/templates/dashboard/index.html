@@ -1457,18 +1457,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
-      <!-- Lane analysis (NEW) -->
-      <div class="panel">
-        <div class="panel-head">
-          <h3>Top lanes (pickup → drop)</h3>
-          <p id="laneSub" class="panel-sub"></p>
-          <input type="search" class="panel-search" id="laneSearch" placeholder="Search lane…" autocomplete="off">
-        </div>
-        <div class="table-scroll">
-          <table class="score-table" id="laneTable"></table>
-        </div>
-      </div>
-
       <!-- SLA editor: replace a carrier's promised-TAT table (manual or upload) -->
       <div class="panel sla-panel">
         <div class="panel-head sla-head">
@@ -2320,7 +2308,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     renderProducts(report);
     renderWarehouses(report);
     renderDestinations(report);
-    renderLanes(report);
     renderWarehouseCarrierPanel(report);
     renderDailyChart(report.daily);
     renderWarehouseChart(report.warehouses);
@@ -2690,16 +2677,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       labelKey: "drop_city", noun: "destinations", colLabel: "Destination",
       tail: "by drop city", subId: "destSub", tableId: "destTable",
       searchId: "destSearch",
-    });
-  }
-
-  function renderLanes(report) {
-    renderRollup({
-      items: report.lanes, total: report.lane_total,
-      topN: report.lane_top_n, minN: report.lane_min_n,
-      labelKey: "lane", noun: "lanes", colLabel: "Lane",
-      tail: "pickup city → drop city", subId: "laneSub", tableId: "laneTable",
-      searchId: "laneSearch",
     });
   }
 
@@ -3435,9 +3412,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // re-rendering from the cached report so no server round-trip is needed.
   $("destSearch").addEventListener("input", function () {
     if (lastReport) renderDestinations(lastReport);
-  });
-  $("laneSearch").addEventListener("input", function () {
-    if (lastReport) renderLanes(lastReport);
   });
 
   $("whcPick").addEventListener("change", function (e) {

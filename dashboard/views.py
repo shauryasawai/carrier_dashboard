@@ -371,6 +371,20 @@ def _filter_kwargs(request):
     }
 
 
+# Keys that only powered the (removed) "Top lanes" panel. The full lane list can
+# be thousands of rows, so it's stripped from the browser payload to keep the
+# dashboard-load response lean. build_report still computes lanes for the AI
+# summary (which rebuilds its own report), so nothing downstream breaks.
+_CLIENT_DROP_KEYS = ("lanes", "lane_total", "lane_top_n", "lane_min_n")
+
+
+def _client_report(report):
+    """Shallow copy of the report with client-unused heavy keys removed.
+    Copies rather than mutating in place because build_report caches and shares
+    the dict (the AI-summary path reads the same object)."""
+    return {k: v for k, v in report.items() if k not in _CLIENT_DROP_KEYS}
+
+
 def _report_response(request, empty_msg):
     """Build the report from the cached records using the request's filters."""
     records = _CACHE["records"]
@@ -384,7 +398,7 @@ def _report_response(request, empty_msg):
     # every KPI card and the date filter now count on — so every bar falls inside
     # the selected order-date range and the chart's order/revenue totals reconcile
     # with the headline KPI. (See build_report's daily block.)
-    return JsonResponse(report)
+    return JsonResponse(_client_report(report))
 
 
 # ---------------------------------------------------------------------------
@@ -907,7 +921,7 @@ def sla_config(request):
         reclassify(records)
         report = build_report(records, **_filter_kwargs(request))
         report["load_window"] = _CACHE.get("window")
-        out["report"] = report
+        out["report"] = _client_report(report)
     return JsonResponse(out)
 
 
