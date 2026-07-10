@@ -392,6 +392,120 @@ def _report_response(request, empty_msg):
 # date range covering both what's working and what needs attention. The API key
 # lives server-side in OPENAI_API_KEY and is never exposed to the browser.
 # ---------------------------------------------------------------------------
+def _inr(value):
+    """Format a rupee amount the Indian way (Cr / L) as a display string, so the
+    model never has to convert raw integers into crores itself — it was reliably
+    off by 10x (dividing by 1e6 instead of 1e7). 1 Cr = 1e7, 1 L = 1e5.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    a = abs(v)
+    if a >= 1e7:
+        return f"₹{v / 1e7:.2f}Cr"
+    if a >= 1e5:
+        return f"₹{v / 1e5:.2f}L"
+    return f"₹{v:,.0f}"
+
+
+def _score_component(value, floor, ceil, higher_is_better=True):
+    """Map a raw metric onto 0-100 using linear anchors.
+
+    ``floor``/``ceil`` are the raw values that map to the worst/best ends of the
+    scale. When ``higher_is_better`` is False the direction is inverted (e.g. RTO
+    %, where a low value is good). Returns None when ``value`` is missing so the
+    component can be dropped and the remaining weights renormalised.
+    """
+    if value is None:
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if higher_is_better:
+        pct = (v - floor) / (ceil - floor) if ceil != floor else 0.0
+    else:
+        pct = (floor - v) / (floor - ceil) if floor != ceil else 0.0
+    return round(max(0.0, min(1.0, pct)) * 100, 1)
+
+
+def _grade(score):
+    """A→F letter grade + short verdict for a 0-100 score."""
+    if score is None:
+        return "N/A", "insufficient data"
+    if score >= 85:
+        return "A", "excellent"
+    if score >= 75:
+        return "B", "healthy"
+    if score >= 62:
+        return "C", "mixed — watch the weak spots"
+    if score >= 48:
+        return "D", "under strain"
+    return "F", "critical — needs intervention"
+
+
+def _health_score(report):
+    """Deterministic, reproducible 0-100 business-health score for the loaded
+    slice, so the AI narrative is anchored on the same number every time rather
+    than a value the model invents. Blends the five dimensions the dashboard
+    actually measures; any dimension with missing inputs is dropped and the
+    remaining weights are renormalised so partial data still yields a fair score.
+    """
+    s = report.get("summary", {}) or {}
+    pay = report.get("payment_perf", []) or []
+
+    # COD return risk, if a COD payment group is present.
+    cod_rto = None
+    for p in pay:
+        grp = (p.get("group") or "").lower()
+        if "cod" in grp or "cash" in grp:
+            cod_rto = p.get("rto_pct")
+            break
+
+    # (label, weight, sub-score 0-100). Anchors reflect Indian D2C norms.
+    comps = [
+        # Delivered / picked. 70% is poor, 95% is best-in-class.
+        ("Delivery success", 0.30,
+         _score_component(s.get("success_rate"), 70, 95, higher_is_better=True)),
+        # RTO rate. 5% is excellent, 30% is alarming for D2C.
+        ("RTO / returns control", 0.25,
+         _score_component(s.get("rto_pct"), 30, 5, higher_is_better=False)),
+        # In-TAT %. 60% is weak, 95% is strong SLA adherence.
+        ("On-time / SLA (TAT)", 0.20,
+         _score_component(s.get("tat_in_pct"), 60, 95, higher_is_better=True)),
+        # Realised revenue = delivered value / booked revenue.
+        ("Revenue realisation", 0.15,
+         _score_component(
+             (s.get("delivered_value") / s.get("revenue") * 100)
+             if s.get("revenue") else None,
+             55, 90, higher_is_better=True)),
+        # COD return exposure. 5% good, 30% risky. Skipped if no COD data.
+        ("COD risk", 0.10,
+         _score_component(cod_rto, 30, 5, higher_is_better=False)),
+    ]
+
+    present = [(label, w, v) for (label, w, v) in comps if v is not None]
+    if not present:
+        return None
+    wsum = sum(w for _, w, _ in present)
+    overall = round(sum(w * v for _, w, v in present) / wsum, 1)
+    grade, verdict = _grade(overall)
+    return {
+        "overall": overall,
+        "grade": grade,
+        "verdict": verdict,
+        "scale": "0-100 (higher is better)",
+        "components": [
+            {"dimension": label, "weight_pct": round(w / wsum * 100),
+             "sub_score": v}
+            for (label, w, v) in present
+        ],
+    }
+
+
 def _ai_metrics(report, window):
     """Compact, model-friendly slice of the report for the summary prompt."""
     s = report.get("summary", {})
@@ -399,6 +513,8 @@ def _ai_metrics(report, window):
     carriers = report.get("carriers", []) or []
     prods = report.get("products", []) or []
     whs = report.get("warehouses", []) or []
+    dests = report.get("destinations", []) or []
+    lanes = report.get("lanes", []) or []
     daily = report.get("daily", []) or []
     if window and window.get("from"):
         dr = {"from": window.get("from"), "to": window.get("to")}
@@ -407,57 +523,184 @@ def _ai_metrics(report, window):
         dr = {"from": f.get("date_min"), "to": f.get("date_max")}
     busiest = max(daily, key=lambda d: d["n"], default=None) if daily else None
     lightest = min(daily, key=lambda d: d["n"], default=None) if daily else None
+
+    revenue = s.get("revenue")
+    # Carriers already arrive ranked by efficiency score; surface both ends so the
+    # model can call out standouts AND laggards, not just the top of the list.
+    ranked = [c for c in carriers if c.get("score") is not None]
+    weak_carriers = sorted(ranked, key=lambda c: c["score"])[:3] if ranked else []
+    # Product categories carrying the most return risk (min volume to be fair).
+    risky_prods = sorted(
+        [p for p in prods if p.get("rto_pct") is not None and (p.get("n") or 0) >= 20],
+        key=lambda p: -p["rto_pct"])[:4]
+
+    # Warehouse & destination breakdowns: surface both the volume leaders AND the
+    # weakest performers (by delivery success, above a min volume so a 3-order
+    # pincode can't top the "worst" list). Mirrors what those dashboard panels
+    # rank on so the summary reflects the same insight without the reader opening
+    # the tables. Min-volume gate reuses the panel's own threshold.
+    wh_min = report.get("warehouse_min_n") or 20
+    dest_min = report.get("warehouse_min_n") or 20
+    wh_scorable = [w for w in whs if w.get("success_rate") is not None and (w.get("n") or 0) >= wh_min]
+    weak_whs = sorted(wh_scorable, key=lambda w: w["success_rate"])[:3]
+    dest_scorable = [d for d in dests if d.get("success_rate") is not None and (d.get("n") or 0) >= dest_min]
+    weak_dests = sorted(dest_scorable, key=lambda d: d["success_rate"])[:4]
+    # Best-selling individual products (subcategory level) across all categories.
+    subs = []
+    for p in prods:
+        for sub in (p.get("subs") or []):
+            subs.append({"product": sub.get("subcategory"), "category": p.get("category"),
+                         "revenue": sub.get("revenue"), "orders": sub.get("n"),
+                         "rto_pct": sub.get("rto_pct")})
+    top_products = sorted([x for x in subs if x.get("revenue") is not None],
+                          key=lambda x: -x["revenue"])[:5]
+
     return {
         "currency": "INR",
         "date_range": dr,
+        # Deterministic health score the narrative must be built around.
+        "health_score": _health_score(report),
+        # ---- Volume & revenue -------------------------------------------------
+        # NOTE: all rupee amounts are PRE-FORMATTED strings (₹X.XCr / ₹X.XL). Quote
+        # them verbatim — do not reconvert. Percentages are separate numeric fields.
         "orders": s.get("total"),
         "delivered_orders": s.get("delivered"),
         "delivery_success_pct": s.get("success_rate"),
-        "revenue": s.get("revenue"),
-        "avg_order_value": s.get("aov"),
-        "delivered_value": s.get("delivered_value"),
-        "rto_orders": s.get("rto"), "rto_pct": s.get("rto_pct"), "rto_value": s.get("rto_value"),
-        "forward_pending_value": s.get("pending_value"),
-        "cancelled_value": s.get("cancelled_value"),
+        "revenue": _inr(revenue),
+        "avg_order_value": _inr(s.get("aov")),
+        "delivered_value": _inr(s.get("delivered_value")),
+        "delivered_value_pct_of_revenue": (
+            round(s.get("delivered_value") / revenue * 100, 1)
+            if revenue and s.get("delivered_value") is not None else None),
+        # ---- Revenue leakage (value stuck / lost) -----------------------------
+        "rto_orders": s.get("rto"), "rto_pct": s.get("rto_pct"),
+        "rto_value": _inr(s.get("rto_value")), "rto_value_pct": s.get("rto_value_pct"),
+        "forward_pending_orders": s.get("pending_orders"),
+        "forward_pending_value": _inr(s.get("pending_value")),
+        "forward_pending_value_pct": s.get("pending_value_pct"),
+        "cancelled_orders": s.get("cancelled_orders"),
+        "cancelled_value": _inr(s.get("cancelled_value")),
+        "cancelled_value_pct": s.get("cancelled_value_pct"),
+        # ---- Speed & SLA ------------------------------------------------------
         "in_tat_pct": s.get("tat_in_pct"), "out_of_tat_pct": s.get("tat_out_pct"),
-        "ndd_orders": s.get("ndd_orders"),
-        "city_tier_orders": s.get("tiers"), "city_tier_revenue": s.get("tier_revenue"),
+        "out_of_tat_delivered_late": s.get("tat_out_delivered"),
+        "out_of_tat_pending_breach": s.get("tat_out_pending"),
+        "avg_pickup_to_delivery_hrs": s.get("avg_p2d"),
+        "avg_pickup_to_order_hrs": s.get("avg_p2o"),
+        "avg_order_to_ship_hrs": s.get("avg_o2s"),
+        "ndd_orders": s.get("ndd_orders"), "ndd_pct": s.get("ndd_pct"),
+        # ---- Mix --------------------------------------------------------------
+        "carrier_count": s.get("carriers"), "warehouse_count": s.get("warehouses"),
+        "city_tier_orders": s.get("tiers"),
+        "city_tier_revenue": {k: _inr(v) for k, v in (s.get("tier_revenue") or {}).items()},
         "payment_modes": [
-            {"mode": p.get("group"), "orders": p.get("n"), "revenue": p.get("revenue"),
+            {"mode": p.get("group"), "orders": p.get("n"), "revenue": _inr(p.get("revenue")),
              "success_pct": p.get("success_rate"), "rto_pct": p.get("rto_pct"),
-             "cod_cash_in_transit": p.get("cod_exposure")}
+             "cod_cash_in_transit": _inr(p.get("cod_exposure"))}
             for p in pay
         ],
+        # ---- Partners & regions ----------------------------------------------
         "top_carriers": [
             {"carrier": c.get("carrier"), "score": c.get("score"), "orders": c.get("n"),
-             "success_pct": c.get("success_rate"), "pickup_to_delivery_hrs": c.get("p2d")}
+             "success_pct": c.get("success_rate"), "rto_pct": c.get("rto_pct"),
+             "pickup_to_delivery_hrs": c.get("p2d")}
             for c in carriers[:6]
         ],
+        "weakest_carriers": [
+            {"carrier": c.get("carrier"), "score": c.get("score"), "orders": c.get("n"),
+             "success_pct": c.get("success_rate"), "rto_pct": c.get("rto_pct")}
+            for c in weak_carriers
+        ],
+        # ---- Product breakdown (categories ranked by revenue; RTO = return risk)
+        "product_categories_count": len([p for p in prods if p.get("category")]),
         "top_product_categories": [
-            {"category": p.get("category"), "revenue": p.get("revenue"), "rto_pct": p.get("rto_pct")}
+            {"category": p.get("category"), "revenue": _inr(p.get("revenue")),
+             "orders": p.get("n"), "rto_pct": p.get("rto_pct")}
             for p in prods[:6]
         ],
+        "best_selling_products": [
+            {"product": x["product"], "category": x["category"],
+             "revenue": _inr(x["revenue"]), "orders": x["orders"], "rto_pct": x["rto_pct"]}
+            for x in top_products
+        ],
+        "highest_return_categories": [
+            {"category": p.get("category"), "orders": p.get("n"), "rto_pct": p.get("rto_pct")}
+            for p in risky_prods
+        ],
+        # ---- Warehouse breakdown (pickup points; score blends success/speed/attempts)
         "top_warehouses": [
             {"warehouse": w.get("warehouse") or w.get("pickup_pin"), "orders": w.get("n"),
-             "success_pct": w.get("success_rate")}
+             "score": w.get("score"), "success_pct": w.get("success_rate"),
+             "first_attempt_pct": w.get("first_attempt_rate"),
+             "pickup_to_delivery_hrs": w.get("p2d")}
             for w in whs[:5]
         ],
+        "weakest_warehouses": [
+            {"warehouse": w.get("warehouse") or w.get("pickup_pin"), "orders": w.get("n"),
+             "score": w.get("score"), "success_pct": w.get("success_rate")}
+            for w in weak_whs
+        ],
+        # ---- Destination rollup (by drop city; where orders land & how they fare)
+        "top_destinations": [
+            {"city": d.get("drop_city"), "orders": d.get("n"),
+             "success_pct": d.get("success_rate"),
+             "first_attempt_pct": d.get("first_attempt_rate")}
+            for d in dests[:5]
+        ],
+        "weakest_destinations": [
+            {"city": d.get("drop_city"), "orders": d.get("n"),
+             "success_pct": d.get("success_rate")}
+            for d in weak_dests
+        ],
+        "top_lanes": [
+            {"lane": ln.get("lane"), "orders": ln.get("n"),
+             "success_pct": ln.get("success_rate"), "rto_pct": ln.get("rto_pct")}
+            for ln in lanes[:5]
+        ],
+        # ---- Tempo ------------------------------------------------------------
         "busiest_day": ({"date": busiest["date"], "orders": busiest["n"]} if busiest else None),
         "lightest_day": ({"date": lightest["date"], "orders": lightest["n"]} if lightest else None),
     }
 
 
 _AI_SYSTEM = (
-    "You are an operations analyst for an Indian D2C e-commerce logistics dashboard "
-    "(Frido). You are given KPI metrics (JSON) for a selected date range. Write a "
-    "SHORT, CRISP executive summary for management. Rules: open with one line "
-    "'**Bottom line:** ...'; then a '## What's working' list and a '## What needs "
-    "attention' list, 3-4 bullets each. Be specific and cite the numbers (amounts "
-    "are INR — show large values as ₹X.XCr or ₹X.XL, plus % and counts). Focus on "
-    "business impact: revenue, delivery success, RTO/returns risk, COD risk, "
-    "TAT/SLA, high-return product categories, and standout or weak carriers/regions. "
-    "No preamble, no generic advice. Use markdown '##' headings, '- ' bullets and "
-    "**bold** for key numbers. Keep the whole thing under 180 words."
+    "You are the operations analyst for Frido, an Indian D2C e-commerce brand. You "
+    "receive KPI metrics (JSON) for a selected date range from a logistics "
+    "dashboard. Your job: write a self-contained executive briefing so a manager "
+    "who has NOT scrolled the dashboard fully understands how the business is "
+    "performing and why. Assume the reader sees ONLY your summary.\n\n"
+    "IMPORTANT — money: every rupee amount in the JSON is ALREADY formatted as a "
+    "string (e.g. '₹4.59Cr', '₹77.85L', '₹1,819'). Quote these strings EXACTLY as "
+    "given. Never recompute, rescale, round or convert them, and never turn a raw "
+    "number into Cr/L yourself. Percentages are given as separate numeric fields — "
+    "pair a % with its amount. Use ONLY values present in the JSON; never invent or "
+    "estimate figures. Omit a point if its data is null.\n\n"
+    "Structure your answer in this exact order using markdown:\n"
+    "1. '**Overall health score: <overall>/100 (<grade> — <verdict>)**' on its own "
+    "line. Copy the score, grade and verdict verbatim from the provided "
+    "`health_score` object; do NOT compute your own.\n"
+    "2. '**Bottom line:**' — 2-3 sentences summarising the state of the business: "
+    "scale (orders + revenue), how much of that revenue is actually being realised "
+    "vs stuck/lost, and the single biggest strength and biggest risk.\n"
+    "3. '## Score drivers' — one '- ' bullet per component in `health_score."
+    "components`, each as '**<dimension>: <sub_score>/100** — <one-line reason "
+    "citing the underlying metric>'. This explains WHY the score is what it is.\n"
+    "4. '## What's working' — 3-4 bullets on genuine strengths (strong carriers, "
+    "high-success regions, healthy TAT, low-return categories, revenue realised).\n"
+    "5. '## What needs attention' — 3-4 bullets on the real risks, ordered by "
+    "rupee/impact: RTO value, COD cash exposure, TAT breaches, weak carriers, "
+    "high-return categories, pending/cancelled value.\n"
+    "6. '## Product, warehouse & destination insights' — exactly 3 bullets, one "
+    "each: (a) PRODUCTS — the top revenue category/product ("
+    "`top_product_categories`/`best_selling_products`) vs the highest-return "
+    "category (`highest_return_categories`), with revenue and RTO%; (b) WAREHOUSES "
+    "— the best vs weakest pickup point (`top_warehouses` by score/success vs "
+    "`weakest_warehouses`), citing success% and volume; (c) DESTINATIONS — the "
+    "biggest drop cities (`top_destinations`) and any weak-delivery cities "
+    "(`weakest_destinations`), citing orders and success%. Skip a clause only if "
+    "its data is empty.\n\n"
+    "Be specific, quantified and decision-useful. No preamble, no generic advice, "
+    "no closing pleasantries. Aim for 220-320 words."
 )
 
 
@@ -470,7 +713,7 @@ def _openai_summary(api_key, metrics, model="gpt-4o-mini"):
             {"role": "user", "content": "KPI metrics JSON:\n" + json.dumps(metrics, ensure_ascii=False)},
         ],
         "temperature": 0.3,
-        "max_tokens": 550,
+        "max_tokens": 1000,
     }).encode("utf-8")
     req = urllib.request.Request(
         "https://api.openai.com/v1/chat/completions",

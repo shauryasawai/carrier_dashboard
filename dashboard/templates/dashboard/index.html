@@ -1335,7 +1335,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <div class="panel ai-panel">
         <div class="panel-head">
           <h3>Business summary <span class="ai-badge">AI</span></h3>
-          <p class="panel-sub">Short overview — what's working and what needs attention</p>
+          <p class="panel-sub">Health score + full overview — what's working and what needs attention</p>
           <button type="button" class="btn-secondary" id="aiGenBtn">✦ Generate summary</button>
         </div>
         <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview</div>
@@ -2298,7 +2298,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var box = $("aiSummary");
     if (!box) return;
     box.className = "ai-summary ai-empty";
-    box.innerHTML = 'Click <strong>Generate summary</strong> for an AI overview of the current filters';
+    box.innerHTML = 'Click <strong>Generate summary</strong> for an AI overview &amp; health score of the current filters';
   }
 
   function render(report, opts) {
