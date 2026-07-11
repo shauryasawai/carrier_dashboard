@@ -1957,5 +1957,16 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         "filters": filter_opts,
         "weights": {k: int(v * 100) for k, v in WEIGHTS.items()},
     }
+    # Profit & Loss block (actual-sales P&L on the net order value). Computed
+    # from the same rows using the per-row de-duplicated revenue (_rev) and
+    # outcome stamped above. Kept defensive: a missing/broken COGS master must
+    # never break the core efficiency report.
+    try:
+        from . import cogs as _cogs
+        report["pnl"] = _cogs.compute_pnl(rows)
+    except Exception:  # noqa: BLE001
+        import logging as _logging
+        _logging.getLogger(__name__).exception("P&L computation failed")
+        report["pnl"] = {"configured": False, "overall": None, "categories": []}
     _report_cache_put(records, _ckey, report)
     return report

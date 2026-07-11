@@ -344,3 +344,33 @@ body {
   .whc-controls select { min-width: 0; width: 100%; }
   .whc-note { flex-basis: 100%; }
 }
+
+/* ---- Profit & Loss view ------------------------------------------------ */
+/* The P&L tables are wide; give the page the full viewport width when the P&L
+   tab is active so the tables fit without a horizontal scroll. */
+.wrap--wide { max-width: none; }
+/* Full-width, compact tables so all columns fit with no left/right scroll. */
+#pnlCatTable, #pnlProdTable { width: 100%; }
+#viewPnl .score-table th, #viewPnl .score-table td { padding: 9px 10px; font-size: 12px; }
+/* Let the label columns wrap so long product names don't force a scroll. */
+#pnlProdTable td:first-child, #pnlProdTable td:nth-child(2),
+#pnlCatTable td:first-child { white-space: normal; word-break: break-word; }
+/* The narrow statement / reconciliation tables read better not stretched full. */
+#pnlTable, #pnlReconTable { max-width: 720px; }
+#pnlTable th.num, #pnlTable td.num,
+#pnlCatTable th.num, #pnlCatTable td.num,
+#pnlProdTable th.num, #pnlProdTable td.num,
+#pnlReconTable th.num, #pnlReconTable td.num,
+#pnlUnmatchedTable th.num, #pnlUnmatchedTable td.num { text-align: right; }
+#pnlTable td.neg, #pnlCatTable td.neg, #pnlProdTable td.neg { color: var(--bad); }
+/* (styles.css is not linked; the live styles are inlined in index.html) */
+/* P&L statement + reconciliation emphasis rows */
+#pnlTable tr.pnl-head td { font-weight: 600; background: var(--paper-2); }
+#pnlTable tr.pnl-sub td,
+#pnlReconTable tr.pnl-sub td { font-weight: 600; border-top: 1px solid var(--line-strong); }
+#pnlTable tr.pnl-margin td,
+#pnlReconTable tr.pnl-margin td {
+  font-weight: 700; background: var(--paper-2);
+  border-top: 2px solid var(--line-strong); border-bottom: 1px solid var(--line-strong);
+}
+#pnlTable tr.pnl-margin td:not(.num) { color: var(--good); }
