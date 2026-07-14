@@ -32,15 +32,15 @@ DEFAULT_LOOKBACK_DAYS = 30
 DEFAULT_COLUMN_MAP = {
     "carrier": "courier_partner",
     "account": "account_code",
-    "awb": "awb",                    # waybill / tracking number
-    "order_id": "order_id",          # client order reference
+    "awb": "awb",                    # waybill
+    "order_id": "order_id",          # order reference
     "weight": "shipment_weight",
     "payment": "payment_mode",
     "pickup_pin": "pickup_pincode",
     "drop_pin": "drop_pincode",
     "drop_city": "drop_city",
     "pickup_ts": "pickup_date",
-    "order_ts": "order_date",          # order-received time (O2S processing time)
+    "order_ts": "order_date",          # (O2S processing time)
     "window_ts": "partition_date",     # load-window/partition date (= the day the
                                        # KPI cards count on); drives the per-day chart
     "delivery_ts": "delivery_date",
@@ -557,18 +557,31 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             likes = " OR ".join(f"LOWER(`{car_col}`) LIKE '{t}%'" for t in sorted(toks))
             carrier_pred = f" AND ({likes})"
 
+    # Push the invoice's AWB set INTO the query so BigQuery returns only those
+    # waybills, not every shipment for the carrier across the whole window (the
+    # bulk of the transfer/latency). The AWB column is normalised in SQL exactly
+    # as it is in Python below — CAST -> TRIM -> UPPER -> strip trailing ".0" —
+    # so the match is identical; the set is passed as a query PARAMETER (array)
+    # to stay injection-safe and avoid a giant inline IN list. The Python-side
+    # `want` filter is kept as a belt-and-braces guard. Skipped when the set is
+    # empty or very large (fall back to the carrier-only scan + Python filter).
+    want = awbs or None
+    use_awb_pushdown = bool(want) and len(want) <= 45000
+    awb_pred = ""
+    if use_awb_pushdown:
+        awb_pred = (f" AND REGEXP_REPLACE(UPPER(TRIM(CAST(`{awb_col}` AS STRING))), "
+                    f"r'\\.0$', '') IN UNNEST(@wanted_awbs)")
     sql = (
         f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
         f"`{items_col}` AS items, `{order_col}` AS order_id, "
         f"`{val_col}` AS order_value "
         f"FROM `{project}.{dataset}.{table}` "
-        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}"
+        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}{awb_pred}"
     )
     if limit:
         sql += f" LIMIT {int(limit)}"
 
     _norm_re = re.compile(r"\.0$")
-    want = awbs or None
     _cat_memo = {}
 
     def _cat(text):
@@ -579,7 +592,14 @@ def fetch_awb_product_map(date_from: str, date_to: str,
         return c
 
     client = _client()
-    job = client.query(sql)
+    if use_awb_pushdown:
+        from google.cloud import bigquery  # lazy import (matches _client)
+        job_config = bigquery.QueryJobConfig(query_parameters=[
+            bigquery.ArrayQueryParameter("wanted_awbs", "STRING", sorted(want))
+        ])
+        job = client.query(sql, job_config=job_config)
+    else:
+        job = client.query(sql)
     awb2prod, order2prod = {}, {}
     # AWB/order -> declared order value (invoice_value = the product's selling
     # price), so invoice shipping cost can be expressed as a % of item value.
@@ -618,16 +638,28 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             if val is not None:
                 order2value.setdefault(oid, val)
 
-    # Stream rows over the REST API (large page size to cut round-trips). The
-    # carrier filter (in SQL) and the AWB filter (in _emit) keep this fast: only
-    # the invoice's carrier rows are returned, and category derivation runs only
-    # for AWBs actually on the invoice. We deliberately avoid the Storage/Arrow
-    # path here — when the BigQuery Storage API isn't enabled for the service
-    # account it can yield an empty table without raising, silently dropping all
-    # enrichment.
-    for row in job.result(page_size=_page_size()):
-        _emit(row.get("awb"), row.get("sku"), row.get("items"),
-              row.get("order_id"), row.get("order_value"))
+    # Consume the result columnar via REST-based Arrow (pyarrow only, NOT the
+    # Storage API) — materialising 5 columns in bulk and iterating by index is
+    # far faster than allocating one Python Row object per record. Falls back to
+    # plain REST row iteration when pyarrow is unavailable. (We intentionally do
+    # NOT use create_bqstorage_client=True here: when the Storage API isn't
+    # enabled it can silently yield an empty table and drop all enrichment.)
+    cols = None
+    try:
+        table = job.result().to_arrow(create_bqstorage_client=False)
+        cols = {n: table.column(n).to_pylist() for n in
+                ("awb", "sku", "items", "order_id", "order_value")}
+    except Exception:  # noqa: BLE001 - pyarrow missing/incompatible -> row iteration
+        cols = None
+    if cols is not None:
+        awb_c, sku_c = cols["awb"], cols["sku"]
+        items_c, ord_c, val_c = cols["items"], cols["order_id"], cols["order_value"]
+        for i in range(len(awb_c)):
+            _emit(awb_c[i], sku_c[i], items_c[i], ord_c[i], val_c[i])
+    else:
+        for row in job.result(page_size=_page_size()):
+            _emit(row.get("awb"), row.get("sku"), row.get("items"),
+                  row.get("order_id"), row.get("order_value"))
     return awb2prod, order2prod, awb2value, order2value, awb2order
 
 

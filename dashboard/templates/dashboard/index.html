@@ -497,6 +497,22 @@ body {
 }
 .panel-head h3 { font-family: var(--display); font-weight: 500; font-size: 19px; letter-spacing: -.01em; }
 .panel-sub { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+/* --- Hidden per request: verbose status / summary detail lines (invoice
+   toolbar status, file chips, and the reconciliation / spend-by-product /
+   multi-SKU / weight-dispute / carrier-month subtitles) plus the page footer
+   note. Remove any selector below to bring that line back. --- */
+.inv-tb-info,
+#invFileChips,
+#invCarrierMonthSub,
+#invReconSub,
+#invSubcatSub,
+#invWtDisputeSub,
+.footer { display: none !important; }
+/* Partner efficiency view: hide the descriptive subtitle lines under each
+   panel header (health overview, tier / payment / daily / score / status /
+   product / warehouse / destination subs, SLA status) + the warehouse note. */
+#viewEfficiency .panel-sub,
+#viewEfficiency .whc-note { display: none !important; }
 
 /* Per-panel search box (destination / lane tables) */
 .panel-search {
@@ -662,6 +678,16 @@ body {
   background-repeat: no-repeat; background-position: right 12px center; padding-right: 30px;
 }
 .whc-controls select:focus { outline: none; border-color: var(--accent); }
+.whc-controls .msel { min-width: 260px; }
+.whc-controls .msel-menu { max-width: 380px; }
+.whc-group-title {
+  font-family: var(--mono); font-size: 11px; letter-spacing: .06em;
+  text-transform: uppercase; color: var(--accent-deep); background: var(--paper-2);
+  font-weight: 600; padding: 8px 10px !important;
+}
+.whc-group-title.whc-group-total {
+  color: #fff; background: var(--accent);
+}
 .whc-note {
   flex: 1 1 260px; font-size: 12px; line-height: 1.45; color: var(--ink-faint);
 }
@@ -1056,7 +1082,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 
 /* ---- Invoice reconciliation table ---- */
 #invReconPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
-#invReconExport { margin-left: auto; }
+#invReconFillWd { margin-left: auto; }
+#invReconFillWd[disabled] { opacity: .45; cursor: not-allowed; }
 #invWtDisputePanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 #invWtProdExport { margin-left: auto; }
 #invReconPanel .table-scroll { max-height: 88vh; overflow: auto; border-radius: 10px; }
@@ -1107,6 +1134,30 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 .recon-unmatched td { color: var(--ink-faint); font-style: italic; }
 #invSubcatPanel .panel-head { display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px 14px; }
 #invAwbExport { margin-left: auto; }
+/* View toggle in the Spend-by-product head: By product | Multi-SKU AWBs. */
+.prod-view-toggle { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.prod-view-toggle .pv-btn { border: none; background: transparent; padding: 5px 14px; font-size: 12.5px;
+  font-weight: 600; color: var(--ink-soft); cursor: pointer; white-space: nowrap; }
+.prod-view-toggle .pv-btn + .pv-btn { border-left: 1px solid var(--line); }
+.prod-view-toggle .pv-btn:hover { background: var(--paper-2); }
+.prod-view-toggle .pv-btn.active { background: var(--accent); color: #fff; }
+/* Multi-SKU AWBs view: list of products bundled under each waybill. */
+#invMultiSkuWrap { max-height: 80vh; overflow: auto;
+  border: 1px solid var(--line); border-radius: 10px; }
+#invMultiSkuTable { width: 100%; font-size: 12.5px; border-collapse: separate; border-spacing: 0; }
+#invMultiSkuTable th, #invMultiSkuTable td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+#invMultiSkuTable th.num, #invMultiSkuTable td.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#invMultiSkuTable thead th { position: sticky; top: 0; z-index: 2; background: var(--paper-2); }
+#invMultiSkuTable tbody tr:nth-child(even) td { background: var(--paper); }
+#invMultiSkuTable tbody tr:hover td { background: var(--paper-2); }
+#invMultiSkuTable .rank { width: 34px; text-align: right; font-family: var(--mono); color: var(--ink-faint); }
+#invMultiSkuTable .mono { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); word-break: break-word; }
+#invMultiSkuTable tfoot th, #invMultiSkuTable tfoot td { position: sticky; bottom: 0; z-index: 2;
+  background: var(--paper-2); border-top: 2px solid var(--line-strong); font-weight: 600; }
+.msku-list { min-width: 240px; }
+.msku-item { display: flex; gap: 8px; align-items: baseline; padding: 1px 0; }
+.msku-sku { font-family: var(--mono); font-size: 11px; color: var(--accent-deep); flex: 0 0 auto; }
+.msku-name { font-size: 12px; color: var(--ink-soft); line-height: 1.25; }
 /* Product table: structured, scannable, fits the full-width panel without
    horizontal scroll. Long Product names / SKUs wrap; numbers stay on one line.
    Sticky header + footer, zebra rows, hover, and a contained height. */
@@ -1139,83 +1190,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 .wtd-table td.mono { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); word-break: break-word; font-weight: 400; }
 .wtd-table tfoot th, .wtd-table tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--paper-2); border-top: 2px solid var(--line-strong); white-space: nowrap; font-weight: 600; }
 
-/* ---- Profit & Loss view ---- */
-/* Use the FULL screen width for the (wide) P&L tables — same approach as the
-   cost view; degrades gracefully on browsers without :has(). */
-body:has(#viewPnl:not([hidden])) .wrap,
-body:has(#viewPnl:not([hidden])) .masthead-inner { max-width: none; }
-body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px; }
-/* Numeric columns right-aligned; cost lines in red. */
-#pnlCatTable th.num, #pnlCatTable td.num,
-#pnlProdTable th.num, #pnlProdTable td.num { text-align: right; }
-#pnlCatTable td.neg, #pnlProdTable td.neg { color: var(--bad); }
-/* ---- Reconciliation: order-value bridge + coverage bar (full width) ---- */
-.recon-body { padding: 6px 4px 4px; }
-.recon-bridge { display: flex; align-items: stretch; gap: 12px; flex-wrap: wrap; }
-.recon-step {
-  flex: 1 1 0; min-width: 160px; background: var(--paper); border: 1px solid var(--line);
-  border-radius: 12px; padding: 14px 18px; display: flex; flex-direction: column; gap: 7px;
-}
-.recon-step .rs-k {
-  font-size: 11px; letter-spacing: .05em; text-transform: uppercase; color: var(--ink-faint);
-}
-.recon-step .rs-v { font-family: var(--mono); font-size: 21px; font-weight: 700; color: var(--ink); }
-.recon-step.neg .rs-v { color: var(--bad); }
-.recon-step.total { background: rgba(31,157,118,.08); border-color: var(--good); }
-.recon-step.total .rs-v { color: var(--good); }
-.recon-op { display: flex; align-items: center; font-size: 22px; font-weight: 600; color: var(--ink-faint); flex: 0 0 auto; }
-.recon-cov { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
-.cov-headline { font-size: 15px; color: var(--ink-soft); margin-bottom: 13px; }
-.cov-headline strong { font-family: var(--mono); font-size: 22px; color: var(--good); }
-.cov-bar { display: flex; height: 34px; width: 100%; border-radius: 9px; overflow: hidden; border: 1px solid var(--line); }
-.cov-seg { height: 100%; display: flex; align-items: center; justify-content: center; color: #fff; font-size: 12px; font-weight: 700; font-family: var(--mono); }
-.cov-legend { display: flex; gap: 30px; flex-wrap: wrap; margin-top: 16px; }
-.cov-leg { display: flex; align-items: center; gap: 9px; font-size: 13px; }
-.cov-leg .sw { width: 12px; height: 12px; border-radius: 3px; flex: none; }
-.cov-leg .cl-l { color: var(--ink-soft); }
-.cov-leg .cl-v { font-family: var(--mono); font-weight: 600; color: var(--ink); }
-.cov-leg .cl-p { font-family: var(--mono); color: var(--ink-faint); }
-
-/* ---- P&L statement: left-to-right stage flow ---- */
-.pnl-flow { display: flex; align-items: stretch; gap: 10px; flex-wrap: wrap; padding: 8px 2px 4px; }
-.pnl-stage {
-  flex: 1 1 0; min-width: 210px; background: var(--paper); border: 1px solid var(--line);
-  border-radius: 12px; padding: 15px 16px; display: flex; flex-direction: column;
-}
-.pnl-stage-start { background: rgba(31,157,118,.07); border-color: var(--good); justify-content: center; }
-.stage-cap {
-  font-family: var(--mono); font-size: 10px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--ink-faint); margin-bottom: 12px;
-}
-.stage-big { font-family: var(--mono); font-size: 26px; font-weight: 700; color: var(--good); }
-.stage-sub { font-size: 12px; color: var(--ink-faint); margin-top: 5px; }
-.stage-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; margin-bottom: 13px; }
-.stage-line { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
-.stage-line .sl-l { color: var(--ink-soft); }
-.stage-line .sl-v { font-family: var(--mono); color: var(--bad); white-space: nowrap; }
-.stage-result {
-  border-top: 1px solid var(--line-strong); padding-top: 11px;
-  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-}
-.stage-result .sr-l { font-weight: 700; color: var(--good); }
-.stage-result.loss .sr-l { color: var(--bad); }
-.stage-result .sr-v { font-family: var(--mono); font-weight: 700; color: var(--ink); margin-left: auto; }
-.stage-arrow { display: flex; align-items: center; color: var(--ink-faint); font-size: 20px; flex: 0 0 auto; }
-@media (max-width: 900px) { .stage-arrow { transform: rotate(90deg); width: 100%; justify-content: center; height: 18px; } }
-/* margin % pill */
-.pnl-pill {
-  display: inline-block; min-width: 54px; padding: 3px 10px; border-radius: 999px;
-  font-weight: 700; font-size: 12px; text-align: center;
-}
-.pnl-pill.pos { background: rgba(31,157,118,.13); color: var(--good); }
-.pnl-pill.neg { background: rgba(229,86,75,.14); color: var(--bad); }
-
-/* Category + product tables span the full width; compact so all columns fit
-   without a left/right scroll. Long labels wrap instead of widening the table. */
-#pnlCatTable, #pnlProdTable { width: 100%; }
-#viewPnl .score-table th, #viewPnl .score-table td { padding: 9px 10px; font-size: 12px; }
-#pnlProdTable td:first-child, #pnlProdTable td:nth-child(2),
-#pnlCatTable td:first-child { white-space: normal; word-break: break-word; }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
@@ -1263,7 +1237,6 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       <div class="view-tabs" id="viewTabs">
         <button type="button" class="vtab active" data-view="efficiency">📊 Partner efficiency</button>
         <button type="button" class="vtab" data-view="cost">🧾 Carrier cost analysis</button>
-        <button type="button" class="vtab" data-view="pnl">💰 Profit &amp; Loss</button>
       </div>
       <div class="data-range" id="dataRange" hidden>
         <span class="data-range-label" id="dataRangeLabel">Date range</span>
@@ -1501,9 +1474,12 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
           <p id="whcSub" class="panel-sub"></p>
         </div>
         <div class="whc-controls">
-          <label class="whc-pick-label" for="whcPick">Warehouse</label>
-          <select id="whcPick"></select>
-          <span class="whc-note">Scores are relative <em>within</em> the selected warehouse — i.e. each carrier account ranked against the others picking up here.</span>
+          <label class="whc-pick-label">Warehouses</label>
+          <div class="msel whc-msel" data-name="whc" data-all="Select warehouses">
+            <button type="button" class="msel-toggle"><span class="msel-text">Select warehouses</span><span class="msel-caret">▾</span></button>
+            <div class="msel-menu" hidden></div>
+          </div>
+          <span class="whc-note">Pick one or more warehouses. Scores are relative <em>within</em> each warehouse — carrier accounts ranked against the others picking up there. Each selected warehouse is its own section below; when two or more are picked, a combined <em>Total (all selected)</em> section leads — shipments pooled and rates/score shipment-weighted.</span>
         </div>
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cWhc"></canvas></div>
         <div class="table-scroll">
@@ -1667,6 +1643,7 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
           <div class="panel-head">
             <h3>Invoice reconciliation &middot; payable view</h3>
             <p class="panel-sub" id="invReconSub">one row per invoice · enter disputes &amp; credit notes — Final Outstanding, TDS and Final Payable recompute live</p>
+            <button type="button" class="btn-ghost" id="invReconFillWd" title="Auto-fill each invoice's Weight dispute field with the calculated weight over-charge from the weight-dispute analysis. You can still edit any value afterwards.">⚡ Fill calculated weight disputes</button>
             <button type="button" class="btn-ghost" id="invReconExport">⤓ Export CSV</button>
           </div>
           <div class="table-scroll">
@@ -1675,15 +1652,25 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
         </div>
 
         <!-- ===== Spend by product (enriched from BigQuery, by SKU) ===== -->
+        <!-- Two views share this panel, switched by the toggle in the head:
+             "By product" (spend per SKU) and "Multi-SKU AWBs" (waybills that
+             ship more than one distinct product, with the product count). -->
         <div class="panel" id="invSubcatPanel" hidden>
           <div class="panel-head">
-            <h3>Spend by product</h3>
+            <h3 id="invProdTitle">Spend by product</h3>
             <p class="panel-sub" id="invSubcatSub">per product (SKU) across the whole invoice · joined from BigQuery by AWB</p>
+            <div class="prod-view-toggle" id="invProdViewToggle" role="tablist">
+              <button type="button" class="pv-btn active" data-pview="product" role="tab">By product</button>
+              <button type="button" class="pv-btn" data-pview="multisku" role="tab">Multi-SKU AWBs</button>
+            </div>
             <input type="search" class="panel-search" id="invProductSearch" placeholder="Search product / SKU…" autocomplete="off">
             <button type="button" class="btn-ghost" id="invAwbExport">⤓ Export AWB detail</button>
           </div>
-          <div class="table-scroll">
+          <div class="table-scroll" id="invSubcatWrap">
             <table class="score-table" id="invSubcatTable"></table>
+          </div>
+          <div class="table-scroll" id="invMultiSkuWrap" hidden>
+            <table class="score-table" id="invMultiSkuTable"></table>
           </div>
         </div>
 
@@ -1838,60 +1825,6 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       </section>
     </div><!-- /viewCost -->
 
-    <div id="viewPnl" hidden>
-      <section class="dashboard">
-        <div class="panel" id="pnlNotePanel" hidden>
-          <div class="panel-head"><h3>Profit &amp; Loss</h3></div>
-          <p class="panel-sub" id="pnlNote" style="padding:0 16px 16px"></p>
-        </div>
-
-        <div class="kpi-group">
-          <div class="kpi-label">P&amp;L headline <span class="hint-inline">exact-COGS products only · net of RTO &amp; cancelled/lost</span></div>
-          <div class="stat-row stat-row--rev" id="pnlCards"></div>
-        </div>
-
-        <div class="panel" id="pnlReconPanel">
-          <div class="panel-head">
-            <h3>Reconciliation &amp; COGS coverage</h3>
-            <p class="panel-sub">How order value nets down, and how much of it has an exact COGS match feeding the P&amp;L.</p>
-          </div>
-          <div class="recon-body">
-            <div class="recon-bridge" id="pnlReconBridge"></div>
-            <div class="recon-cov" id="pnlReconCoverage"></div>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>P&amp;L statement</h3>
-            <p id="pnlSub" class="panel-sub"></p>
-          </div>
-          <div class="pnl-flow" id="pnlFlow"></div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>By category <span class="hint-inline">exact-COGS matches only</span></h3>
-            <p class="panel-sub" id="pnlCatSub">Per-category P&amp;L, rolled up from the exact-COGS products below.</p>
-          </div>
-          <div class="table-scroll">
-            <table class="score-table" id="pnlCatTable"></table>
-          </div>
-        </div>
-
-        <div class="panel">
-          <div class="panel-head">
-            <h3>By product <span class="hint-inline">exact-COGS matches only</span></h3>
-            <p class="panel-sub" id="pnlProdSub">Per-product P&amp;L. Est. SP is the recommended ex-GST selling price at the blended EBITDA margin.</p>
-            <input type="search" class="panel-search" id="pnlProdSearch" placeholder="Search product / category…" autocomplete="off">
-          </div>
-          <div class="table-scroll">
-            <table class="score-table" id="pnlProdTable"></table>
-          </div>
-        </div>
-      </section>
-    </div><!-- /viewPnl -->
-
   </main>
 
   <footer class="footer">
@@ -1919,7 +1852,7 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
   var charts = [];
   var loaded = false;
   var lastReport = null;       // keep the latest report for the warehouse picker
-  var whcSelection = "";       // currently selected warehouse in the partner-per-warehouse panel
+  var whcSelection = [];       // currently selected warehouse pin(s) in the partner-per-warehouse panel
   var destShowAll = false;     // Destination rollup: false = top-N only, true = full list
   var animateMode = true;      // false on re-filter -> instant render (no count-up/grow)
   var chartReg = {};           // live Chart.js instances, reused across re-filters
@@ -2057,7 +1990,9 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     // Each .msel is a multi-select checkbox dropdown; append one field
     // (named by data-name) per checked box. No boxes checked = field omitted
     // = the backend treats it as "all".
-    document.querySelectorAll(".msel").forEach(function (m) {
+    // Exclude the partner-by-warehouse picker (.whc-msel): it's a panel-local
+    // view control, not a server-side data filter.
+    document.querySelectorAll(".msel:not(.whc-msel)").forEach(function (m) {
       var name = m.getAttribute("data-name");
       m.querySelectorAll("input[type=checkbox]:checked").forEach(function (cb) {
         fd.append(name, cb.value);
@@ -2435,7 +2370,6 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     renderDataRange(report);
     renderStats(report.summary);
     renderRevenue(report.summary);
-    renderPnl(report);
     renderTiers(report.summary);
     renderPayment(report.payment_perf, report.summary);
     renderFormula(report.weights);
@@ -2572,218 +2506,6 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       { label: "Avg order value", value: s.aov, kind: "money" }
     ];
     fillStatGroup($("revRow"), cards);
-  }
-
-  // ---- Profit & Loss (actual-sales P&L on the net order value) -------------
-  // Rides the same report the efficiency view loads (report.pnl), so it honours
-  // the active date range and every filter automatically. Everything is built
-  // up from the NET order value (order value − RTO − cancelled/lost).
-  function renderPnl(report) {
-    var pnl = report && report.pnl;
-    var notePanel = $("pnlNotePanel"), note = $("pnlNote");
-    var o = pnl && pnl.overall;
-    if (!pnl || !pnl.configured || !o || !o.units) {
-      if ($("pnlCards")) $("pnlCards").innerHTML = "";
-      if ($("pnlFlow")) $("pnlFlow").innerHTML = "";
-      if ($("pnlProdTable")) $("pnlProdTable").innerHTML = "";
-      if ($("pnlCatTable")) $("pnlCatTable").innerHTML = "";
-      if ($("pnlReconBridge")) $("pnlReconBridge").innerHTML = "";
-      if ($("pnlReconCoverage")) $("pnlReconCoverage").innerHTML = "";
-      if ($("pnlReconPanel")) $("pnlReconPanel").hidden = true;
-      if (notePanel && note) {
-        notePanel.hidden = false;
-        note.textContent = !pnl || !pnl.configured
-          ? "No COGS master is loaded, so the P&L can't be computed yet."
-          : "No net sales in the current filter/date range to build a P&L from.";
-      }
-      return;
-    }
-    if (notePanel) notePanel.hidden = true;
-
-    // Headline cards.
-    var cards = [
-      { label: "Net order value", value: o.selling_price, kind: "money_c",
-        suffix: ' <span class="unit">' + o.units.toLocaleString() + " units</span>" },
-      { label: "Gross profit", value: o.gross_profit, kind: "money_c",
-        tone: o.gross_profit >= 0 ? "good" : "bad",
-        suffix: pctTag(o.gross_profit_pct) },
-      { label: "Contribution margin 1", value: o.cm1, kind: "money_c",
-        tone: o.cm1 >= 0 ? "good" : "bad", suffix: pctTag(o.cm1_pct) },
-      { label: "Contribution margin 2", value: o.cm2, kind: "money_c",
-        tone: o.cm2 >= 0 ? "good" : "bad", suffix: pctTag(o.cm2_pct) },
-      { label: "EBITDA", value: o.ebitda, kind: "money_c",
-        tone: o.ebitda >= 0 ? "good" : "bad", suffix: pctTag(o.ebitda_margin_pct) },
-      { label: "EBITDA margin", value: o.ebitda_margin_pct, kind: "pct",
-        tone: o.ebitda >= 0 ? "good" : "bad" }
-    ];
-    fillStatGroup($("pnlCards"), cards);
-
-    var sub = $("pnlSub");
-    if (sub) {
-      sub.textContent = "Built on exact-COGS products = " + (pnl.coverage_pct != null ? pnl.coverage_pct : 0) +
-        "% of net order value · matched by SKU first" +
-        (pnl.cogs_rows ? " · " + pnl.cogs_rows.toLocaleString() + " products / " + (pnl.cogs_sku_count || 0).toLocaleString() + " SKUs in COGS master" : "") +
-        (pnl.cogs_updated_at ? " · updated " + pnl.cogs_updated_at : "");
-    }
-
-    // Reconciliation + COGS coverage — a full-width order-value bridge (cards)
-    // plus a coverage bar showing how much of net value feeds the P&L.
-    if ($("pnlReconPanel")) $("pnlReconPanel").hidden = false;
-    var rec = pnl.reconciliation || {};
-    var pcp = function (v) { return (v != null ? v.toFixed(1) + "%" : "—"); };
-    function step(label, val, cls) {
-      return "<div class='recon-step " + (cls || "") + "'><span class='rs-k'>" + label +
-        "</span><span class='rs-v'>" + fmtINRc(val) + "</span></div>";
-    }
-    var op = "<div class='recon-op'>−</div>";
-    $("pnlReconBridge").innerHTML =
-      step("Gross order value", rec.gross_order_value) + op +
-      step("RTO value", rec.rto_value, "neg") + op +
-      step("Cancelled / lost", rec.cancelled_value, "neg") +
-      "<div class='recon-op'>=</div>" +
-      step("Net order value", rec.net_order_value, "total");
-
-    var covSegs = [
-      { label: "In P&L — exact COGS", val: rec.value_matched, pct: rec.value_matched_pct, color: "#1f9d76" },
-      { label: "Excluded — category avg", val: rec.value_approximate, pct: rec.value_approximate_pct, color: "#e0b877" },
-      { label: "Excluded — blended estimate", val: rec.value_estimated, pct: rec.value_estimated_pct, color: "#9aa7b3" }
-    ];
-    var covBar = covSegs.map(function (s) {
-      var w = Math.max(0, s.pct || 0);
-      return w > 0 ? "<span class='cov-seg' style='width:" + w.toFixed(2) + "%;background:" + s.color +
-        "'>" + (w >= 8 ? w.toFixed(1) + "%" : "") + "</span>" : "";
-    }).join("");
-    var covLegend = covSegs.map(function (s) {
-      return "<div class='cov-leg'><span class='sw' style='background:" + s.color + "'></span>" +
-        "<span class='cl-l'>" + s.label + "</span>" +
-        "<span class='cl-v'>" + fmtINRc(s.val) + "</span>" +
-        "<span class='cl-p'>" + pcp(s.pct) + "</span></div>";
-    }).join("");
-    $("pnlReconCoverage").innerHTML =
-      "<div class='cov-headline'><strong>" + pcp(rec.value_matched_pct) + "</strong> of net order value has an exact COGS match and feeds the P&L below.</div>" +
-      "<div class='cov-bar'>" + covBar + "</div>" +
-      "<div class='cov-legend'>" + covLegend + "</div>";
-
-    // P&L statement — a left-to-right FLOW of stage cards: start from the net
-    // order value, then each cost group deducts and produces the next margin
-    // (Gross Profit → CM1 → CM2 → EBITDA). Fills the full width and reads as a
-    // waterfall without a chart.
-    var m = function (v) { return fmtINRc(v); };
-    var spPct = function (v) { return (o.selling_price ? Math.abs(v) / o.selling_price * 100 : null); };
-    var groups = [
-      { label: "− Cost of goods sold",
-        costs: [["Product COGS", o.product_cogs],
-                ["Consumables", o.consumables],
-                ["Direct labour / others (10%)", o.direct_labour]],
-        result: ["Gross Profit", o.gross_profit, o.gross_profit_pct] },
-      { label: "− Logistics",
-        costs: [["Forward logistics (weight × ₹9)", o.fwd_logistics]],
-        result: ["Contribution Margin 1", o.cm1, o.cm1_pct] },
-      { label: "− Selling & marketing",
-        costs: [["Selling incentives (2%)", o.incentives],
-                ["Travelling & event expenses (5%)", o.travel]],
-        result: ["Contribution Margin 2", o.cm2, o.cm2_pct] },
-      { label: "− Overheads",
-        costs: [["Employee cost (9%)", o.employee],
-                ["Office overheads (2%)", o.office],
-                ["PG / finance cost (2%)", o.pg_finance]],
-        result: ["EBITDA", o.ebitda, o.ebitda_margin_pct] }
-    ];
-    var flow = "<div class='pnl-stage pnl-stage-start'>" +
-      "<div class='stage-cap'>Net order value</div>" +
-      "<div class='stage-big'>" + m(o.selling_price) + "</div>" +
-      "<div class='stage-sub'>selling price · 100%</div></div>";
-    groups.forEach(function (g) {
-      flow += "<div class='stage-arrow'>→</div>";
-      var lines = g.costs.map(function (c) {
-        return "<div class='stage-line'><span class='sl-l'>" + c[0] + "</span>" +
-          "<span class='sl-v'>−" + m(c[1]) + "</span></div>";
-      }).join("");
-      var r = g.result, good = r[1] >= 0;
-      flow += "<div class='pnl-stage'>" +
-        "<div class='stage-cap'>" + g.label + "</div>" +
-        "<div class='stage-lines'>" + lines + "</div>" +
-        "<div class='stage-result " + (good ? "" : "loss") + "'>" +
-          "<span class='sr-l'>" + r[0] + "</span>" +
-          "<span class='sr-v'>" + m(r[1]) + "</span>" +
-          "<span class='pnl-pill " + (good ? "pos" : "neg") + "'>" + pnlPct(r[2]) + "</span>" +
-        "</div></div>";
-    });
-    $("pnlFlow").innerHTML = flow;
-
-    // Category + product breakdowns (both exact-COGS only). Product table is
-    // filtered by its search box.
-    renderPnlCategories(pnl);
-    renderPnlProducts(pnl);
-  }
-
-  // A P&L breakdown row (shared by the category and product tables). `leadCells`
-  // is the label column(s) HTML that differs between the two.
-  function pnlRowCells(c) {
-    var m = fmtINRc, pc = pnlPct;
-    return "<td class='num'>" + (c.units || 0).toLocaleString() + "</td>" +
-      "<td class='num'>" + m(c.selling_price) + "</td>" +
-      "<td class='num'>" + m(c.final_cogs) + "</td>" +
-      "<td class='num'>" + m(c.gross_profit) + "</td>" +
-      "<td class='num'>" + pc(c.gross_profit_pct) + "</td>" +
-      "<td class='num'>" + pc(c.cm1_pct) + "</td>" +
-      "<td class='num'>" + pc(c.cm2_pct) + "</td>" +
-      "<td class='num " + (c.ebitda >= 0 ? "" : "neg") + "'>" + m(c.ebitda) + "</td>" +
-      "<td class='num'>" + pc(c.ebitda_margin_pct) + "</td>" +
-      "<td class='num'>" + (c.est_selling_price != null ? "₹" + Math.round(c.est_selling_price).toLocaleString() : "—") + "</td>" +
-      "<td class='num'>" + (c.rounded_sp != null ? "₹" + c.rounded_sp.toLocaleString() : "—") + "</td>" +
-      "<td class='num'>" + (c.gst_rate != null ? c.gst_rate + "%" : "—") + "</td>";
-  }
-
-  function renderPnlCategories(pnl) {
-    if (!$("pnlCatTable")) return;
-    var cats = (pnl && pnl.categories) || [];
-    var head = "<thead><tr><th>Category</th><th class='num'>Units</th>" +
-      "<th class='num'>Net SP</th><th class='num'>COGS</th><th class='num'>GP</th>" +
-      "<th class='num'>GP%</th><th class='num'>CM1%</th><th class='num'>CM2%</th>" +
-      "<th class='num'>EBITDA</th><th class='num'>EBITDA%</th>" +
-      "<th class='num'>Est. SP</th><th class='num'>Rounded</th><th class='num'>GST</th></tr></thead><tbody>";
-    var body = cats.map(function (c) {
-      return "<tr><td>" + pnlEsc(c.category) + "</td>" + pnlRowCells(c) + "</tr>";
-    }).join("");
-    $("pnlCatTable").innerHTML = head + body + "</tbody>";
-  }
-
-  function renderPnlProducts(pnl) {
-    if (!$("pnlProdTable")) return;
-    var prods = (pnl && pnl.products) || [];
-    var q = (($("pnlProdSearch") && $("pnlProdSearch").value) || "").trim().toLowerCase();
-    var shown = q ? prods.filter(function (c) {
-      return ((c.product || "") + " " + (c.category || "")).toLowerCase().indexOf(q) !== -1;
-    }) : prods;
-    var psub = $("pnlProdSub");
-    if (psub) {
-      psub.textContent = "Per-product P&L on exact-COGS matches. Est. SP is the recommended ex-GST price at the blended EBITDA margin." +
-        (q ? " Showing " + shown.length + " of " + prods.length + " match" + (prods.length === 1 ? "" : "es") + " for “" + q + "”."
-           : (pnl.products_total > prods.length ? " Showing top " + prods.length + " of " + pnl.products_total.toLocaleString() + " products by value." : ""));
-    }
-    var head = "<thead><tr><th>Product</th><th>Category</th><th class='num'>Units</th>" +
-      "<th class='num'>Net SP</th><th class='num'>COGS</th><th class='num'>GP</th>" +
-      "<th class='num'>GP%</th><th class='num'>CM1%</th><th class='num'>CM2%</th>" +
-      "<th class='num'>EBITDA</th><th class='num'>EBITDA%</th>" +
-      "<th class='num'>Est. SP</th><th class='num'>Rounded</th><th class='num'>GST</th></tr></thead><tbody>";
-    var body = shown.length
-      ? shown.map(function (c) {
-          return "<tr><td>" + pnlEsc(c.product) + "</td><td>" + pnlEsc(c.category) + "</td>" + pnlRowCells(c) + "</tr>";
-        }).join("")
-      : "<tr><td colspan='14' class='empty'>No products match “" + pnlEsc(q) + "”.</td></tr>";
-    $("pnlProdTable").innerHTML = head + body + "</tbody>";
-  }
-
-  function pctTag(v) {
-    return (v != null) ? ' <span class="unit">' + v.toFixed(1) + "%</span>" : "";
-  }
-  function negPct(part, sp) { return (sp ? part / sp * 100 : null); }
-  function pnlPct(v) { return (v != null ? v.toFixed(1) + "%" : "—"); }
-  function pnlEsc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
-      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
-    });
   }
 
   function fillStatGroup(container, cards) {
@@ -3130,21 +2852,23 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     // Real Frido category images (Shopify CDN); categories without one fall back
     // to an emoji badge below.
     var _CDN = "https://cdn.shopify.com/s/files/1/0553/0419/2034/files/";
+    // Consolidated 6-group scheme (Comfort & Sleep, Footwear, Orthopedic &
+    // Wellness, Mobility & Furniture, Maternity & Baby Care, Accessories). One
+    // representative Frido image per group; anything else uses the emoji badge.
     var CATEGORY_IMG = {
-      "Orthotics": _CDN + "Category_1_2_1.jpg?v=1769695217&width=200",
-      "Insoles": _CDN + "Everyday_Insole_Combo_55a98dda-d383-4a27-9f57-39c4a5e8bcab.png?v=1770808742&width=200",
+      "Comfort & Sleep": _CDN + "CNP-Black-01B_4997708e-d0e7-49d3-af3f-fe7d51f06423.jpg?v=1739886430&width=200",
       "Footwear": _CDN + "WS-01_8b6068d3-4e48-4b4c-8d37-07fd0338d7cb.jpg?v=1753101892&width=200",
-      "Pillows": _CDN + "CNP-Black-01B_4997708e-d0e7-49d3-af3f-fe7d51f06423.jpg?v=1739886430&width=200",
-      "Cushions": _CDN + "Wedge-plus_color-picker-tab_2edb45fe-649c-4966-b706-0d148f3de35d.png?v=1747912121&width=200",
-      "Mattress Topper Protector": _CDN + "UMT_2.jpg?v=1720264311&width=200",
-      "Chairs": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=200"
+      "Orthopedic & Wellness": _CDN + "Category_1_2_1.jpg?v=1769695217&width=200",
+      "Mobility & Furniture": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=200"
     };
     var CATEGORY_ICON = {
-      "Orthotics": "🩺", "Insoles": "👣", "Footwear": "🥿", "Pillows": "🛏️",
-      "Cushions": "🪑", "Mattress Topper Protector": "🛌", "Mobility Devices": "♿",
-      "Socks": "🧦", "Maternity & Baby Care": "🤰", "Personal Care": "💆",
-      "Accessories": "🎒", "Workspace": "🖥️", "Chairs": "🪑", "Barefoot": "🦶",
-      "Masks": "😷", "Covers": "🛡️", "Others": "📦"
+      "Comfort & Sleep": "🛏️",
+      "Footwear": "🥿",
+      "Orthopedic & Wellness": "🩺",
+      "Mobility & Furniture": "♿",
+      "Maternity & Baby Care": "🤰",
+      "Accessories": "🎒",
+      "Others": "📦"
     };
 
     // Show the first 3 rows of a section; tuck the rest behind a "+N more" toggle.
@@ -3248,21 +2972,40 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
 
   function renderWarehouseCarrierPanel(report) {
     var g = groupWhc(report);
-    var pick = $("whcPick");
+    var menu = document.querySelector(".whc-msel .msel-menu");
 
-    // (Re)build the warehouse picker each render so it tracks the active filter set.
-    pick.innerHTML = "";
-    g.order.forEach(function (pin) {
-      var grp = g.groups[pin];
-      addOption(pick, pin, grp.label + " (" + (grp.total || 0).toLocaleString() + ")");
-    });
-
-    // Preserve the previous selection if it still exists, else default to the
-    // highest-volume warehouse.
-    if (!whcSelection || !g.groups[whcSelection]) {
-      whcSelection = g.order.length ? g.order[0] : "";
+    // (Re)build the warehouse checkbox list each render so it tracks the active
+    // filter set. Preserve any still-valid previous selections.
+    var prev = {};
+    whcSelection.forEach(function (p) { prev[p] = true; });
+    if (menu) {
+      menu.innerHTML = "";
+      g.order.forEach(function (pin) {
+        var grp = g.groups[pin];
+        var lab = document.createElement("label");
+        lab.className = "msel-opt";
+        var inp = document.createElement("input");
+        inp.type = "checkbox"; inp.value = pin;
+        if (prev[pin]) inp.checked = true;
+        var sp = document.createElement("span");
+        sp.textContent = grp.label + " (" + (grp.total || 0).toLocaleString() + ")";
+        lab.appendChild(inp); lab.appendChild(sp);
+        menu.appendChild(lab);
+      });
     }
-    if (whcSelection) pick.value = whcSelection;
+
+    // Drop selections that no longer exist; default to the highest-volume
+    // warehouse when nothing valid is selected.
+    whcSelection = whcSelection.filter(function (p) { return g.groups[p]; });
+    if (!whcSelection.length && g.order.length) {
+      whcSelection = [g.order[0]];
+      if (menu) {
+        var first = menu.querySelector("input[type=checkbox]");
+        if (first) first.checked = true;
+      }
+    }
+    var mm = document.querySelector(".whc-msel");
+    if (mm) mselText(mm);
 
     var minN = report.wh_carrier_min_n;
     var nWh = g.order.length;
@@ -3271,52 +3014,133 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       " \u00b7 carrier accounts scored against each other within each (\u2265" + minN + " shipments per cell)";
 
     renderWhcTable(report);
+    renderWhcChart();
+  }
+
+  // Pool the selected warehouses into one combined "Total" group: per carrier
+  // account, shipments are summed and every rate/TAT is a shipment-weighted
+  // average across the warehouses it appears in. The combined Score is the
+  // shipment-weighted mean of the per-warehouse (relative) scores, so it reads
+  // on the same 0\u2013100 scale. Rows ranked by that combined score, then volume.
+  function poolWhc(g, pins) {
+    var acc = {}, order = [], totalN = 0;
+    pins.forEach(function (pin) {
+      var grp = g.groups[pin];
+      if (!grp) return;
+      grp.rows.forEach(function (a) {
+        var e = acc[a.account];
+        if (!e) {
+          e = { account: a.account, n: 0, p2o_s: 0, p2o_n: 0, p2d_s: 0, p2d_n: 0,
+                su_s: 0, su_n: 0, fa_s: 0, fa_n: 0, at_s: 0, at_n: 0, sc_s: 0, sc_n: 0 };
+          acc[a.account] = e; order.push(a.account);
+        }
+        var n = a.n || 0; e.n += n; totalN += n;
+        function w(v, key) { if (v != null) { e[key + "_s"] += v * n; e[key + "_n"] += n; } }
+        w(a.p2o, "p2o"); w(a.p2d, "p2d"); w(a.success_rate, "su");
+        w(a.first_attempt_rate, "fa"); w(a.avg_attempts, "at"); w(a.score, "sc");
+      });
+    });
+    function wavg(s, n) { return n ? s / n : null; }
+    var rows = order.map(function (k) {
+      var e = acc[k];
+      return {
+        account: e.account, n: e.n,
+        wh_share: totalN ? e.n / totalN : null,
+        p2o: wavg(e.p2o_s, e.p2o_n), p2d: wavg(e.p2d_s, e.p2d_n),
+        success_rate: wavg(e.su_s, e.su_n), first_attempt_rate: wavg(e.fa_s, e.fa_n),
+        avg_attempts: wavg(e.at_s, e.at_n),
+        score: e.sc_n ? e.sc_s / e.sc_n : null
+      };
+    });
+    rows.sort(function (a, b) {
+      return (b.score == null ? -1 : b.score) - (a.score == null ? -1 : a.score) || (b.n - a.n);
+    });
+    return { label: "Total (all selected)", total: totalN, rows: rows };
+  }
+
+  function whcRowHtml(a, i, minN) {
+    return "<tr>" +
+      '<td class="rank">' + (i + 1) + "</td>" +
+      '<td class="carrier-name">' + esc(a.account) + "</td>" +
+      "<td>" + scoreCellHtml(a.score, minN) + "</td>" +
+      '<td class="num">' + a.n.toLocaleString() + "</td>" +
+      '<td class="num">' + fmtPct(a.wh_share) + "</td>" +
+      '<td class="num">' + fmtH(a.p2o) + "</td>" +
+      '<td class="num">' + fmtH(a.p2d) + "</td>" +
+      '<td class="num">' + fmtPct(a.success_rate) + "</td>" +
+      '<td class="num">' + fmtPct(a.first_attempt_rate) + "</td>" +
+      '<td class="num">' + fmtNum(a.avg_attempts, 2) + "</td>" +
+      "</tr>";
   }
 
   function renderWhcTable(report) {
     var g = groupWhc(report);
-    var grp = g.groups[whcSelection];
     var minN = report.wh_carrier_min_n;
-    if (!grp) {
+    // Selected warehouses, ordered by volume desc.
+    var pins = whcSelection.filter(function (p) { return g.groups[p]; });
+    pins.sort(function (a, b) { return (g.groups[b].total || 0) - (g.groups[a].total || 0); });
+    if (!pins.length) {
       $("whcTable").innerHTML =
-        '<tbody><tr><td class="empty">No warehouse data for the current filters.</td></tr></tbody>';
+        '<tbody><tr><td class="empty">Select one or more warehouses above.</td></tr></tbody>';
       return;
     }
 
     var head = "<thead><tr><th></th><th>Carrier account</th><th>Score</th><th>Shipments</th><th>Share</th>" +
       "<th>P\u2192OFD1</th><th>P\u2192Deliv</th><th>Success</th><th>1st-attempt</th><th>Avg att.</th></tr></thead>";
-    var rows = grp.rows.map(function (a, i) {
-      return "<tr>" +
-        '<td class="rank">' + (i + 1) + "</td>" +
-        '<td class="carrier-name">' + esc(a.account) + "</td>" +
-        "<td>" + scoreCellHtml(a.score, minN) + "</td>" +
-        '<td class="num">' + a.n.toLocaleString() + "</td>" +
-        '<td class="num">' + fmtPct(a.wh_share) + "</td>" +
-        '<td class="num">' + fmtH(a.p2o) + "</td>" +
-        '<td class="num">' + fmtH(a.p2d) + "</td>" +
-        '<td class="num">' + fmtPct(a.success_rate) + "</td>" +
-        '<td class="num">' + fmtPct(a.first_attempt_rate) + "</td>" +
-        '<td class="num">' + fmtNum(a.avg_attempts, 2) + "</td>" +
-        "</tr>";
-    }).join("");
-    $("whcTable").innerHTML = head + "<tbody>" + rows + "</tbody>";
+    var multi = pins.length > 1;
+    // Groups to render: a combined "Total" first (only when >1 warehouse), then
+    // one exact section per selected warehouse.
+    var sections = [];
+    if (multi) sections.push({ grp: poolWhc(g, pins), total: true });
+    pins.forEach(function (pin) { sections.push({ grp: g.groups[pin], total: false }); });
+
+    var html = head;
+    sections.forEach(function (s) {
+      var grp = s.grp;
+      var body = "";
+      if (multi) {
+        body += '<tr class="whc-group"><td></td>' +
+          '<td colspan="9" class="whc-group-title' + (s.total ? " whc-group-total" : "") + '">' +
+          esc(grp.label) + " \u00b7 " + (grp.total || 0).toLocaleString() + " shipments</td></tr>";
+      }
+      body += grp.rows.map(function (a, i) { return whcRowHtml(a, i, minN); }).join("");
+      html += "<tbody>" + body + "</tbody>";
+    });
+    $("whcTable").innerHTML = html;
   }
 
   function renderWhcChart() {
     if (!lastReport) return;
     var g = groupWhc(lastReport);
-    var grp = g.groups[whcSelection];
-    if (!grp) return;
-    var labels = grp.rows.map(function (a) { return a.account; });
-    // Bars = score where available, else 0; colour by score band.
+    var pins = whcSelection.filter(function (p) { return g.groups[p]; });
+    pins.sort(function (a, b) { return (g.groups[b].total || 0) - (g.groups[a].total || 0); });
+    if (!pins.length) {
+      upsertChart("cWhc", { type: "bar", data: { labels: [], datasets: [{ data: [] }] }, options: hbarOpts() });
+      return;
+    }
+    // Bars for every carrier account across the selected warehouses. When more
+    // than one warehouse is selected, a combined "Total" group is charted first,
+    // then each warehouse; the group label is appended so bars stay
+    // attributable. Colour by score band.
+    var multi = pins.length > 1;
+    var groups = [];
+    if (multi) groups.push(poolWhc(g, pins));
+    pins.forEach(function (pin) { groups.push(g.groups[pin]); });
+
+    var labels = [], data = [], colors = [];
+    groups.forEach(function (grp) {
+      grp.rows.forEach(function (a) {
+        labels.push(multi ? (a.account + "  —  " + grp.label) : a.account);
+        data.push(a.score == null ? 0 : a.score);
+        colors.push(scoreColor(a.score));
+      });
+    });
     upsertChart("cWhc", {
       type: "bar",
       data: {
         labels: labels,
         datasets: [{
-          label: "Score",
-          data: grp.rows.map(function (a) { return a.score == null ? 0 : a.score; }),
-          backgroundColor: grp.rows.map(function (a) { return scoreColor(a.score); }),
+          label: "Score", data: data, backgroundColor: colors,
           borderRadius: 3, barThickness: "flex", maxBarThickness: 24
         }]
       },
@@ -3760,7 +3584,17 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
   document.addEventListener("change", function (e) {
     var cb = e.target;
     if (cb && cb.matches && cb.matches(".msel input[type=checkbox]")) {
-      mselText(cb.closest(".msel"));
+      var m = cb.closest(".msel");
+      mselText(m);
+      // The partner-by-warehouse picker is a panel-local view control: just
+      // re-render that panel, don't trigger a server refilter of the report.
+      if (m.classList.contains("whc-msel")) {
+        whcSelection = Array.prototype.map.call(
+          m.querySelectorAll("input[type=checkbox]:checked"),
+          function (b) { return b.value; });
+        if (lastReport) { renderWhcTable(lastReport); renderWhcChart(); }
+        return;
+      }
       updateAdvCount();
       scheduleRefilter();
     }
@@ -3776,11 +3610,6 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     if (lastReport) renderDestinations(lastReport);
   });
 
-  // P&L product search: filter the cached product list client-side.
-  if ($("pnlProdSearch")) $("pnlProdSearch").addEventListener("input", function () {
-    if (lastReport && lastReport.pnl) renderPnlProducts(lastReport.pnl);
-  });
-
   // "Explore full list" toggle: expand the destination table from the top-N
   // slice to every destination (still client-side, from the cached report).
   $("destToggle").addEventListener("click", function () {
@@ -3791,10 +3620,8 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     if (lastReport) renderDestinations(lastReport);
   });
 
-  $("whcPick").addEventListener("change", function (e) {
-    whcSelection = e.target.value;
-    if (lastReport) { renderWhcTable(lastReport); renderWhcChart(); }
-  });
+  // (Partner-by-warehouse selection is handled by the delegated .msel change
+  // listener above via the .whc-msel branch.)
   // "Upload file" in the toolbar opens the file picker directly — there's no
   // landing screen to fall back to. The chosen file replaces the current
   // dataset in place (handleFile re-renders the dashboard).
@@ -4227,6 +4054,20 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     invReconRows = rc.rows;
     renderReconCards();
 
+    // Enable the "Fill calculated weight disputes" button only when the weight-
+    // dispute analysis found at least one over-charge to fill.
+    var fillBtn = $("invReconFillWd");
+    if (fillBtn) {
+      var wd = rc.weight_dispute;
+      var hasWd = !!(wd && wd.by_invoice && wd.by_invoice.some(function (r) {
+        return r.invoice_number && (r.est_overcharge || 0) > 0;
+      }));
+      fillBtn.disabled = !hasWd;
+      fillBtn.title = hasWd
+        ? "Auto-fill each invoice's Weight dispute field with the calculated weight over-charge. You can still edit any value afterwards."
+        : "No calculated weight over-charges (needs an item master with volumetric weights and flagged AWBs).";
+    }
+
     var head = '<caption class="sr-only">Invoice reconciliation. One row per invoice. ' +
       'Courier, invoice number, service month, shipment count and billed amount are read from the file. ' +
       'Billing dispute, weight dispute, billing / weight / lost credit notes and TDS are editable; ' +
@@ -4286,7 +4127,7 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       inr(rc.total_amount) + " billed (with GST) · TDS @ " + rc.tds_rate +
       "% · enter disputes & CNs to compute Final Payable";
 
-    renderInvSubcats(rc);
+    renderProductPanel(rc);
     renderInvWeightDispute(rc);
   }
 
@@ -4429,11 +4270,9 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
 
   // Spend by product (SKU) across the whole invoice — joined from BigQuery by AWB.
   function renderInvSubcats(rc) {
-    var panel = $("invSubcatPanel");
-    if (!panel) return;
-    var pa = rc && rc.products;
-    if (!pa || !pa.rows || !pa.rows.length) { panel.hidden = true; return; }
-    panel.hidden = false;
+    if (!$("invSubcatTable")) return;
+    var pa = (rc && rc.products) || {};
+    if (!pa.rows) pa.rows = [];
 
     var q = (($("invProductSearch") && $("invProductSearch").value) || "").trim().toLowerCase();
     var rows = q ? pa.rows.filter(function (r) {
@@ -4497,6 +4336,114 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       '<td class="num"><b>' + (totFreightPct != null ? totFreightPct.toFixed(1) + '%' : '—') + '</b></td>' +
       '</tr></tfoot>';
     $("invSubcatTable").innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
+  }
+
+  // ---- Multi-SKU AWBs: waybills that ship more than one distinct product ----
+  // Shares the "Spend by product" panel; toggled via the view switch in the head.
+  function renderMultiSkuAwbs(rc) {
+    if (!$("invMultiSkuTable")) return;
+    var ma = (rc && rc.multi_sku_awbs) || {};
+    if (!ma.rows) ma.rows = [];
+
+    var q = (($("invProductSearch") && $("invProductSearch").value) || "").trim().toLowerCase();
+    var rows = q ? ma.rows.filter(function (r) {
+      return ((r.awb || "") + " " + (r.order_id || "") + " " +
+              (r.skus || []).join(" ") + " " + (r.names || []).join(" ")).toLowerCase().indexOf(q) !== -1;
+    }) : ma.rows;
+
+    var sub = $("invSubcatSub");
+    if (sub) {
+      if (!ma.row_total) {
+        sub.textContent = "No AWB in this invoice ships more than one distinct product.";
+      } else {
+        var sharePct = ma.all_awbs ? (ma.multi_awbs / ma.all_awbs * 100) : 0;
+        sub.textContent = ma.row_total.toLocaleString("en-IN") + " AWBs ship >1 product" +
+          " (" + sharePct.toFixed(1) + "% of " + (ma.all_awbs || 0).toLocaleString("en-IN") + " AWBs) · " +
+          "avg " + (ma.avg_products || 0) + " products/AWB · up to " + (ma.max_products || 0) + " · " +
+          inr(ma.spend) + " billed (with GST)" +
+          (q ? " · " + rows.length.toLocaleString("en-IN") + " match" : (ma.row_total > ma.shown ? " · showing top " + ma.shown.toLocaleString("en-IN") : ""));
+      }
+    }
+
+    var head = '<thead><tr>' +
+      '<th scope="col" class="rank">#</th>' +
+      '<th scope="col">AWB</th>' +
+      '<th scope="col" class="num">Products</th>' +
+      '<th scope="col">SKUs &amp; product names</th>' +
+      '<th scope="col">Carrier</th>' +
+      '<th scope="col">Invoice</th>' +
+      '<th scope="col" class="num">Charged wt (kg)</th>' +
+      '<th scope="col" class="num">Amount with GST</th>' +
+      '</tr></thead>';
+    var body = rows.length ? rows.map(function (r, i) {
+      var skus = r.skus || [], names = r.names || [];
+      var lines = skus.map(function (s, j) {
+        var nm = names[j] && names[j] !== s ? names[j] : "";
+        return '<div class="msku-item"><span class="msku-sku">' + esc(s) + '</span>' +
+          (nm ? '<span class="msku-name">' + esc(nm) + '</span>' : '') + '</div>';
+      }).join("");
+      return '<tr>' +
+        '<td class="rank">' + (i + 1) + '</td>' +
+        '<td class="mono">' + esc(r.awb || '—') + '</td>' +
+        '<td class="num"><b>' + r.product_count + '</b></td>' +
+        '<td class="msku-list">' + lines + '</td>' +
+        '<td>' + esc(r.carrier || '—') + '</td>' +
+        '<td class="mono">' + esc(r.invoice_number || '—') + '</td>' +
+        '<td class="num">' + (r.weight != null ? r.weight.toFixed(2) : '—') + '</td>' +
+        '<td class="num"><b>' + inr(r.amount) + '</b></td>' +
+        '</tr>';
+    }).join("") : '<tr><td class="empty" colspan="8">' +
+        (q ? 'No multi-product AWBs match “' + esc(q) + '”.'
+           : 'No AWB in this invoice ships more than one distinct product.') + '</td></tr>';
+
+    var foot = (q || !ma.row_total) ? '' : '<tfoot><tr class="recon-foot">' +
+      '<th scope="row" colspan="2">Total · ' + ma.row_total.toLocaleString("en-IN") + ' multi-product AWBs</th>' +
+      '<td class="num"><b>' + (ma.avg_products || 0) + ' avg</b></td>' +
+      '<td colspan="3"></td>' +
+      '<td class="num"><b>' + (ma.weight != null ? ma.weight.toFixed(1) : '—') + '</b></td>' +
+      '<td class="num"><b>' + inr(ma.spend) + '</b></td>' +
+      '</tr></tfoot>';
+    $("invMultiSkuTable").innerHTML = head + '<tbody>' + body + '</tbody>' + foot;
+  }
+
+  // View switch for the shared Spend-by-product panel: "By product" vs the
+  // "Multi-SKU AWBs" list. State is remembered across re-renders/searches.
+  var invProdView = "product";
+  function renderActiveProdView() {
+    var rc = invReport && invReport.reconciliation;
+    if (!rc) return;
+    if (invProdView === "multisku") renderMultiSkuAwbs(rc);
+    else renderInvSubcats(rc);
+  }
+  function setProdView(view) {
+    invProdView = (view === "multisku") ? "multisku" : "product";
+    var multi = invProdView === "multisku";
+    document.querySelectorAll("#invProdViewToggle .pv-btn").forEach(function (b) {
+      b.classList.toggle("active", b.getAttribute("data-pview") === invProdView);
+    });
+    if ($("invSubcatWrap")) $("invSubcatWrap").hidden = multi;
+    if ($("invMultiSkuWrap")) $("invMultiSkuWrap").hidden = !multi;
+    if ($("invProdTitle")) $("invProdTitle").textContent = multi ? "Multi-SKU AWBs" : "Spend by product";
+    if ($("invProductSearch")) $("invProductSearch").placeholder = multi ? "Search AWB / order / SKU…" : "Search product / SKU…";
+    renderActiveProdView();
+  }
+  // Panel entry point: show the panel when either view has data, disable the
+  // Multi-SKU tab when there are none, and render the active view.
+  function renderProductPanel(rc) {
+    var panel = $("invSubcatPanel");
+    if (!panel) return;
+    var pa = rc && rc.products, ma = rc && rc.multi_sku_awbs;
+    var hasProd = !!(pa && pa.rows && pa.rows.length);
+    var hasMulti = !!(ma && ma.rows && ma.rows.length);
+    if (!hasProd && !hasMulti) { panel.hidden = true; return; }
+    panel.hidden = false;
+    var mbtn = document.querySelector('#invProdViewToggle .pv-btn[data-pview="multisku"]');
+    if (mbtn) {
+      mbtn.disabled = !hasMulti;
+      mbtn.title = hasMulti ? "" : "No AWB ships more than one product in this invoice";
+    }
+    if (invProdView === "multisku" && !hasMulti) invProdView = "product";
+    setProdView(invProdView);
   }
 
   // Download the full per-AWB detail (enriched with SKU / sub-category) as CSV.
@@ -4649,6 +4596,42 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
       foot.innerHTML = tmp.innerHTML;
     }
     renderReconCards();   // Final Payable card tracks live edits
+  }
+
+  // Auto-fill the Weight-dispute column from the calculated weight over-charge
+  // (weight_dispute.by_invoice.est_overcharge), matched to each invoice row.
+  // Values become normal edits, so they can still be changed by hand afterwards.
+  function fillCalculatedWeightDisputes() {
+    var rc = invReport && invReport.reconciliation;
+    if (!rc || !invReconRows.length) return;
+    var wd = rc.weight_dispute;
+    var byInv = {};
+    if (wd && wd.by_invoice) {
+      wd.by_invoice.forEach(function (r) {
+        if (r.invoice_number) byInv[r.invoice_number] = r.est_overcharge || 0;
+      });
+    }
+    var filled = 0, totalWd = 0;
+    invReconRows.forEach(function (r) {
+      var est = byInv[r.invoice_number];
+      if (est != null && est > 0) {
+        (invReconEdits[r.invoice_number] = invReconEdits[r.invoice_number] || {}).weight_dispute = est;
+        filled++;
+        totalWd += est;
+      }
+    });
+    // Re-render so every input, calc cell, footer and card reflects the fill.
+    // invReconEdits persists across the re-render, so manual edits are kept.
+    if (invReport) renderInvRecon(invReport);
+    var btn = $("invReconFillWd");
+    if (btn) {
+      var orig = btn.getAttribute("data-label") || btn.textContent;
+      btn.setAttribute("data-label", orig);
+      btn.textContent = filled
+        ? "✓ Filled " + filled + " invoice" + (filled === 1 ? "" : "s") + " · " + inr(totalWd)
+        : "No calculated weight disputes to fill";
+      setTimeout(function () { btn.textContent = btn.getAttribute("data-label"); }, 2600);
+    }
   }
 
   function exportReconCsv() {
@@ -5152,6 +5135,7 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     if ($("invLaneSearch")) $("invLaneSearch").addEventListener("input", function () { if (invReport) renderInvLanes(invReport); });
     if ($("invReconTable")) $("invReconTable").addEventListener("input", onReconInput);
     if ($("invReconExport")) $("invReconExport").addEventListener("click", exportReconCsv);
+    if ($("invReconFillWd")) $("invReconFillWd").addEventListener("click", fillCalculatedWeightDisputes);
     if ($("invWtProdExport")) $("invWtProdExport").addEventListener("click", exportWtProdCsv);
     if ($("invAwbExport")) $("invAwbExport").addEventListener("click", exportInvoiceAwbs);
     if ($("invMasterInput")) $("invMasterInput").addEventListener("change", function (e) {
@@ -5161,7 +5145,13 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
     if ($("invDriveImportEmpty")) $("invDriveImportEmpty").addEventListener("click", importFromDrive);
     refreshMasterStatus();
     if ($("invProductSearch")) $("invProductSearch").addEventListener("input", function () {
-      if (invReport && invReport.reconciliation) renderInvSubcats(invReport.reconciliation);
+      renderActiveProdView();
+    });
+    document.querySelectorAll("#invProdViewToggle .pv-btn").forEach(function (b) {
+      b.addEventListener("click", function () {
+        if (b.disabled) return;
+        setProdView(b.getAttribute("data-pview"));
+      });
     });
     if ($("invCmpMetric")) $("invCmpMetric").addEventListener("change", function () {
       if (invReport) renderInvCarrierMonth(invReport);
@@ -5184,11 +5174,7 @@ body:has(#viewPnl:not([hidden])) .wrap { padding-left: 14px; padding-right: 14px
         document.querySelectorAll(".vtab").forEach(function (b) { b.classList.toggle("active", b === btn); });
         if ($("viewEfficiency")) $("viewEfficiency").hidden = (view !== "efficiency");
         if ($("viewCost")) $("viewCost").hidden = (view !== "cost");
-        if ($("viewPnl")) $("viewPnl").hidden = (view !== "pnl");
         if ($("dataRange")) $("dataRange").classList.toggle("vh", view === "cost");
-        // P&L rides the same report as the efficiency view; (re)render it from the
-        // latest loaded report whenever the tab is opened.
-        if (view === "pnl") renderPnl(lastReport);
         try { window.dispatchEvent(new Event("resize")); } catch (e) {}
       });
     });

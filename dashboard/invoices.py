@@ -525,9 +525,15 @@ def _parse_bluedart_b2b(sheets, filename):
 
 def _parse_bluedart_b2c(sheets, filename):
     """BlueDart B2C raw billing dump (one row per AWB) with explicit invoice
-    columns: CINVOICENBR, DINVDATE and GROSS TOTAL (amount incl. GST). Captures
+    columns: CINVOICENBR, DINVDATE and an amount-incl-GST column. Captures
     invoice number / date / service month so the management reconciliation table
     can group billed lines by invoice and compute the final payable.
+
+    Two column layouts are supported:
+      * GROSS TOTAL / WITH GST  -> amount incl. GST, with TOTAL as ex-GST.
+      * NET / TOTAL             -> NET is TOTAL + GST (amount incl. GST) and
+        TOTAL is the ex-GST charge (NTOTALAMT - DISCOUNT). This is the raw
+        DINVDATE/CAWBNO dump (e.g. the "RISK ..." exports).
 
     Reads EVERY sheet that matches the B2C layout (real exports can split lines
     across multiple tabs), accumulating all billed lines so nothing is dropped.
@@ -536,10 +542,10 @@ def _parse_bluedart_b2c(sheets, filename):
     out = []
     for name, rows in sheets:
         idx, cmap = _scan_header(rows, 15, lambda c: "cinvoicenbr" in c and "cawbno" in c
-                                 and ("gross total" in c or "with gst" in c))
+                                 and ("gross total" in c or "with gst" in c or "net" in c))
         if idx is None:
             continue
-        amt_i = _first(cmap, ["gross total", "with gst"])
+        amt_i = _first(cmap, ["gross total", "with gst", "net"])
         exgst_i = _first(cmap, ["total", "ex gst", "ntotalamt"])
         awb_i = cmap.get("cawbno")
         inv_i = cmap.get("cinvoicenbr")
@@ -1200,6 +1206,17 @@ def _build_subcategory_analysis(items):
     }
 
 
+_SKU_SPLIT_RE = re.compile(r"[,/|]")
+
+
+def _split_skus(sku):
+    """Split a (possibly combined) SKU string into its individual SKU tokens.
+    A combo/paired order ships on one AWB with several SKUs joined by , / or |."""
+    if not sku:
+        return []
+    return [t.strip() for t in _SKU_SPLIT_RE.split(sku) if t.strip()]
+
+
 def _build_product_analysis(items, top=500):
     """Spend (with GST), shipments and charged weight grouped by PRODUCT (SKU),
     across the whole invoice set. Products are keyed by their SKU string (the
@@ -1264,6 +1281,64 @@ def _build_product_analysis(items, top=500):
         "total_shipments": total_ship,
         "total_weight": round(total_weight, 1),
         "total_sell_value": round(total_value, 2) if total_value else None,
+    }
+
+
+def _build_multi_sku_awbs(items, sku2cat=None, top=1000):
+    """List every AWB that ships MORE THAN ONE distinct SKU (a combo / multi-
+    product shipment under a single waybill), with the number of products on it.
+
+    One row per such AWB line: the AWB number, the count of distinct SKUs, the
+    SKU list and their product names (resolved from the item master when
+    available), the charged weight and the shipping charge for that AWB. Rows are
+    ranked by product count (most products first), then by charge. Single-SKU and
+    no-SKU lines are ignored — this view is only about bundled shipments."""
+    sku2cat = sku2cat or {}
+    rows = []
+    all_awbs = 0
+    multi_awbs = 0
+    multi_spend = 0.0
+    multi_weight = 0.0
+    product_units = 0     # total distinct-SKU count across multi-SKU AWBs
+    for i in items:
+        n = i.get("shipments") or 0
+        all_awbs += n
+        toks = _split_skus(i.get("sku") or "")
+        if len(toks) <= 1:
+            continue
+        names = []
+        for t in toks:
+            ent = sku2cat.get(t.upper())
+            nm = (ent[1] or "").strip() if ent else ""
+            names.append(nm or t.upper())
+        amt = i.get("amount") or 0.0
+        wt = i.get("weight_kg") or 0.0
+        multi_awbs += n
+        multi_spend += amt
+        multi_weight += wt
+        product_units += len(toks)
+        rows.append({
+            "awb": i.get("awb") or "",
+            "invoice_number": i.get("invoice_number") or "",
+            "carrier": i.get("carrier") or "",
+            "order_id": i.get("order_id") or "",
+            "product_count": len(toks),
+            "skus": [t.upper() for t in toks],
+            "names": names,
+            "weight": round(wt, 2),
+            "amount": round(amt, 2),
+        })
+    rows.sort(key=lambda r: (-r["product_count"], -r["amount"]))
+    return {
+        "rows": rows[:top],
+        "row_total": len(rows),
+        "shown": min(top, len(rows)),
+        "multi_awbs": multi_awbs,               # AWB lines carrying >1 SKU
+        "all_awbs": all_awbs,                   # every AWB line (for share)
+        "spend": round(multi_spend, 2),
+        "weight": round(multi_weight, 1),
+        "avg_products": round(product_units / len(rows), 2) if rows else 0,
+        "max_products": max((r["product_count"] for r in rows), default=0),
     }
 
 
@@ -1551,6 +1626,9 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
 
     # Product-wise spend breakdown across the whole invoice (by SKU).
     product_analysis = _build_product_analysis(items)
+    # AWBs that ship more than one distinct SKU (bundled/combo shipments), with
+    # the number of products under each waybill.
+    multi_sku_awbs = _build_multi_sku_awbs(items, sku2cat=sku2cat)
 
     # Compare BlueDart's charged weight to the item-master billable weight to
     # flag likely weight over-charges (dispute opportunities).
@@ -1563,17 +1641,20 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
     lane_comparison["matched"] = lane_matched
     lane_comparison["total_lines"] = len(items)
 
-    total_spend = sum(i["amount"] for i in items)
-    total_ship = sum(i["shipments"] for i in items)
-    total_weight = sum((i["weight_kg"] or 0.0) for i in items)
-
+    # Grand totals + per-carrier breakdown in a SINGLE pass over the lines
+    # (previously four separate passes: three sum()s plus the carrier loop).
+    total_spend = 0.0
+    total_ship = 0
+    total_weight = 0.0
     cb = {}
     for i in items:
+        amt = i["amount"]; ship = i["shipments"]; wt = i["weight_kg"] or 0.0
+        total_spend += amt; total_ship += ship; total_weight += wt
         g = cb.setdefault(i["carrier"], {"carrier": i["carrier"], "spend": 0.0,
                                          "shipments": 0, "weight": 0.0})
-        g["spend"] += i["amount"]; g["shipments"] += i["shipments"]
-        if i["weight_kg"]:
-            g["weight"] += i["weight_kg"]
+        g["spend"] += amt; g["shipments"] += ship
+        if wt:
+            g["weight"] += wt
     carriers = []
     for g in sorted(cb.values(), key=lambda x: -x["spend"]):
         carriers.append({"carrier": g["carrier"], "spend": round(g["spend"], 1),
@@ -1748,6 +1829,7 @@ def build_cost_report(items, files=None, awb2cat=None, sku2cat=None,
             "total_shipments": sum(r["shipments"] for r in rrows),
             "subcategories": subcategory_analysis,
             "products": product_analysis,
+            "multi_sku_awbs": multi_sku_awbs,
             "weight_dispute": weight_dispute,
         }
 

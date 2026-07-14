@@ -225,9 +225,22 @@ def _invoice_report(carrier_filter=None):
     # session (session entries override), so weight-dispute comparison works
     # without re-uploading the master every time.
     dm = _default_master()
-    eff_awb2cat = dict(dm["awb2cat"]); eff_awb2cat.update(_INVOICE_CACHE.get("awb2cat") or {})
-    eff_sku2cat = dict(dm["sku2cat"]); eff_sku2cat.update(_INVOICE_CACHE.get("sku2cat") or {})
-    eff_sku2vol = dict(dm["sku2vol"]); eff_sku2vol.update(_INVOICE_CACHE.get("sku2vol") or {})
+
+    # Merge the persisted default master with any session-uploaded master
+    # (session entries override). The masters can be large (thousands of SKUs),
+    # so only copy when there IS a session override; otherwise reuse the cached
+    # default dict directly (build_cost_report treats these maps read-only).
+    def _eff_master(key):
+        base = dm.get(key) or {}
+        override = _INVOICE_CACHE.get(key) or {}
+        if not override:
+            return base
+        merged = dict(base)
+        merged.update(override)
+        return merged
+    eff_awb2cat = _eff_master("awb2cat")
+    eff_sku2cat = _eff_master("sku2cat")
+    eff_sku2vol = _eff_master("sku2vol")
     report = invoices.build_cost_report(
         selected, _INVOICE_CACHE["files"],
         eff_awb2cat, eff_sku2cat,

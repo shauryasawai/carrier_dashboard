@@ -393,81 +393,84 @@ def _pickup_slot(dt):
 # "pregnancy pillow" must hit Maternity before the generic Pillows rule; an
 # "arch support insole" must hit Insoles before Footwears/Orthotics).
 #
-# The top-level categories are fixed (the Frido catalogue); subcategories
-# are a convenience grouping and can be tuned freely. Anything unmatched falls
-# to ("Others", "Other"). Keywords match as case-insensitive substrings.
+# Top-level categories are consolidated into 6 themed groups (Comfort & Sleep,
+# Footwear, Orthopedic & Wellness, Mobility & Furniture, Maternity & Baby Care,
+# Accessories); the subcategory (2nd field) preserves the finer catalogue
+# grouping and can be tuned freely. Anything unmatched falls to
+# ("Others", "Other"). Keywords match as case-insensitive substrings.
 PRODUCT_RULES = [
     # --- Maternity & Baby Care (FIRST, so a pregnancy/maternity/feeding pillow
-    # lands here instead of under Pillows) ---
+    # lands here instead of under Comfort & Sleep) ---
     ("Maternity & Baby Care", "Pregnancy Pillow", ["pregnancy", "maternity"]),
     ("Maternity & Baby Care", "Baby Care", ["baby", "infant", "nursing", "feeding pillow", "kids"]),
 
-    # --- Barefoot (Frido's barefoot shoes/socks line — before Footwear & Socks
-    # so a "barefoot sock shoe" doesn't fall into those broader buckets) ---
-    ("Barefoot", "Barefoot", ["barefoot", "sock shoe", "skinners"]),
+    # --- Footwear :: Barefoot (Frido's barefoot shoes/socks line — before the
+    # broader Footwear/Socks rules so a "barefoot sock shoe" lands here) ---
+    ("Footwear", "Barefoot", ["barefoot", "sock shoe", "skinners"]),
 
-    # --- Mobility Devices (wheelchairs, scooters, transfer/bathroom aids). Early
-    # so a wheelchair mentioning "footrest"/"seat" isn't read as Foot Care/Cushion. ---
-    ("Mobility Devices", "Wheelchair", ["wheelchair", "wheel chair"]),
-    ("Mobility Devices", "Mobility Scooter", ["mobility scooter", "scooter"]),
-    ("Mobility Devices", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist", "walker", "rollator", "crutch"]),
-    ("Mobility Devices", "Commode", ["commode"]),
-    ("Mobility Devices", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair", "ramp"]),
+    # --- Mobility & Furniture :: Mobility Devices (wheelchairs, scooters,
+    # transfer/bathroom aids). Early so a wheelchair mentioning "footrest"/"seat"
+    # isn't read as Foot Care/Cushion. ---
+    ("Mobility & Furniture", "Wheelchair", ["wheelchair", "wheel chair"]),
+    ("Mobility & Furniture", "Mobility Scooter", ["mobility scooter", "scooter"]),
+    ("Mobility & Furniture", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist", "walker", "rollator", "crutch"]),
+    ("Mobility & Furniture", "Commode", ["commode"]),
+    ("Mobility & Furniture", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair", "ramp"]),
 
-    # --- Chairs (ergonomic / office / gaming chairs, recliners) ---
-    ("Chairs", "Ergonomic Chair", ["ergonomic chair", "ergo chair", "office chair", "gaming chair", "study chair"]),
-    ("Chairs", "Recliner", ["recliner"]),
-    ("Chairs", "Chair", ["chair"]),
+    # --- Mobility & Furniture :: Chairs (ergonomic / office / gaming, recliners) ---
+    ("Mobility & Furniture", "Ergonomic Chair", ["ergonomic chair", "ergo chair", "office chair", "gaming chair", "study chair"]),
+    ("Mobility & Furniture", "Recliner", ["recliner"]),
+    ("Mobility & Furniture", "Chair", ["chair"]),
 
-    # --- Workspace (standing desks, laptop tables/stands, workstation gear) ---
-    ("Workspace", "Standing Desk", ["standing desk", "height desk", "adjustable desk"]),
-    ("Workspace", "Desk & Table", ["laptop table", "study table", "work table", "desk", "workstation"]),
-    ("Workspace", "Stand & Mount", ["laptop stand", "monitor stand", "monitor arm", "monitor mount", "laptop mount", "laptop holder", "monitor", "foot rest", "footrest"]),
+    # --- Mobility & Furniture :: Workspace (standing desks, laptop tables/stands) ---
+    ("Mobility & Furniture", "Standing Desk", ["standing desk", "height desk", "adjustable desk"]),
+    ("Mobility & Furniture", "Desk & Table", ["laptop table", "study table", "work table", "desk", "workstation"]),
+    ("Mobility & Furniture", "Stand & Mount", ["laptop stand", "monitor stand", "monitor arm", "monitor mount", "laptop mount", "laptop holder", "monitor", "foot rest", "footrest"]),
 
-    # --- Insoles (before Footwear/Orthotics; an insole is its own category) ---
-    ("Insoles", "Insoles", ["insole", "arch support", "shoe insert", "foot insert"]),
+    # --- Footwear :: Insoles (before the broader Footwear/Orthopedic rules) ---
+    ("Footwear", "Insoles", ["insole", "arch support", "shoe insert", "foot insert"]),
 
-    # --- Socks ---
-    ("Socks", "Socks", ["sock"]),
+    # --- Footwear :: Socks ---
+    ("Footwear", "Socks", ["sock"]),
 
-    # --- Masks (face / anti-pollution masks; sleep & eye masks -> Personal Care) ---
-    ("Masks", "Face Mask", ["face mask", "n95", "n-95", "anti pollution", "anti-pollution", "pollution mask", "surgical mask"]),
+    # --- Orthopedic & Wellness :: Face Mask (anti-pollution; sleep/eye masks below) ---
+    ("Orthopedic & Wellness", "Face Mask", ["face mask", "n95", "n-95", "anti pollution", "anti-pollution", "pollution mask", "surgical mask"]),
 
-    # --- Mattress Topper Protector ---
-    ("Mattress Topper Protector", "Topper", ["mattress topper", "topper"]),
-    ("Mattress Topper Protector", "Protector", ["mattress protector", "mattress"]),
+    # --- Comfort & Sleep :: Mattress Topper / Protector ---
+    ("Comfort & Sleep", "Topper", ["mattress topper", "topper"]),
+    ("Comfort & Sleep", "Protector", ["mattress protector", "mattress"]),
 
-    # --- Covers (product covers — before Pillows/Cushions so "pillow cover" and
-    # "cushion cover" land here, not in Pillows/Cushions) ---
-    ("Covers", "Covers", ["cuddle cover", "wedge cover", "pillow cover", "cushion cover", "seat cover", "replacement cover", "cover"]),
+    # --- Comfort & Sleep :: Covers (before Pillows/Cushions rules so "pillow
+    # cover" and "cushion cover" land here) ---
+    ("Comfort & Sleep", "Covers", ["cuddle cover", "wedge cover", "pillow cover", "cushion cover", "seat cover", "replacement cover", "cover"]),
 
-    # --- Pillows ---
-    ("Pillows", "Neck Pillow", ["neck pillow", "cervical", "neck contour", "travel pillow"]),
-    ("Pillows", "Wedge Pillow", ["wedge"]),
-    ("Pillows", "Sleep Pillow", ["sleep pillow", "cozy pillow", "memory foam pillow", "bed pillow", "pillow"]),
+    # --- Comfort & Sleep :: Pillows ---
+    ("Comfort & Sleep", "Neck Pillow", ["neck pillow", "cervical", "neck contour", "travel pillow"]),
+    ("Comfort & Sleep", "Wedge Pillow", ["wedge"]),
+    ("Comfort & Sleep", "Sleep Pillow", ["sleep pillow", "cozy pillow", "memory foam pillow", "bed pillow", "pillow"]),
 
-    # --- Cushions ---
-    ("Cushions", "Seat Cushion", ["seat cushion", "donut", "coccyx", "seat"]),
-    ("Cushions", "Backrest", ["backrest", "back rest", "lumbar cushion", "lumbar"]),
-    ("Cushions", "Cushion", ["cushion"]),
+    # --- Comfort & Sleep :: Cushions ---
+    ("Comfort & Sleep", "Seat Cushion", ["seat cushion", "donut", "coccyx", "seat"]),
+    ("Comfort & Sleep", "Backrest", ["backrest", "back rest", "lumbar cushion", "lumbar"]),
+    ("Comfort & Sleep", "Cushion", ["cushion"]),
 
-    # --- Footwear (before Orthotics; "footwear"/"foot" would otherwise hit Foot Care) ---
+    # --- Footwear (before Orthopedic; "footwear"/"foot" would otherwise hit Foot Care) ---
     ("Footwear", "Sandals", ["sandal"]),
     ("Footwear", "Slippers", ["slipper", "flip flop", "flipflop", "clog", "chappal"]),
     ("Footwear", "Shoes", ["shoe", "sneaker", "footwear"]),
 
-    # --- Orthotics (posture, braces, joint & foot supports) ---
-    ("Orthotics", "Posture Corrector", ["posture"]),
-    ("Orthotics", "Knee & Joint Support", ["knee", "ankle", "elbow", "wrist", "shoulder"]),
-    ("Orthotics", "Braces & Wraps", ["brace", "wrap", "lumbo sacral", "sacral", "compression", "support belt", "belt", "support"]),
-    ("Orthotics", "Foot Care", ["bunion", "heel", "plantar", "toe", "arch", "orthotic", "foot"]),
+    # --- Orthopedic & Wellness :: Orthotics (posture, braces, joint & foot supports) ---
+    ("Orthopedic & Wellness", "Posture Corrector", ["posture"]),
+    ("Orthopedic & Wellness", "Knee & Joint Support", ["knee", "ankle", "elbow", "wrist", "shoulder"]),
+    ("Orthopedic & Wellness", "Braces & Wraps", ["brace", "wrap", "lumbo sacral", "sacral", "compression", "support belt", "belt", "support"]),
+    ("Orthopedic & Wellness", "Foot Care", ["bunion", "heel", "plantar", "toe", "arch", "orthotic", "foot"]),
 
-    # --- Personal Care (therapy, sleep/eye masks, nasal, massage, pain relief) ---
-    ("Personal Care", "Sleep & Eye Mask", ["eye mask", "sleep mask", "mask"]),
-    ("Personal Care", "Hot/Cold Therapy", ["therapy", "hot & cold", "cold & hot", "heating pad", "heat pad"]),
-    ("Personal Care", "Nasal Care", ["nasal", "nose"]),
-    ("Personal Care", "Massage & Relief", ["massager", "massage", "roller", "pain relief", "pain-relief", "kinesiology", "tape"]),
-    ("Personal Care", "Gloves", ["glove"]),
+    # --- Orthopedic & Wellness :: Personal Care (therapy, sleep/eye masks, nasal, massage) ---
+    ("Orthopedic & Wellness", "Sleep & Eye Mask", ["eye mask", "sleep mask", "mask"]),
+    ("Orthopedic & Wellness", "Hot/Cold Therapy", ["therapy", "hot & cold", "cold & hot", "heating pad", "heat pad"]),
+    ("Orthopedic & Wellness", "Nasal Care", ["nasal", "nose"]),
+    ("Orthopedic & Wellness", "Massage & Relief", ["massager", "massage", "roller", "pain relief", "pain-relief", "kinesiology", "tape"]),
+    ("Orthopedic & Wellness", "Gloves", ["glove"]),
 
     # --- Accessories (wallets, straps, bags, combos, spare parts) ---
     ("Accessories", "Wallet", ["wallet", "card holder", "cardholder"]),
@@ -487,6 +490,49 @@ def _product_category(item_name):
             if kw in text:
                 return (category, subcategory)
     return ("Others", "Other")
+
+
+# ---------------------------------------------------------------------------
+# Consolidated category groups. Shipments are tagged with fine-grained catalogue
+# categories (from the item master's Category column, invoice enrichment, or the
+# name rules above). For the Product breakdown we roll those up into 6 legible
+# groups. This is a DISPLAY rollup only — the fine category is left on the record
+# in case other consumers need the finer taxonomy.
+# ---------------------------------------------------------------------------
+CATEGORY_GROUP = {
+    # Comfort & Sleep
+    "Pillows": "Comfort & Sleep",
+    "Cushions": "Comfort & Sleep",
+    "Mattress Topper Protector": "Comfort & Sleep",
+    "Covers": "Comfort & Sleep",
+    # Footwear
+    "Footwear": "Footwear",
+    "Barefoot": "Footwear",
+    "Insoles": "Footwear",
+    "Socks": "Footwear",
+    # Orthopedic & Wellness
+    "Orthotics": "Orthopedic & Wellness",
+    "Personal Care": "Orthopedic & Wellness",
+    "Masks": "Orthopedic & Wellness",
+    # Mobility & Furniture
+    "Mobility Devices": "Mobility & Furniture",
+    "Chairs": "Mobility & Furniture",
+    "Workspace": "Mobility & Furniture",
+    # Unchanged
+    "Maternity & Baby Care": "Maternity & Baby Care",
+    "Accessories": "Accessories",
+    # Fallbacks
+    "Others": "Others",
+    "Unknown": "Others",
+}
+
+
+def canonical_category(cat):
+    """Roll a fine-grained catalogue category up to one of the 6 consolidated
+    groups. Values already in group form (or unknown labels) pass through."""
+    if not cat:
+        return cat
+    return CATEGORY_GROUP.get(cat, cat)
 
 
 # ---------------------------------------------------------------------------
@@ -1838,7 +1884,9 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
                 cell["delivered"] += 1
 
         # -- product economics tree --
-        cat = r.get("category") or "Unknown"
+        # Roll the fine catalogue category up to one of the 6 display groups
+        # (the record keeps its fine category on the row).
+        cat = canonical_category(r.get("category") or "Unknown")
         sub = r.get("subcategory") or "Unknown"
         acct = r.get("account") or "(unknown)"
         if r.get("item_name"):
@@ -1957,16 +2005,5 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         "filters": filter_opts,
         "weights": {k: int(v * 100) for k, v in WEIGHTS.items()},
     }
-    # Profit & Loss block (actual-sales P&L on the net order value). Computed
-    # from the same rows using the per-row de-duplicated revenue (_rev) and
-    # outcome stamped above. Kept defensive: a missing/broken COGS master must
-    # never break the core efficiency report.
-    try:
-        from . import cogs as _cogs
-        report["pnl"] = _cogs.compute_pnl(rows)
-    except Exception:  # noqa: BLE001
-        import logging as _logging
-        _logging.getLogger(__name__).exception("P&L computation failed")
-        report["pnl"] = {"configured": False, "overall": None, "categories": []}
     _report_cache_put(records, _ckey, report)
     return report
