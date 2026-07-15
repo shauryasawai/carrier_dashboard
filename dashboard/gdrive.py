@@ -136,38 +136,13 @@ def download(file_id, mime=None, svc=None):
     return buf.getvalue()
 
 
-def download_many(files, max_workers=8):
-    """Download several Drive files concurrently.
+def new_service():
+    """Build a Drive API client to reuse across several download() calls in one
+    request. Rebuilding the client per file (new credentials + a discovery fetch)
+    is the main per-file overhead, so callers downloading many files should build
+    it once here and pass it to each download().
 
-    Returns a list of (file, data_bytes, error) tuples in the same order as
-    `files`; `data_bytes` is None (and `error` a message) for any file that
-    failed, so one bad file never aborts the batch.
-
-    Downloads are network-bound, so fetching them in parallel is far faster than
-    one-at-a-time. httplib2 (under the API client) is not thread-safe, so each
-    worker thread builds and reuses its own Drive service via thread-local
-    storage rather than sharing a single service across threads.
-    """
-    import concurrent.futures
-    import threading
-
-    files = list(files)
-    if not files:
-        return []
-    workers = max(1, min(max_workers, len(files)))
-    tl = threading.local()
-
-    def _svc():
-        svc = getattr(tl, "svc", None)
-        if svc is None:
-            svc = tl.svc = _service()
-        return svc
-
-    def _one(f):
-        try:
-            return (f, download(f["id"], f.get("mimeType"), svc=_svc()), None)
-        except Exception as exc:  # noqa: BLE001 - report per-file, keep going
-            return (f, None, str(exc))
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
-        return list(ex.map(_one, files))
+    Note: downloads are kept sequential (one reused client, no threads). Parallel
+    downloads segfaulted the Python worker on Vercel's serverless runtime, where
+    native SSL under the API client is not safe across threads."""
+    return _service()

@@ -1159,13 +1159,17 @@ def import_from_drive(request):
 
     errors = []
     master_saved = False
-    # Fetch all of the month's files concurrently (network-bound) before parsing
-    # them — far faster than downloading one at a time. Parsing stays sequential
-    # (it mutates the shared invoice cache).
-    for f, data, err in gdrive.download_many(invoice_files):
+    # Build the Drive client once and reuse it for every file — rebuilding it per
+    # file (new credentials + discovery fetch) was the main slowdown. Downloads
+    # stay sequential: parallel threads segfaulted the worker on Vercel's
+    # serverless runtime, and one-file-at-a-time also keeps peak memory low.
+    svc = gdrive.new_service()
+    for f in invoice_files:
         name = f.get("name")
-        if err is not None:
-            errors.append(f"{name}: download failed ({err})")
+        try:
+            data = gdrive.download(f["id"], f.get("mimeType"), svc=svc)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{name}: download failed ({exc})")
             continue
         kind = _ingest_into_cache(name, data, errors)
         # A master file found in Drive becomes the persisted default item master
