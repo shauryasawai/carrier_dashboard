@@ -69,11 +69,7 @@ def _service():
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=_SCOPES)
-    try:
-        return build("drive", "v3", credentials=creds,
-                     cache_discovery=False, static_discovery=True)
-    except TypeError:
-        return build("drive", "v3", credentials=creds, cache_discovery=False)
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 def supported(name):

@@ -425,6 +425,12 @@ def _records_from_arrow(query_job) -> list | None:
     (pyarrow, google-cloud-bigquery-storage) aren't installed or anything goes
     wrong, so the caller can fall back to plain row iteration.
     """
+    # Escape hatch: some constrained runtimes (e.g. Vercel serverless) can't run
+    # pyarrow's native code and segfault *inside* to_arrow() — a crash that no
+    # try/except can catch. Set BQ_DISABLE_ARROW=1 to skip Arrow entirely and let
+    # the caller fall back to plain REST row iteration.
+    if _env_flag("BQ_DISABLE_ARROW"):
+        return None
     result = query_job.result()
     table = None
     # Tier 1 — BigQuery Storage Read API (true columnar streaming, the fastest).
@@ -645,12 +651,15 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # NOT use create_bqstorage_client=True here: when the Storage API isn't
     # enabled it can silently yield an empty table and drop all enrichment.)
     cols = None
-    try:
-        table = job.result().to_arrow(create_bqstorage_client=False)
-        cols = {n: table.column(n).to_pylist() for n in
-                ("awb", "sku", "items", "order_id", "order_value")}
-    except Exception:  # noqa: BLE001 - pyarrow missing/incompatible -> row iteration
-        cols = None
+    # BQ_DISABLE_ARROW=1 skips pyarrow (which can segfault on some serverless
+    # runtimes) and goes straight to REST row iteration below.
+    if not _env_flag("BQ_DISABLE_ARROW"):
+        try:
+            table = job.result().to_arrow(create_bqstorage_client=False)
+            cols = {n: table.column(n).to_pylist() for n in
+                    ("awb", "sku", "items", "order_id", "order_value")}
+        except Exception:  # noqa: BLE001 - pyarrow missing/incompatible -> row iteration
+            cols = None
     if cols is not None:
         awb_c, sku_c = cols["awb"], cols["sku"]
         items_c, ord_c, val_c = cols["items"], cols["order_id"], cols["order_value"]

@@ -1103,6 +1103,7 @@ def import_from_drive(request):
     `month` (REQUIRED to import; the "YYYY-MM"-style key from the months list),
     `append=1` to add to the current set instead of replacing."""
     from . import gdrive, invoices
+    logger.info("drive import: start (action=%s)", request.POST.get("action") or "import")
     if not gdrive.is_configured():
         return JsonResponse(
             {"error": "Google Drive isn't configured (no service-account "
@@ -1121,6 +1122,8 @@ def import_from_drive(request):
                       f"service account, and the Drive API enabled?): {exc}"}, status=502)
 
     invoice_files = [f for f in files if gdrive.supported(f.get("name"))]
+    logger.info("drive import: listed %d file(s) from Drive, %d supported",
+                len(files), len(invoice_files))
     if not invoice_files:
         return JsonResponse(
             {"error": "No .xlsx / .xlsb / .csv files found in that Drive folder."},
@@ -1163,6 +1166,7 @@ def import_from_drive(request):
     # file (new credentials + discovery fetch) was the main slowdown. Downloads
     # stay sequential: parallel threads segfaulted the worker on Vercel's
     # serverless runtime, and one-file-at-a-time also keeps peak memory low.
+    logger.info("drive import: month=%s, downloading %d file(s)", month, len(invoice_files))
     svc = gdrive.new_service()
     for f in invoice_files:
         name = f.get("name")
@@ -1171,6 +1175,7 @@ def import_from_drive(request):
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{name}: download failed ({exc})")
             continue
+        logger.info("drive import: downloaded %s (%d bytes), parsing", name, len(data))
         kind = _ingest_into_cache(name, data, errors)
         # A master file found in Drive becomes the persisted default item master
         # (so it's remembered across restarts, like the "Update item master"
@@ -1199,12 +1204,27 @@ def import_from_drive(request):
 
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
-    _refresh_invoice_product_map()
+    # The BigQuery product enrichment scans a month-window of the (unpartitioned)
+    # shipment table and materialises it via pyarrow — a heavy, memory-hungry step
+    # and the most likely cause of the serverless SIGSEGV. It only adds best-effort
+    # category/SKU detail, so it is OFF by default on the Drive path; set
+    # INVOICE_ENABLE_BQ_ENRICH=1 to turn it back on (ideally once the table is
+    # partitioned, and with BQ_DISABLE_ARROW=1 to avoid pyarrow).
+    if os.environ.get("INVOICE_ENABLE_BQ_ENRICH") in ("1", "true", "True"):
+        logger.info("drive import: parsed %d item(s); starting BQ product enrichment",
+                    len(_INVOICE_CACHE["items"]))
+        _refresh_invoice_product_map()
+        logger.info("drive import: BQ product enrichment done")
+    else:
+        logger.info("drive import: parsed %d item(s); BQ enrichment skipped by "
+                    "default (set INVOICE_ENABLE_BQ_ENRICH=1 to enable)",
+                    len(_INVOICE_CACHE["items"]))
     report = _invoice_report()
     report["imported_from_drive"] = len(invoice_files)
     report["imported_month"] = month
     if errors:
         report["warnings"] = errors
+    logger.info("drive import: complete, returning report")
     return JsonResponse(report)
 
 
