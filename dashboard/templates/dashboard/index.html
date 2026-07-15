@@ -3726,11 +3726,101 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Import invoices straight from a shared Google Drive folder (server fetches
   // the files, so no upload-size limit). Remembers the folder for the session.
   var driveFolder = "";
+
+  // Step 1 — ask the server which months exist in the Drive folder (no files are
+  // downloaded yet), then make the user pick one before we import anything.
   function importFromDrive() {
     var fd = new FormData();
+    fd.append("action", "months");
     if (driveFolder) fd.append("folder", driveFolder);
-    invSetHint("Importing from Google Drive…", null);
-    showLoading("Importing from Google Drive…", "Fetching & parsing invoice files");
+    invSetHint("Checking Google Drive for available months…", null);
+    showLoading("Reading Google Drive…", "Finding which months are available");
+    invPost(fd, window.DRIVE_URL).then(function (rep) {
+      finishLoading();
+      var months = (rep && rep.months) || [];
+      if (!months.length) {
+        invSetHint("No invoice files found in the Drive folder.", "err");
+        return;
+      }
+      showDriveMonthPicker(months);
+    }).catch(function (err) {
+      failLoading(err.message);
+      // Only prompt when the folder truly isn't configured — NOT when Drive
+      // read/access failed (that error also contains the word "folder").
+      if (/no drive folder set|GDRIVE_INVOICE_FOLDER/i.test(err.message) && !driveFolder) {
+        var f = window.prompt("Paste the Google Drive folder link (or ID) that holds the invoices:");
+        if (f && f.trim()) { driveFolder = f.trim(); importFromDrive(); return; }
+      }
+      invSetHint(err.message, "err");
+    });
+  }
+
+  // Inject the month-picker modal styles once, reusing the app's CSS variables.
+  function ensureDriveModalStyles() {
+    if ($("driveMonthModalStyles")) return;
+    var st = document.createElement("style");
+    st.id = "driveMonthModalStyles";
+    st.textContent =
+      ".drive-modal-overlay{position:fixed;inset:0;z-index:1000;display:flex;align-items:center;" +
+      "justify-content:center;background:rgba(15,23,42,.45);}" +
+      ".drive-modal{background:var(--paper,#fff);color:var(--ink,#0f172a);border-radius:14px;" +
+      "padding:22px 24px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,.25);}" +
+      ".drive-modal h3{margin:0 0 6px;font-size:17px;}" +
+      ".drive-modal p{margin:0 0 16px;font-size:13px;color:var(--muted,#64748b);}" +
+      ".drive-modal-field{display:flex;flex-direction:column;gap:6px;font-size:13px;margin-bottom:18px;}" +
+      ".drive-modal-field select{padding:9px 10px;border:1px solid var(--line-strong,#cbd5e1);" +
+      "border-radius:8px;font-size:14px;background:var(--paper,#fff);color:var(--ink,#0f172a);}" +
+      ".drive-modal-actions{display:flex;justify-content:flex-end;gap:10px;}" +
+      ".drive-modal-actions button[disabled]{opacity:.5;cursor:not-allowed;}";
+    document.head.appendChild(st);
+  }
+
+  // Step 2 — a small modal listing ONLY the months present in the Drive folder.
+  // Selection is mandatory: there is no "all months" option and Import stays
+  // disabled until a month is chosen.
+  function showDriveMonthPicker(months) {
+    ensureDriveModalStyles();
+    var old = $("driveMonthModal"); if (old) old.parentNode.removeChild(old);
+    var overlay = document.createElement("div");
+    overlay.id = "driveMonthModal";
+    overlay.className = "drive-modal-overlay";
+    var opts = months.map(function (m) {
+      var c = m.count ? " (" + m.count + " file" + (m.count === 1 ? "" : "s") + ")" : "";
+      return '<option value="' + esc(m.key) + '">' + esc(m.label) + c + '</option>';
+    }).join("");
+    overlay.innerHTML =
+      '<div class="drive-modal" role="dialog" aria-modal="true" aria-label="Import from Google Drive">' +
+        '<h3>Import from Google Drive</h3>' +
+        '<p>Choose which month’s invoices to import. Only months found in the Drive folder are listed.</p>' +
+        '<label class="drive-modal-field"><span>Month</span>' +
+          '<select id="driveMonthSelect"><option value="" selected disabled>Choose a month…</option>' + opts + '</select>' +
+        '</label>' +
+        '<div class="drive-modal-actions">' +
+          '<button type="button" class="btn-ghost" id="driveMonthCancel">Cancel</button>' +
+          '<button type="button" class="btn-primary" id="driveMonthGo" disabled>Import month</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    var sel = $("driveMonthSelect"), go = $("driveMonthGo");
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    sel.addEventListener("change", function () { go.disabled = !sel.value; });
+    $("driveMonthCancel").addEventListener("click", close);
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+    go.addEventListener("click", function () {
+      if (!sel.value) return;
+      var label = sel.options[sel.selectedIndex].text;
+      close();
+      runDriveImport(sel.value, label);
+    });
+  }
+
+  // Step 3 — download & parse only the selected month's files.
+  function runDriveImport(month, monthLabel) {
+    var fd = new FormData();
+    fd.append("month", month);
+    if (driveFolder) fd.append("folder", driveFolder);
+    invSetHint("Importing " + (monthLabel || "selected month") + " from Google Drive…", null);
+    showLoading("Importing from Google Drive…", "Fetching & parsing " + (monthLabel || "the selected month"));
     invCarrier = "all";
     invPost(fd, window.DRIVE_URL).then(function (rep) {
       finishLoading();
@@ -3744,17 +3834,12 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       invReport = rep;
       $("invUpload").hidden = true; $("invDash").hidden = false;
       renderCost(rep);
-      var msg = (rep.imported_from_drive ? rep.imported_from_drive + " file(s) imported from Drive" : "");
+      var msg = (rep.imported_from_drive ? rep.imported_from_drive + " file(s) imported from Drive" +
+        (monthLabel ? " · " + monthLabel : "") : "");
       if (rep.warnings && rep.warnings.length) invSetHint((msg ? msg + " · " : "") + rep.warnings.join(" · "), "err");
       else if (msg) invSetHint(msg, null);
     }).catch(function (err) {
       failLoading(err.message);
-      // Only prompt when the folder truly isn't configured — NOT when Drive
-      // read/access failed (that error also contains the word "folder").
-      if (/no drive folder set|GDRIVE_INVOICE_FOLDER/i.test(err.message) && !driveFolder) {
-        var f = window.prompt("Paste the Google Drive folder link (or ID) that holds the invoices:");
-        if (f && f.trim()) { driveFolder = f.trim(); importFromDrive(); return; }
-      }
       invSetHint(err.message, "err");
     });
   }

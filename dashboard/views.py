@@ -1070,6 +1070,23 @@ def _ingest_into_cache(name, data, errors):
     return kind
 
 
+def _sorted_months(buckets):
+    """Order month buckets for display: real calendar months (YYYY-MM) newest
+    first, then month-only buckets, then undated files (named without a parseable
+    month) last."""
+    buckets = list(buckets)
+
+    def _is_dated(m):
+        k = m["key"]
+        return len(k) >= 7 and k[:2] == "20" and k[4] == "-"
+
+    dated = sorted((m for m in buckets if _is_dated(m)),
+                   key=lambda m: m["key"], reverse=True)
+    other = sorted((m for m in buckets if not _is_dated(m)),
+                   key=lambda m: m["key"])
+    return dated + other
+
+
 @auth.team_required
 @require_POST
 def import_from_drive(request):
@@ -1077,9 +1094,15 @@ def import_from_drive(request):
     server-side, and return the report. Bypasses request-body size limits (the
     server downloads the files) and supports monthly auto-import.
 
+    A month must be selected before importing: the file's billing month is
+    inferred from its name (same rule the invoice parser uses), and only files
+    for the chosen month are downloaded and parsed.
+
     Params: `folder` (optional folder ID/link; else GDRIVE_INVOICE_FOLDER env),
+    `action="months"` to list the months present in the folder (no download),
+    `month` (REQUIRED to import; the "YYYY-MM"-style key from the months list),
     `append=1` to add to the current set instead of replacing."""
-    from . import gdrive
+    from . import gdrive, invoices
     if not gdrive.is_configured():
         return JsonResponse(
             {"error": "Google Drive isn't configured (no service-account "
@@ -1103,17 +1126,46 @@ def import_from_drive(request):
             {"error": "No .xlsx / .xlsb / .csv files found in that Drive folder."},
             status=400)
 
+    # Each file's billing month is inferred from its name using the same rule the
+    # invoice parser uses to bucket months, so the client can offer (and require)
+    # only the months that actually exist in the folder — no download needed here.
+    def _month_key(f):
+        return invoices.month_from_filename(f.get("name") or "")[0]
+
+    # action=months: report the months present in the folder (newest first) and
+    # return without downloading anything.
+    if request.POST.get("action") == "months":
+        buckets = {}
+        for f in invoice_files:
+            key, label = invoices.month_from_filename(f.get("name") or "")
+            b = buckets.get(key)
+            if b is None:
+                b = buckets[key] = {"key": key, "label": label, "count": 0}
+            b["count"] += 1
+        return JsonResponse({"months": _sorted_months(buckets.values())})
+
+    # Import path: a month must be selected, and only that month's files load.
+    month = (request.POST.get("month") or "").strip()
+    if not month:
+        return JsonResponse({"error": "Select a month to import."}, status=400)
+    invoice_files = [f for f in invoice_files if _month_key(f) == month]
+    if not invoice_files:
+        return JsonResponse(
+            {"error": "No files for the selected month were found in the Drive "
+                      "folder."}, status=400)
+
     if request.POST.get("append") != "1":
         _reset_invoice_cache()
 
     errors = []
     master_saved = False
-    for f in invoice_files:
+    # Fetch all of the month's files concurrently (network-bound) before parsing
+    # them — far faster than downloading one at a time. Parsing stays sequential
+    # (it mutates the shared invoice cache).
+    for f, data, err in gdrive.download_many(invoice_files):
         name = f.get("name")
-        try:
-            data = gdrive.download(f["id"], f.get("mimeType"))
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: download failed ({exc})")
+        if err is not None:
+            errors.append(f"{name}: download failed ({err})")
             continue
         kind = _ingest_into_cache(name, data, errors)
         # A master file found in Drive becomes the persisted default item master
@@ -1146,6 +1198,7 @@ def import_from_drive(request):
     _refresh_invoice_product_map()
     report = _invoice_report()
     report["imported_from_drive"] = len(invoice_files)
+    report["imported_month"] = month
     if errors:
         report["warnings"] = errors
     return JsonResponse(report)

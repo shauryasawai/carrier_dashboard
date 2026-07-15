@@ -69,7 +69,11 @@ def _service():
     else:
         import google.auth
         creds, _ = google.auth.default(scopes=_SCOPES)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
+    try:
+        return build("drive", "v3", credentials=creds,
+                     cache_discovery=False, static_discovery=True)
+    except TypeError:
+        return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
 def supported(name):
@@ -109,12 +113,17 @@ def _collect(svc, folder_id_, folder_name, recursive, out, depth):
             break
 
 
-def download(file_id, mime=None):
+def download(file_id, mime=None, svc=None):
     """Download a Drive file's bytes. Google-native Sheets are exported to xlsx;
-    everything else is fetched as-is."""
+    everything else is fetched as-is.
+
+    Pass an existing `svc` (from `_service()`) to avoid rebuilding the Drive
+    client — building it re-creates credentials and is wasteful when downloading
+    many files."""
     from googleapiclient.http import MediaIoBaseDownload
 
-    svc = _service()
+    if svc is None:
+        svc = _service()
     if mime and mime.startswith("application/vnd.google-apps"):
         request = svc.files().export_media(fileId=file_id, mimeType=_XLSX_MIME)
     else:
@@ -125,3 +134,40 @@ def download(file_id, mime=None):
     while not done:
         _, done = downloader.next_chunk()
     return buf.getvalue()
+
+
+def download_many(files, max_workers=8):
+    """Download several Drive files concurrently.
+
+    Returns a list of (file, data_bytes, error) tuples in the same order as
+    `files`; `data_bytes` is None (and `error` a message) for any file that
+    failed, so one bad file never aborts the batch.
+
+    Downloads are network-bound, so fetching them in parallel is far faster than
+    one-at-a-time. httplib2 (under the API client) is not thread-safe, so each
+    worker thread builds and reuses its own Drive service via thread-local
+    storage rather than sharing a single service across threads.
+    """
+    import concurrent.futures
+    import threading
+
+    files = list(files)
+    if not files:
+        return []
+    workers = max(1, min(max_workers, len(files)))
+    tl = threading.local()
+
+    def _svc():
+        svc = getattr(tl, "svc", None)
+        if svc is None:
+            svc = tl.svc = _service()
+        return svc
+
+    def _one(f):
+        try:
+            return (f, download(f["id"], f.get("mimeType"), svc=_svc()), None)
+        except Exception as exc:  # noqa: BLE001 - report per-file, keep going
+            return (f, None, str(exc))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(_one, files))
