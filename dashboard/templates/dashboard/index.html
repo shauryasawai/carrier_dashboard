@@ -1430,7 +1430,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <!-- Orders per day (NEW) -->
       <div class="panel">
         <div class="panel-head">
-          <h3>Orders per day</h3>
+          <h3>Orders placed per day (D2C)</h3>
           <p id="dailySub" class="panel-sub"></p>
         </div>
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDaily"></canvas></div>
@@ -2472,8 +2472,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var coverageSuffix = ' <span class="unit">carrier' + (carriers === 1 ? "" : "s") +
       " \u00b7 " + whs.toLocaleString() + " WH</span>";
     var ops = [
-      { label: "NDD orders", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
-      { label: "Avg order\u2192pickup (O2S)", value: s.avg_o2s, kind: "hours" },
+      { label: "NDD Shipments", value: s.ndd_orders, kind: "int", suffix: nddSuffix },
+      { label: "Median order\u2192pickup (O2S)", value: s.avg_o2s, kind: "hours" },
       { label: "Avg pickup\u2192OFD1", value: s.avg_p2o, kind: "hours" },
       { label: "Avg pickup\u2192delivery", value: s.avg_p2d, kind: "hours" },
       { label: "Coverage", value: s.carriers, kind: "int", suffix: coverageSuffix }
@@ -2494,7 +2494,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     }
     var cards = [
       { label: "Order value", value: s.revenue, kind: "money_c",
-        suffix: tag(nc(s.total) + " orders") },
+        suffix: tag(nc(s.order_units != null ? s.order_units : s.total) + " orders") },
       { label: "Delivered value", value: s.delivered_value, kind: "money_c", tone: "good",
         suffix: tag(nc(s.delivered) + " delivered") },
       { label: "RTO value", value: s.rto_value, kind: "money_c", tone: "bad",
@@ -2580,7 +2580,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   function renderPayment(rows, s) {
     if (!$("payTable")) return;
     rows = rows || [];
-    var head = "<thead><tr><th>Payment</th><th>Orders</th><th>Share</th>" +
+    var head = "<thead><tr><th>Payment</th><th>Shipments</th><th>Share</th>" +
       "<th>Revenue</th><th>AOV</th><th>Delivery success</th><th>RTO %</th>" +
       "<th>COD in transit</th></tr></thead>";
     var body = rows.map(function (p) {
@@ -3332,11 +3332,21 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var busiest = daily.find(function (d) { return d.n === maxN; });
     var quietest = daily.find(function (d) { return d.n === minN; });
 
+    // Revenue is sourced from ClickPost (shipped orders), so the most recent
+    // ~3 days are still filling in as orders ship — flag those points so the dip
+    // isn't read as real. The order bars (from the OMS) are complete.
+    var DAY_MS = 86400000;
+    var revCutoff = Date.now() - 3 * DAY_MS;
+    var revIncomplete = daily.map(function (d) {
+      var t = Date.parse(d.date); return !isNaN(t) && t >= revCutoff;
+    });
+    var anyProvisional = revIncomplete.some(Boolean);
+
     if (sub) {
-      sub.textContent = daily.length + " days · busiest " +
-        fmtDay(busiest.date) + " (" + maxN.toLocaleString() + ") · lightest " +
-        fmtDay(quietest.date) + " (" + minN.toLocaleString() + ") · avg " +
-        Math.round(avg).toLocaleString() + "/day · " + fmtINRc(totalRev) + " total";
+      sub.textContent = "OMS order date · not affected by filters · " +
+        daily.length + " days · avg " + Math.round(avg).toLocaleString() +
+        " orders/day · " + fmtINRc(totalRev) + " revenue" +
+        (anyProvisional ? " · last 3 days’ revenue still filling in" : "");
     }
 
     upsertChart("cDaily", {
@@ -3358,6 +3368,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
             label: "Revenue", type: "line", yAxisID: "y1", order: 1,
             data: revenues,
             borderColor: "#5b8def", backgroundColor: "#5b8def",
+            // Grey + dash the trailing (provisional) revenue points/segments.
+            pointBackgroundColor: revIncomplete.map(function (b) { return b ? "#c4d0da" : "#5b8def"; }),
+            pointBorderColor: revIncomplete.map(function (b) { return b ? "#c4d0da" : "#5b8def"; }),
+            segment: {
+              borderColor: function (ctx) { return revIncomplete[ctx.p1DataIndex] ? "#c4d0da" : "#5b8def"; },
+              borderDash: function (ctx) { return revIncomplete[ctx.p1DataIndex] ? [5, 4] : undefined; }
+            },
             borderWidth: 2, tension: 0.3, pointRadius: 2.5, pointHoverRadius: 4, fill: false
           }
         ]

@@ -85,7 +85,13 @@ def _apply_master_categories(records):
 # client can re-filter without re-uploading. Single-process dev use.
 # "window" is the date range the loaded data covers (BigQuery load window),
 # or None for uploaded files; it persists across re-filter requests.
-_CACHE = {"records": None, "window": None}
+# "daily_orders" is the Unicommerce-sourced "orders placed per day" series for
+# the loaded window (None to fall back to the ClickPost-derived daily series,
+# e.g. for uploaded files). See _apply_uc_overrides. O2S is made accurate a
+# different way — by recomputing each record's o2s on the Unicommerce order time
+# at load (see _recompute_o2s_from_uc) — so it flows through every table, not
+# just the headline.
+_CACHE = {"records": None, "window": None, "daily_orders": None}
 
 # Cache of the latest parsed invoice line items + master enrichment maps
 # (Carrier Cost Analysis). awb2cat / sku2cat come from uploaded master files
@@ -398,6 +404,57 @@ def _client_report(report):
     return {k: v for k, v in report.items() if k not in _CLIENT_DROP_KEYS}
 
 
+def _apply_uc_overrides(client_report):
+    """Swap the Orders-per-day series to the Unicommerce "orders placed per day"
+    data when a BigQuery window is loaded (order count complete at placement;
+    the ClickPost series undercounts recent unshipped days). This is window-level
+    and independent of the categorical filters. Safe to mutate: _client_report
+    returns a fresh dict.
+
+    (O2S is handled separately — recomputed onto every record at load time in
+    _recompute_o2s_from_uc — so the headline AND the per-carrier/warehouse O2S
+    columns are all on the same accurate order-received -> pickup basis.)"""
+    daily = _CACHE.get("daily_orders")
+    if daily is not None:
+        client_report["daily"] = daily
+    return client_report
+
+
+def _o2s_mature_days():
+    """Orders younger than this (days) are excluded from O2S — they may not have
+    shipped yet, so counting them would bias O2S low. Env BQ_O2S_MATURE_DAYS (4)."""
+    try:
+        return max(0, int(os.environ.get("BQ_O2S_MATURE_DAYS")))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _recompute_o2s_from_uc(records, order_times):
+    """Recompute each record's O2S (order->pickup, hours) from the accurate
+    Unicommerce order-received timestamp instead of ClickPost's date-only order
+    date, so every O2S figure (headline + per-carrier/warehouse tables) shares one
+    basis. o2s is set to None — i.e. excluded from the averages — when there's no
+    OMS match, no pickup time, a negative gap, or the order is too recent to have
+    reliably shipped (younger than the maturity cut)."""
+    import datetime as _dt
+    cutoff = _dt.date.today() - _dt.timedelta(days=_o2s_mature_days())
+    for r in records:
+        oid = (r.get("order_id") or "").strip().upper()
+        uc_iso = order_times.get(oid)
+        pk_iso = r.get("_pickup_ts")
+        if not uc_iso or not pk_iso:
+            r["o2s"] = None
+            continue
+        try:
+            uc = _dt.datetime.fromisoformat(uc_iso)
+            pk = _dt.datetime.fromisoformat(pk_iso)
+        except (TypeError, ValueError):
+            r["o2s"] = None
+            continue
+        hrs = (pk - uc).total_seconds() / 3600.0
+        r["o2s"] = round(hrs, 2) if (hrs >= 0 and uc.date() <= cutoff) else None
+
+
 def _report_response(request, empty_msg):
     """Build the report from the cached records using the request's filters."""
     records = _CACHE["records"]
@@ -407,11 +464,9 @@ def _report_response(request, empty_msg):
     # The single authoritative date range for the loaded data (BigQuery load
     # window). None for uploaded files; the frontend falls back to pickup span.
     report["load_window"] = _CACHE.get("window")
-    # The orders-per-day series is keyed on the ORDER date — the same dimension
-    # every KPI card and the date filter now count on — so every bar falls inside
-    # the selected order-date range and the chart's order/revenue totals reconcile
-    # with the headline KPI. (See build_report's daily block.)
-    return JsonResponse(_client_report(report))
+    # Orders-per-day and O2S come from Unicommerce (complete/real-time) when a
+    # BigQuery window is loaded; otherwise the ClickPost-derived values stand.
+    return JsonResponse(_apply_uc_overrides(_client_report(report)))
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +989,7 @@ def sla_config(request):
         reclassify(records)
         report = build_report(records, **_filter_kwargs(request))
         report["load_window"] = _CACHE.get("window")
-        out["report"] = _client_report(report)
+        out["report"] = _apply_uc_overrides(_client_report(report))
     return JsonResponse(out)
 
 
@@ -964,6 +1019,10 @@ def process_upload(request):
         _apply_master_categories(records)
         _CACHE["records"] = records
         _CACHE["window"] = None  # uploaded file has no BigQuery load window
+        # Uploaded files use their own (ClickPost) per-day series and O2S (there's
+        # no OMS order time to recompute against), so drop any Unicommerce daily
+        # override left over from a previous BigQuery load.
+        _CACHE["daily_orders"] = None
 
     return _report_response(
         request, "No data loaded yet. Load from BigQuery or upload a file first."
@@ -1280,5 +1339,29 @@ def load_bigquery(request):
         _CACHE["window"] = {"from": win_from or None, "to": win_to or None, "days": None}
     else:
         _CACHE["window"] = bq.lookback_window(lookback_days)
+
+    # Orders-per-day chart: pull "orders placed per day" from Unicommerce for the
+    # SAME window. ClickPost only holds shipped orders, so its recent days look
+    # like a false decline; Unicommerce is complete at placement time. Best-effort
+    # — on any failure (table missing, auth) fall back to the ClickPost series.
+    uc_from = win_from or None if use_range else None
+    uc_to = win_to or None if use_range else None
+    uc_lookback = None if use_range else lookback_days
+    try:
+        _CACHE["daily_orders"] = bq.fetch_d2c_orders_per_day(
+            date_from=uc_from, date_to=uc_to, lookback_days=uc_lookback) or None
+    except Exception:  # noqa: BLE001 - never block the load on the orders series
+        logger.exception("Unicommerce orders-per-day fetch failed")
+        _CACHE["daily_orders"] = None
+    # Accurate O2S: recompute each record's order->pickup on the Unicommerce
+    # order-received time (falls back to the ClickPost value on failure), so the
+    # headline card and every per-carrier/warehouse O2S column share one basis.
+    try:
+        order_times = bq.fetch_d2c_order_times(
+            date_from=uc_from, date_to=uc_to, lookback_days=uc_lookback)
+        if order_times:
+            _recompute_o2s_from_uc(records, order_times)
+    except Exception:  # noqa: BLE001 - never block the load on the O2S refinement
+        logger.exception("Unicommerce O2S recompute failed")
 
     return _report_response(request, "No data loaded.")

@@ -814,9 +814,12 @@ def build_record(get):
         "attempts": attempts,
         "p2o": p2o,
         "p2d": p2d,
-        # O2S: order-received -> pickup processing time, in hours. Order date is
-        # often date-only, so this is effectively (pickup - order midnight).
+        # O2S: order-received -> pickup processing time, in hours. From ClickPost's
+        # order_ts here (often date-only). For BigQuery loads this is recomputed on
+        # the accurate Unicommerce order-received time (see views._recompute_o2s_
+        # from_uc), which needs the raw pickup timestamp kept below.
         "o2s": _hours_between(order, pickup),
+        "_pickup_ts": pickup.isoformat() if pickup else None,
         "promised_tat": promised_tat,
         "tat_status": tat_status,
         "tat_margin": tat_margin,
@@ -887,6 +890,18 @@ def parse_workbook(file_obj, filename: str = "") -> list[dict]:
 def _mean(values):
     clean = [v for v in values if v is not None]
     return sum(clean) / len(clean) if clean else None
+
+
+def _median(values):
+    """Median of the non-None values (None when empty). Used for O2S, which is
+    right-skewed by a slow tail, so the median is a more representative
+    efficiency figure than the mean."""
+    clean = sorted(v for v in values if v is not None)
+    n = len(clean)
+    if not n:
+        return None
+    mid = n // 2
+    return clean[mid] if n % 2 else (clean[mid - 1] + clean[mid]) / 2
 
 
 # Carrier accounts treated as Next-Day-Delivery (NDD) partners, matched as
@@ -1030,7 +1045,7 @@ def _kpi_finalize(groups, label_field, extra_fields) -> list[dict]:
             "delivered": g["delivered"],
             "success_rate": (g["delivered"] / g["picked"] * 100) if g["picked"] else None,
             "first_attempt_rate": (g["first_attempt"] / g["delivered"] * 100) if g["delivered"] else None,
-            "o2s": _mean(g["o2s"]),
+            "o2s": _median(g["o2s"]),
             "p2o": _mean(g["p2o"]),
             "p2d": _mean(g["p2d"]),
             "avg_attempts": _mean(g["att"]),
@@ -1743,8 +1758,10 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     tier_revenue = {t: 0.0 for t in TIER_LEVELS + ["Unknown"]}
     # Averages accumulated inline as (sum, count of non-None) instead of building
     # three throwaway lists and scanning the rows three more times via _mean().
-    _p2o_sum = _p2d_sum = _o2s_sum = 0.0
-    _p2o_n = _p2d_n = _o2s_n = 0
+    _p2o_sum = _p2d_sum = 0.0
+    _p2o_n = _p2d_n = 0
+    # O2S is summarised as a median (right-skewed), so collect its values.
+    _o2s_vals = []
     # ONE pass now computes each row's de-duplicated revenue (_rev) AND every
     # count/value reduction below AND the three timing averages — folding what
     # used to be the revenue-dedup loop, the summary loop and three _mean() list
@@ -1797,14 +1814,13 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             _p2d_n += 1
         o2s_v = r["o2s"]
         if o2s_v is not None:
-            _o2s_sum += o2s_v
-            _o2s_n += 1
+            _o2s_vals.append(o2s_v)
     # Distinct order units (for a true average ORDER value, not per-shipment).
     order_units = len(_order_ids) + _rev_no_oid
     aov = (revenue / order_units) if order_units else None
     avg_p2o = (_p2o_sum / _p2o_n) if _p2o_n else None
     avg_p2d = (_p2d_sum / _p2d_n) if _p2d_n else None
-    avg_o2s = (_o2s_sum / _o2s_n) if _o2s_n else None
+    avg_o2s = _median(_o2s_vals)   # median (right-skewed); matches per-carrier o2s
 
     # ---- Payment-mode performance -------------------------------------------
     # Management KPI block grouped by payment mode. `cod_exposure` (COD only) is
@@ -1948,6 +1964,9 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     report = {
         "summary": {
             "total": total,
+            # Distinct orders (one order can span several shipment rows), so the
+            # Order value card can show "orders" rather than the shipment count.
+            "order_units": order_units,
             "picked": picked,
             "delivered": delivered,
             "success_rate": _round(delivered / picked * 100 if picked else None),

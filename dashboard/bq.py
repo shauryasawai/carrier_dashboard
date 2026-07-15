@@ -710,3 +710,201 @@ def fetch_records(lookback_days: int | None = None,
         import time
         _RESULT_CACHE[cache_key] = (time.monotonic(), records)
     return records
+
+
+# ---------------------------------------------------------------------------
+# Unicommerce "orders placed per day" (D2C) — an independent, order-level series
+# used ONLY for the Orders-per-day chart.
+#
+# WHY: the ClickPost shipment table (which powers every other metric) only holds
+# an order AFTER it ships, and orders take ~3-4 days to be dispatched. So a
+# per-day count keyed on ClickPost undercounts the most recent few days and looks
+# like a false decline. The Unicommerce Sale Orders table records every order at
+# PLACEMENT, so this series is complete for every past day and refreshes in
+# near-real-time (batch sync); only the in-progress current day is partial.
+#
+# SCOPE: "self-shipped D2C" channels — the Shopify storefront + Amazon Easy Ship
+# + Custom + B2B. These are the channels that flow through ClickPost, so the
+# series reconciles with the old ClickPost chart on matured data (to within a few
+# %, the extra being D2C orders placed but never shipped via ClickPost).
+#
+# GOTCHAS in this feed:
+#  * The plain OrderDate column is NULL throughout — the populated order time is
+#    OrderDateasddmmyyyyhhMMss (DATETIME).
+#  * The amount columns underwent a cutover (~Jun 2026): older rows populate the
+#    NUMERIC columns (TotalPrice/ShippingCharges), newer rows the *_st STRING
+#    variants. Revenue COALESCEs both so it's complete on either side of the
+#    cutover (reading only *_st made pre-cutover days ramp up from ~0).
+# ---------------------------------------------------------------------------
+def _uc_table_ref():
+    """(project, dataset, table) for the Unicommerce sale-orders table. Defaults
+    to the same project/dataset as the shipment table; each part is overridable
+    via BQ_UC_PROJECT / BQ_UC_DATASET / BQ_UC_TABLE."""
+    project = os.environ.get("BQ_UC_PROJECT") or os.environ.get("BQ_PROJECT")
+    dataset = os.environ.get("BQ_UC_DATASET") or os.environ.get("BQ_DATASET")
+    table = os.environ.get("BQ_UC_TABLE", "Unicommerce_Sale_Orders_Report")
+    return project, dataset, table
+
+
+# Channel predicate identifying self-shipped D2C orders (those that reach
+# ClickPost). Overridable via BQ_UC_D2C_PREDICATE (raw SQL) if the channel set
+# changes. Trusted server config — not interpolated from user input.
+_UC_D2C_PREDICATE = (
+    "(UPPER(ChannelName) LIKE '%SHOPIFY%' "
+    "OR UPPER(ChannelName) = 'AMAZON_API_NEW' "
+    "OR UPPER(ChannelName) = 'CUSTOM' "
+    "OR UPPER(ChannelName) = 'B2B')"
+)
+
+
+def _uc_d2c_predicate() -> str:
+    return os.environ.get("BQ_UC_D2C_PREDICATE") or _UC_D2C_PREDICATE
+
+
+def uc_is_configured() -> bool:
+    return all(_uc_table_ref())
+
+
+def fetch_d2c_orders_per_day(date_from: str | None = None,
+                             date_to: str | None = None,
+                             lookback_days: int | None = None) -> list[dict]:
+    """Orders per day for self-shipped D2C channels: the ORDER COUNT comes from
+    Unicommerce (complete at order-placement time) and the ORDER VALUE (revenue)
+    comes from ClickPost (its declared order/invoice value), joined by order id.
+
+    Returns [{"date": "YYYY-MM-DD", "n": <distinct orders>, "revenue": <₹>}],
+    ordered by Unicommerce order date, for an explicit [date_from, date_to] range
+    or the last `lookback_days` days (same window as fetch_records, so the chart
+    lines up with the loaded shipment window).
+
+    Sourcing revenue from ClickPost (rather than Unicommerce's own amount columns)
+    keeps it consistent with the dashboard's other revenue figures and avoids the
+    Unicommerce amount-column feed cutover. Because ClickPost only holds shipped
+    orders, revenue reflects the shipped subset of each day's orders — the count
+    stays complete, but recent days' revenue fills in as orders ship."""
+    uc_project, uc_dataset, uc_table = _uc_table_ref()
+    cp_project, cp_dataset, cp_table = _table_ref()
+    for p in (uc_project, cp_project):
+        _check_identifier(p, dotted=True)
+    for d in (uc_dataset, cp_dataset):
+        _check_identifier(d)
+    for t in (uc_table, cp_table):
+        _check_identifier(t)
+
+    cmap = _column_map()
+    order_col = cmap.get("order_id", "order_id")
+    value_col = cmap.get("order_value", "invoice_value")
+    _check_identifier(str(order_col))
+    _check_identifier(str(value_col))
+
+    from google.cloud import bigquery  # lazy import (matches _client)
+
+    params = []
+    # Unicommerce order-date window (appends @lo/@hi/@days)...
+    uc_window = _uc_date_window_sql(date_from, date_to, lookback_days, params, bigquery)
+    # ...and the matching ClickPost order-date window, reusing the SAME params.
+    if date_from or date_to:
+        cp_conds = []
+        if date_from:
+            cp_conds.append(f"{_ORDER_DATE_SQL} >= @lo")
+        if date_to:
+            cp_conds.append(f"{_ORDER_DATE_SQL} <= @hi")
+        cp_window = " AND ".join(cp_conds)
+    else:
+        cp_window = f"{_ORDER_DATE_SQL} >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)"
+
+    sql = (
+        "WITH uc AS ("
+        "  SELECT UPPER(TRIM(CAST(DisplayOrderCode AS STRING))) AS oid, "
+        "         DATE(OrderDateasddmmyyyyhhMMss) AS d "
+        f"  FROM `{uc_project}.{uc_dataset}.{uc_table}` "
+        "  WHERE DisplayOrderCode IS NOT NULL "
+        f"    AND {_uc_d2c_predicate()} AND {uc_window} "
+        "  GROUP BY oid, d"
+        "), cp AS ("
+        # One declared order value per order id (the value repeats across an
+        # order's shipment rows, so MAX de-duplicates without under-counting).
+        f"  SELECT UPPER(TRIM(CAST(`{order_col}` AS STRING))) AS oid, "
+        f"         MAX(SAFE_CAST(`{value_col}` AS NUMERIC)) AS order_value "
+        f"  FROM `{cp_project}.{cp_dataset}.{cp_table}` "
+        f"  WHERE `{order_col}` IS NOT NULL AND {cp_window} "
+        "  GROUP BY oid"
+        ") "
+        # LEFT JOIN: every Unicommerce order counts; revenue is added only for
+        # orders ClickPost has a value for (unshipped orders contribute to n, not
+        # revenue).
+        "SELECT uc.d AS d, COUNT(DISTINCT uc.oid) AS n, "
+        "       SUM(cp.order_value) AS revenue "
+        "FROM uc LEFT JOIN cp USING (oid) "
+        "GROUP BY d ORDER BY d"
+    )
+
+    job = _client().query(
+        sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+    out = []
+    for row in job.result():
+        d = row["d"]
+        rev = row["revenue"]
+        out.append({
+            "date": d.isoformat() if d is not None else "",
+            "n": int(row["n"] or 0),
+            "revenue": float(rev) if rev is not None else 0.0,
+        })
+    return out
+
+
+def _uc_date_window_sql(date_from, date_to, lookback_days, params, bigquery):
+    """Build the order-date window predicate for a Unicommerce query, appending
+    any query parameters to `params` (the last N days, or an explicit range)."""
+    if date_from or date_to:
+        conds = []
+        if date_from:
+            conds.append("DATE(OrderDateasddmmyyyyhhMMss) >= @lo")
+            params.append(bigquery.ScalarQueryParameter("lo", "DATE", date_from))
+        if date_to:
+            conds.append("DATE(OrderDateasddmmyyyyhhMMss) <= @hi")
+            params.append(bigquery.ScalarQueryParameter("hi", "DATE", date_to))
+        return " AND ".join(conds)
+    days = _clamp_lookback(lookback_days, default_lookback_days())
+    params.append(bigquery.ScalarQueryParameter("days", "INT64", days))
+    return ("DATE(OrderDateasddmmyyyyhhMMss) "
+            ">= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY)")
+
+
+def fetch_d2c_order_times(date_from: str | None = None,
+                          date_to: str | None = None,
+                          lookback_days: int | None = None) -> dict:
+    """Map of normalised order id -> Unicommerce order-received timestamp (ISO
+    string) for self-shipped D2C orders in the window.
+
+    Used to recompute O2S (order -> pickup) on the accurate order-PLACEMENT time
+    from the OMS instead of ClickPost's date-only order_date — consistently across
+    the headline card AND the per-carrier/warehouse O2S columns (they all read the
+    recomputed per-record o2s). See views._recompute_o2s_from_uc, which also
+    applies the maturity cut so recent unshipped orders don't bias the metric."""
+    project, dataset, table = _uc_table_ref()
+    _check_identifier(project, dotted=True)
+    _check_identifier(dataset)
+    _check_identifier(table)
+
+    from google.cloud import bigquery  # lazy import (matches _client)
+
+    params = []
+    window = _uc_date_window_sql(date_from, date_to, lookback_days, params, bigquery)
+    sql = (
+        "SELECT UPPER(TRIM(CAST(DisplayOrderCode AS STRING))) AS oid, "
+        "MIN(OrderDateasddmmyyyyhhMMss) AS order_ts "
+        f"FROM `{project}.{dataset}.{table}` "
+        "WHERE DisplayOrderCode IS NOT NULL "
+        f"AND {_uc_d2c_predicate()} AND {window} "
+        "GROUP BY oid"
+    )
+    job = _client().query(
+        sql, job_config=bigquery.QueryJobConfig(query_parameters=params))
+    out = {}
+    for row in job.result():
+        oid = row["oid"]
+        ts = row["order_ts"]
+        if oid and ts is not None:
+            out[oid] = ts.isoformat()
+    return out
