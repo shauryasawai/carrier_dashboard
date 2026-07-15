@@ -169,8 +169,11 @@ def _refresh_invoice_product_map():
     inv_awbs = {it["awb"] for it in items if it.get("awb")}
     inv_carriers = {it.get("carrier") for it in items if it.get("carrier")}
     try:
+        # use_arrow=False -> stream rows instead of materialising the whole window
+        # through pyarrow, which was segfaulting the serverless worker.
         awb2prod, order2prod, awb2value, order2value, awb2order = bq.fetch_awb_product_map(
-            lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers)
+            lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers,
+            use_arrow=False)
     except Exception:  # noqa: BLE001 - enrichment is best-effort; never block upload
         logger.exception("Invoice BigQuery enrichment failed")
         return
@@ -1204,21 +1207,19 @@ def import_from_drive(request):
 
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
-    # The BigQuery product enrichment scans a month-window of the (unpartitioned)
-    # shipment table and materialises it via pyarrow — a heavy, memory-hungry step
-    # and the most likely cause of the serverless SIGSEGV. It only adds best-effort
-    # category/SKU detail, so it is OFF by default on the Drive path; set
-    # INVOICE_ENABLE_BQ_ENRICH=1 to turn it back on (ideally once the table is
-    # partitioned, and with BQ_DISABLE_ARROW=1 to avoid pyarrow).
-    if os.environ.get("INVOICE_ENABLE_BQ_ENRICH") in ("1", "true", "True"):
+    # BigQuery product enrichment maps each invoice AWB -> product / category / SKU
+    # (and feeds the weight-dispute check). It now streams rows instead of
+    # materialising the window through pyarrow (see _refresh_invoice_product_map ->
+    # use_arrow=False), so it no longer segfaults the serverless worker. On by
+    # default; set INVOICE_SKIP_BQ_ENRICH=1 to turn it off if ever needed.
+    if os.environ.get("INVOICE_SKIP_BQ_ENRICH") in ("1", "true", "True"):
+        logger.info("drive import: parsed %d item(s); BQ enrichment skipped (env)",
+                    len(_INVOICE_CACHE["items"]))
+    else:
         logger.info("drive import: parsed %d item(s); starting BQ product enrichment",
                     len(_INVOICE_CACHE["items"]))
         _refresh_invoice_product_map()
         logger.info("drive import: BQ product enrichment done")
-    else:
-        logger.info("drive import: parsed %d item(s); BQ enrichment skipped by "
-                    "default (set INVOICE_ENABLE_BQ_ENRICH=1 to enable)",
-                    len(_INVOICE_CACHE["items"]))
     report = _invoice_report()
     report["imported_from_drive"] = len(invoice_files)
     report["imported_month"] = month

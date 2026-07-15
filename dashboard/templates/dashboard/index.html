@@ -3934,6 +3934,16 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if (n == null || isNaN(n)) return "—";
     return "₹" + Math.round(n).toLocaleString("en-IN");
   }
+  // Compact Indian currency for headline figures: crores / lakhs above ₹1L,
+  // plain rupees below (so small values like avg ₹/AWB stay readable).
+  // 1 Cr = 1e7, 1 L = 1e5. Matches the "₹90.00 L" axis style used elsewhere.
+  function inrCr(n) {
+    if (n == null || isNaN(n)) return "—";
+    var v = Math.round(n), a = Math.abs(v);
+    if (a >= 1e7) return "₹" + (v / 1e7).toFixed(2) + " Cr";
+    if (a >= 1e5) return "₹" + (v / 1e5).toFixed(2) + " L";
+    return "₹" + v.toLocaleString("en-IN");
+  }
   function reconVal(invNo, field, base) {
     var e = invReconEdits[invNo];
     if (e && e[field] != null && e[field] !== "") { var v = parseFloat(e[field]); return isNaN(v) ? 0 : v; }
@@ -4208,16 +4218,16 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<th scope="row" class="mono">' + esc(r.invoice_number) + '</th>' +
         '<td>' + esc(r.service_month || "—") + '</td>' +
         '<td class="num grp">' + (r.shipments || 0).toLocaleString("en-IN") + '</td>' +
-        '<td class="num">' + inr(r.amount_ex_gst || 0) + '</td>' +
+        '<td class="num">' + inrCr(r.amount_ex_gst || 0) + '</td>' +
         '<td class="num grp">' + reconInput(r.invoice_number, "billing_dispute", r.billing_dispute) + '</td>' +
         '<td class="num">' + reconInput(r.invoice_number, "weight_dispute", r.weight_dispute) + '</td>' +
-        '<td class="num recon-calc grp" data-col="foDispute">' + inr(c.foDispute) + '</td>' +
+        '<td class="num recon-calc grp" data-col="foDispute">' + inrCr(c.foDispute) + '</td>' +
         '<td class="num grp">' + reconInput(r.invoice_number, "billing_cn", r.billing_cn) + '</td>' +
         '<td class="num">' + reconInput(r.invoice_number, "weight_cn", r.weight_cn) + '</td>' +
-        '<td class="num recon-calc grp" data-col="foCN">' + inr(c.foCN) + '</td>' +
+        '<td class="num recon-calc grp" data-col="foCN">' + inrCr(c.foCN) + '</td>' +
         '<td class="num grp">' + reconInput(r.invoice_number, "tds", r.tds) + '</td>' +
-        '<td class="num recon-calc" data-col="gst">' + inr(c.gst) + '</td>' +
-        '<td class="num recon-calc recon-payable grp" data-col="payable"><b>' + inr(c.payable) + '</b></td>' +
+        '<td class="num recon-calc" data-col="gst">' + inrCr(c.gst) + '</td>' +
+        '<td class="num recon-calc recon-payable grp" data-col="payable"><b>' + inrCr(c.payable) + '</b></td>' +
         '</tr>';
     }).join("");
 
@@ -4226,7 +4236,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var sub = $("invReconSub");
     if (sub) sub.textContent = rc.invoice_count + " invoice" + (rc.invoice_count === 1 ? "" : "s") +
       " · " + (rc.total_shipments || 0).toLocaleString("en-IN") + " AWB lines · " +
-      inr(rc.total_amount) + " billed (with GST) · TDS @ " + rc.tds_rate +
+      inrCr(rc.total_amount) + " billed (with GST) · TDS @ " + rc.tds_rate +
       "% · enter disputes & CNs to compute Final Payable";
 
     renderProductPanel(rc);
@@ -4643,13 +4653,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       card("Courier", courier, carrierNames.length > 1 ? carrierNames.length + " carriers" : "carrier partner") +
       card("Invoices", t.invoices.toLocaleString("en-IN"), "billing documents") +
       card("Shipments (AWBs)", t.ship.toLocaleString("en-IN"), "billed lines") +
-      card("Amount with GST", inr(t.amt), "total billed by carrier") +
-      card("Amount ex GST", inr(t.exgst), "before GST") +
-      card("Amount per parcel", inr(t.perParcel), "avg ₹ (with GST) / AWB") +
-      card("Dispute amount", inr(t.disputes), "billing + weight dispute") +
-      card("Credit note", inr(t.cns), "billing + weight CN") +
-      card("TDS (2%)", inr(t.tds), "sec 194C · on ex-GST") +
-      card("Final payable", inr(t.payable), "after disputes & CNs", " stat--good");
+      card("Amount with GST", inrCr(t.amt), "total billed by carrier") +
+      card("Amount ex GST", inrCr(t.exgst), "before GST") +
+      card("Amount per parcel", inrCr(t.perParcel), "avg ₹ (with GST) / AWB") +
+      card("Dispute amount", inrCr(t.disputes), "billing + weight dispute") +
+      card("Credit note", inrCr(t.cns), "billing + weight CN") +
+      card("TDS (2%)", inrCr(t.tds), "sec 194C · on ex-GST") +
+      card("Final payable", inrCr(t.payable), "after disputes & CNs", " stat--good");
   }
 
   function reconFootHTML() {
@@ -4657,14 +4667,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     return '<tfoot><tr class="recon-foot">' +
       '<th scope="row" colspan="3">Total · ' + invReconRows.length + ' invoices</th>' +
       '<td class="num grp"><b>' + t.ship.toLocaleString("en-IN") + '</b></td>' +
-      '<td class="num"><b>' + inr(t.exgst) + '</b></td>' +
-      '<td class="num grp">' + inr(t.bd) + '</td><td class="num">' + inr(t.wd) + '</td>' +
-      '<td class="num grp"><b>' + inr(t.foDispute) + '</b></td>' +
-      '<td class="num grp">' + inr(t.bcn) + '</td><td class="num">' + inr(t.wcn) + '</td>' +
-      '<td class="num grp"><b>' + inr(t.foCN) + '</b></td>' +
-      '<td class="num grp">' + inr(t.tds) + '</td>' +
-      '<td class="num">' + inr(t.gst) + '</td>' +
-      '<td class="num recon-payable grp"><b>' + inr(t.payable) + '</b></td>' +
+      '<td class="num"><b>' + inrCr(t.exgst) + '</b></td>' +
+      '<td class="num grp">' + inrCr(t.bd) + '</td><td class="num">' + inrCr(t.wd) + '</td>' +
+      '<td class="num grp"><b>' + inrCr(t.foDispute) + '</b></td>' +
+      '<td class="num grp">' + inrCr(t.bcn) + '</td><td class="num">' + inrCr(t.wcn) + '</td>' +
+      '<td class="num grp"><b>' + inrCr(t.foCN) + '</b></td>' +
+      '<td class="num grp">' + inrCr(t.tds) + '</td>' +
+      '<td class="num">' + inrCr(t.gst) + '</td>' +
+      '<td class="num recon-payable grp"><b>' + inrCr(t.payable) + '</b></td>' +
       '</tr></tfoot>';
   }
 
@@ -4686,7 +4696,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       var cells = tr.querySelectorAll(".recon-calc");
       cells.forEach(function (td) {
         var col = td.getAttribute("data-col");
-        var html = inr(c[col]);
+        var html = inrCr(c[col]);
         td.innerHTML = (col === "payable") ? "<b>" + html + "</b>" : html;
       });
     }

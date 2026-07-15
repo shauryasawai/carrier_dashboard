@@ -506,7 +506,8 @@ def _page_size() -> int | None:
 def fetch_awb_product_map(date_from: str, date_to: str,
                           limit: int | None = None,
                           awbs: set | None = None,
-                          carriers: set | None = None) -> tuple[dict, dict, dict, dict, dict]:
+                          carriers: set | None = None,
+                          use_arrow: bool | None = None) -> tuple[dict, dict, dict, dict, dict]:
     """Return (awb2prod, order2prod, awb2value, order2value, awb2order) for
     shipments in the [date_from, date_to] window (YYYY-MM-DD), filtered on the
     configured date/partition column. The *value maps hold each shipment's
@@ -651,9 +652,11 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # NOT use create_bqstorage_client=True here: when the Storage API isn't
     # enabled it can silently yield an empty table and drop all enrichment.)
     cols = None
-    # BQ_DISABLE_ARROW=1 skips pyarrow (which can segfault on some serverless
-    # runtimes) and goes straight to REST row iteration below.
-    if not _env_flag("BQ_DISABLE_ARROW"):
+    # Arrow materialises the whole window at once (fast, but a memory spike that
+    # can segfault constrained serverless workers). `use_arrow=False` — or the
+    # global BQ_DISABLE_ARROW=1 — forces the low-memory REST row iteration below.
+    arrow_ok = use_arrow if use_arrow is not None else (not _env_flag("BQ_DISABLE_ARROW"))
+    if arrow_ok:
         try:
             table = job.result().to_arrow(create_bqstorage_client=False)
             cols = {n: table.column(n).to_pylist() for n in
