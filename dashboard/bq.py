@@ -15,9 +15,7 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "0").strip().lower() in _TRUE_VALUES
 
 
-# Hard upper bound on the lookback window. Configurable so memory/timeout-
-# constrained hosts (e.g. Vercel, where each request re-queries because the
-# in-memory cache doesn't persist) can clamp it small, e.g. BQ_MAX_LOOKBACK_DAYS=7.
+# Upper bound on the lookback window. Env BQ_MAX_LOOKBACK_DAYS.
 def _max_lookback_days() -> int:
     try:
         return max(1, int(os.environ.get("BQ_MAX_LOOKBACK_DAYS")))
@@ -724,30 +722,12 @@ def fetch_records(lookback_days: int | None = None,
     return records
 
 
-# ---------------------------------------------------------------------------
-# Unicommerce "orders placed per day" (D2C) — an independent, order-level series
-# used ONLY for the Orders-per-day chart.
-#
-# WHY: the ClickPost shipment table (which powers every other metric) only holds
-# an order AFTER it ships, and orders take ~3-4 days to be dispatched. So a
-# per-day count keyed on ClickPost undercounts the most recent few days and looks
-# like a false decline. The Unicommerce Sale Orders table records every order at
-# PLACEMENT, so this series is complete for every past day and refreshes in
-# near-real-time (batch sync); only the in-progress current day is partial.
-#
-# SCOPE: "self-shipped D2C" channels — the Shopify storefront + Amazon Easy Ship
-# + Custom + B2B. These are the channels that flow through ClickPost, so the
-# series reconciles with the old ClickPost chart on matured data (to within a few
-# %, the extra being D2C orders placed but never shipped via ClickPost).
-#
-# GOTCHAS in this feed:
-#  * The plain OrderDate column is NULL throughout — the populated order time is
-#    OrderDateasddmmyyyyhhMMss (DATETIME).
-#  * The amount columns underwent a cutover (~Jun 2026): older rows populate the
-#    NUMERIC columns (TotalPrice/ShippingCharges), newer rows the *_st STRING
-#    variants. Revenue COALESCEs both so it's complete on either side of the
-#    cutover (reading only *_st made pre-cutover days ramp up from ~0).
-# ---------------------------------------------------------------------------
+# Unicommerce "orders placed per day" (D2C). Order level, used for the orders
+# per-day chart because ClickPost only holds an order after it ships and so
+# undercounts recent days; Unicommerce records every order at placement.
+# Scope: self-shipped D2C channels (Shopify, Amazon Easy Ship, Custom, B2B).
+# Gotchas: OrderDate is NULL, use OrderDateasddmmyyyyhhMMss. Amounts had a
+# ~Jun 2026 cutover so revenue COALESCEs the NUMERIC and *_st STRING columns.
 def _uc_table_ref():
     """(project, dataset, table) for the Unicommerce sale-orders table. Defaults
     to the same project/dataset as the shipment table; each part is overridable

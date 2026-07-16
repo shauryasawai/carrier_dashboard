@@ -1,11 +1,5 @@
-"""Lightweight, database-free authentication for the internal dashboard.
-
-Credentials live in settings.INTERNAL_USERS as username -> PBKDF2 hash. We
-verify with Django's password hashers (constant-time, salted) and record the
-signed-in user in the signed-cookie session. A small in-memory throttle slows
-brute-force attempts per client IP.
-"""
-
+"""Database-free auth for the internal dashboard: username -> PBKDF2 hash in
+settings.INTERNAL_USERS, verified with Django hashers, with a per-IP throttle."""
 from __future__ import annotations
 
 import time
@@ -17,13 +11,15 @@ from django.http import JsonResponse
 from django.shortcuts import redirect
 
 SESSION_KEY = "frido_user"
-
-# --- Brute-force throttle (per IP, in-memory; single-process dev use) --------
-# After MAX_FAILS failed attempts within WINDOW seconds, further attempts are
-# blocked until the window rolls off.
 MAX_FAILS = 6
-WINDOW = 15 * 60  # 15 minutes
+WINDOW = 15 * 60
 _FAILS: dict[str, list[float]] = {}
+
+# Valid hash of a random value; used only to keep verify timing constant.
+_DUMMY_HASH = (
+    "pbkdf2_sha256$600000$gPUpwppnEXTy$"
+    "EhVj58AYbq6rRM8qjB1D5bEm2pgLHRGCbd0g5lIXY8o="
+)
 
 
 def client_ip(request) -> str:
@@ -49,9 +45,7 @@ def is_locked_out(ip: str) -> bool:
 
 def seconds_until_unlock(ip: str) -> int:
     hits = _FAILS.get(ip, [])
-    if not hits:
-        return 0
-    return max(0, int(WINDOW - (time.time() - min(hits))))
+    return max(0, int(WINDOW - (time.time() - min(hits)))) if hits else 0
 
 
 def record_failure(ip: str) -> None:
@@ -63,25 +57,14 @@ def clear_failures(ip: str) -> None:
 
 
 def verify_credentials(username: str, password: str) -> bool:
-    """Return True iff the username exists and the password matches its hash.
-
-    Always runs a hash comparison (even for unknown users) so response timing
-    doesn't leak whether a username exists.
-    """
+    # Always hash-compare, even for unknown users, so timing doesn't leak
+    # whether a username exists.
     users = getattr(settings, "INTERNAL_USERS", {}) or {}
     encoded = users.get((username or "").strip())
     if not encoded:
-        # Dummy check against a throwaway hash to equalise timing.
         check_password(password or "", _DUMMY_HASH)
         return False
     return check_password(password or "", encoded)
-
-
-# A valid hash of a random value, used only to keep timing constant for the
-_DUMMY_HASH = (
-    "pbkdf2_sha256$600000$gPUpwppnEXTy$"
-    "EhVj58AYbq6rRM8qjB1D5bEm2pgLHRGCbd0g5lIXY8o="
-)
 
 
 def is_authenticated(request) -> bool:
@@ -90,8 +73,7 @@ def is_authenticated(request) -> bool:
 
 def login_session(request, username: str) -> None:
     request.session[SESSION_KEY] = username
-    # Rotate the session key on login to thwart session fixation.
-    request.session.cycle_key()
+    request.session.cycle_key()  # thwart session fixation
     request.session[SESSION_KEY] = username
 
 
@@ -101,11 +83,7 @@ def logout_session(request) -> None:
 
 
 def team_required(view):
-    """Gate a view behind login.
-
-    HTML views redirect to the login page (with ?next=); API/POST views get a
-    401 JSON response so the frontend can redirect.
-    """
+    # HTML views redirect to login; API/POST views get 401 JSON.
     @wraps(view)
     def wrapper(request, *args, **kwargs):
         if is_authenticated(request):

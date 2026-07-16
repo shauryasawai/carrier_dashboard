@@ -5,7 +5,7 @@
 **One dashboard for shipment performance, carrier SLAs and carrier billing**
 
 ![Python](https://img.shields.io/badge/Python-3.14-3776AB?logo=python&logoColor=white)
-![Django](https://img.shields.io/badge/Django-5.x-092E20?logo=django&logoColor=white)
+![Django](https://img.shields.io/badge/Django-6.0.6-092E20?logo=django&logoColor=white)
 ![BigQuery](https://img.shields.io/badge/Google%20BigQuery-data-4285F4?logo=googlebigquery&logoColor=white)
 ![Vercel](https://img.shields.io/badge/Deploy-Vercel-000000?logo=vercel&logoColor=white)
 
@@ -41,7 +41,7 @@ The backend pulls the data, caches it and rebuilds the report on every filter. T
 
 | Part | Tool |
 | - | - |
-| Backend | Django 5, Python 3.14 |
+| Backend | Django 6, Python 3.14 |
 | Data | Google BigQuery with pyarrow reads |
 | Invoices in | Google Drive API, openpyxl, pyxlsb |
 | Frontend | Vanilla JavaScript, Chart.js, custom CSS |

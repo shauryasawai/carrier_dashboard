@@ -1,21 +1,4 @@
-"""Google Drive ingestion for carrier invoices.
-
-Lets the app pull invoice files straight from a shared Google Drive folder,
-server-side, instead of the browser uploading them. This bypasses request-body
-size limits (e.g. Vercel's 4.5 MB cap — the file is downloaded by the server,
-not posted through it) and enables monthly auto-import: drop the month's
-invoices in the folder and import them in one click.
-
-Auth: reuses the same service-account credentials as BigQuery (the GOOGLE_SA_*
-env vars, assembled by bq._service_account_info), scoped to Drive read-only.
-Falls back to Application Default Credentials when no SA env is set.
-
-Setup required (one-time):
-  1. Enable the Google Drive API on the GCP project.
-  2. Share the invoice Drive folder with the service account's email
-     (GOOGLE_SA_CLIENT_EMAIL) — same as sharing with a person.
-  3. Set GDRIVE_INVOICE_FOLDER to that folder's ID or share link.
-"""
+"""Google Drive ingestion for carrier invoices (server-side download + parse)."""
 from __future__ import annotations
 
 import io
@@ -24,44 +7,26 @@ import re
 
 from . import bq
 
-# Read-only is enough — we only list and download.
 _SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
-
-# Invoice/master file types we know how to parse.
 SUPPORTED_EXT = (".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")
-
-# Google-native Sheets are exported to .xlsx on download.
-_GOOGLE_SHEET = "application/vnd.google-apps.spreadsheet"
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
 
 
 def folder_id(value=None):
-    """Resolve a Drive folder ID from a raw ID, a /folders/<id> link, or an
-    ?id=<id> link. Falls back to the GDRIVE_INVOICE_FOLDER env var."""
     v = (value or os.environ.get("GDRIVE_INVOICE_FOLDER") or "").strip()
     if not v:
         return ""
-    m = re.search(r"/folders/([A-Za-z0-9_-]+)", v)
-    if m:
-        return m.group(1)
-    m = re.search(r"[?&]id=([A-Za-z0-9_-]+)", v)
-    if m:
-        return m.group(1)
-    return v  # assume it's already a bare folder ID
+    m = re.search(r"/folders/([A-Za-z0-9_-]+)", v) or re.search(r"[?&]id=([A-Za-z0-9_-]+)", v)
+    return m.group(1) if m else v
 
 
 def is_configured():
-    """True when Drive credentials are available (a folder can still be passed
-    per-request even without the env default)."""
-    if bq._service_account_info() is not None:
-        return True
-    return bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
+    return bq._service_account_info() is not None or bool(os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"))
 
 
 def _service():
     from googleapiclient.discovery import build
-
     info = bq._service_account_info()
     if info is not None:
         from google.oauth2 import service_account
@@ -77,13 +42,8 @@ def supported(name):
 
 
 def list_files(folder, recursive=True):
-    """List non-trashed files inside `folder`, descending into sub-folders when
-    `recursive` (so the folder can be organised carrier-wise: BlueDart/, Swift/,
-    …). Returns [{id, name, mimeType, size, modifiedTime, folder}] where `folder`
-    is the name of the sub-folder the file was found in ("" for the top level)."""
-    svc = _service()
     out = []
-    _collect(svc, folder, "", recursive, out, 0)
+    _collect(_service(), folder, "", recursive, out, 0)
     return out
 
 
@@ -99,7 +59,7 @@ def _collect(svc, folder_id_, folder_name, recursive, out, depth):
         ).execute()
         for f in resp.get("files", []):
             if f.get("mimeType") == _FOLDER_MIME:
-                if recursive and depth < 6:   # descend into carrier sub-folders
+                if recursive and depth < 6:
                     _collect(svc, f["id"], f.get("name", ""), recursive, out, depth + 1)
             else:
                 f["folder"] = folder_name
@@ -110,14 +70,7 @@ def _collect(svc, folder_id_, folder_name, recursive, out, depth):
 
 
 def download(file_id, mime=None, svc=None):
-    """Download a Drive file's bytes. Google-native Sheets are exported to xlsx;
-    everything else is fetched as-is.
-
-    Pass an existing `svc` (from `_service()`) to avoid rebuilding the Drive
-    client — building it re-creates credentials and is wasteful when downloading
-    many files."""
     from googleapiclient.http import MediaIoBaseDownload
-
     if svc is None:
         svc = _service()
     if mime and mime.startswith("application/vnd.google-apps"):
@@ -133,26 +86,16 @@ def download(file_id, mime=None, svc=None):
 
 
 def download_many(files, max_workers=None):
-    """Download several Drive files concurrently.
-
-    Returns [(file, data_bytes, error)] in the same order as `files`; data_bytes
-    is None (and error a message) for any file that failed, so one bad file never
-    aborts the batch. Downloads are network-bound, so fetching them in parallel is
-    far faster than one at a time — the main slowdown when importing a month of
-    invoices. httplib2 (under the API client) is not thread-safe, so each worker
-    builds and reuses its OWN Drive service via thread-local storage rather than
-    sharing one across threads. Concurrency: env GDRIVE_DOWNLOAD_WORKERS
-    (default 6)."""
+    # Parallel download. httplib2 isn't thread-safe so each worker keeps its own
+    # service via thread-local. Env GDRIVE_DOWNLOAD_WORKERS (default 6).
     import concurrent.futures
     import threading
-
     files = list(files)
     if not files:
         return []
     raw = os.environ.get("GDRIVE_DOWNLOAD_WORKERS", "6") if max_workers is None else str(max_workers)
     n = int(raw) if str(raw).isdigit() and int(raw) > 0 else 6
     workers = max(1, min(n, len(files)))
-
     tl = threading.local()
 
     def _svc():
@@ -164,7 +107,7 @@ def download_many(files, max_workers=None):
     def _one(f):
         try:
             return (f, download(f["id"], f.get("mimeType"), svc=_svc()), None)
-        except Exception as exc:  # noqa: BLE001 - report per-file, keep going
+        except Exception as exc:  # noqa: BLE001
             return (f, None, str(exc))
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
