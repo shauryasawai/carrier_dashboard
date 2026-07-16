@@ -161,8 +161,11 @@ def _refresh_invoice_product_map():
         nxt = _date(y + 1, 1, 1) if m == 12 else _date(y, m + 1, 1)
         return nxt - _td(days=1)
 
-    lo = _month_start(keys[0]) - _td(days=15)
-    hi = _month_end(keys[-1]) + _td(days=45)
+    # Shipments billed in month M were dispatched in/just around M, so a tight
+    # window keeps the enrichment scan small (fewer rows to stream). The old
+    # -15/+45 padding pulled in weeks of shipments that can't match the invoices.
+    lo = _month_start(keys[0]) - _td(days=7)
+    hi = _month_end(keys[-1]) + _td(days=10)
     # Only the AWBs actually on the invoices need enriching — pass them so the
     # BigQuery loader skips category derivation for every other shipment in the
     # window (most of the per-row cost).
@@ -1061,11 +1064,19 @@ def _ingest_into_cache(name, data, errors):
         spend = round(sum(i["amount"] for i in payload), 1)
         carrier = payload[0]["carrier"] if payload else "Unknown"
         # Each file is one billing period; tag every line with the month derived
-        # from its file name so the cost report can compare periods.
+        # from its file name so the cost report can compare periods. Swift is the
+        # exception: its lines carry a per-row Billing Date (parsed into
+        # service_month), so bucket Swift by that billed month rather than the
+        # file name — for both the month-wise analysis and the carrier trends.
         mkey, mlabel = invoices.month_from_filename(name)
         for it in payload:
-            it["month"] = mkey
-            it["month_label"] = mlabel
+            smk = it.get("service_month_key")
+            if smk and (it.get("carrier") or "").strip().lower().startswith("swift"):
+                it["month"] = smk
+                it["month_label"] = it.get("service_month") or mlabel
+            else:
+                it["month"] = mkey
+                it["month_label"] = mlabel
         _INVOICE_CACHE["items"].extend(payload)
         _INVOICE_CACHE["files"].append(
             {"name": name, "carrier": carrier, "lines": len(payload),
@@ -1132,18 +1143,24 @@ def import_from_drive(request):
             {"error": "No .xlsx / .xlsb / .csv files found in that Drive folder."},
             status=400)
 
-    # Each file's billing month is inferred from its name using the same rule the
-    # invoice parser uses to bucket months, so the client can offer (and require)
-    # only the months that actually exist in the folder — no download needed here.
-    def _month_key(f):
-        return invoices.month_from_filename(f.get("name") or "")[0]
+    # The files are organised as <carrier>/<month>/file, so a file's immediate
+    # parent folder names its billing month. Trust that folder (the file NAME
+    # often carries the *invoice* date — e.g. a July invoice for June shipments —
+    # which is why filename-based detection mislabelled the month). Fall back to
+    # the file name only when the folder isn't a recognisable month. Same rule the
+    # invoice parser uses, so no download is needed to list months.
+    def _file_month(f):
+        key, label = invoices.month_from_filename(f.get("folder") or "")
+        if not key.startswith("zzzz"):
+            return key, label
+        return invoices.month_from_filename(f.get("name") or "")
 
     # action=months: report the months present in the folder (newest first) and
     # return without downloading anything.
     if request.POST.get("action") == "months":
         buckets = {}
         for f in invoice_files:
-            key, label = invoices.month_from_filename(f.get("name") or "")
+            key, label = _file_month(f)
             b = buckets.get(key)
             if b is None:
                 b = buckets[key] = {"key": key, "label": label, "count": 0}
@@ -1154,7 +1171,7 @@ def import_from_drive(request):
     month = (request.POST.get("month") or "").strip()
     if not month:
         return JsonResponse({"error": "Select a month to import."}, status=400)
-    invoice_files = [f for f in invoice_files if _month_key(f) == month]
+    invoice_files = [f for f in invoice_files if _file_month(f)[0] == month]
     if not invoice_files:
         return JsonResponse(
             {"error": "No files for the selected month were found in the Drive "
@@ -1165,18 +1182,14 @@ def import_from_drive(request):
 
     errors = []
     master_saved = False
-    # Build the Drive client once and reuse it for every file — rebuilding it per
-    # file (new credentials + discovery fetch) was the main slowdown. Downloads
-    # stay sequential: parallel threads segfaulted the worker on Vercel's
-    # serverless runtime, and one-file-at-a-time also keeps peak memory low.
-    logger.info("drive import: month=%s, downloading %d file(s)", month, len(invoice_files))
-    svc = gdrive.new_service()
-    for f in invoice_files:
+    # Download all of the month's files concurrently (network-bound — the main
+    # slowdown), then parse them sequentially (parsing mutates the shared invoice
+    # cache, so it stays single-threaded).
+    logger.info("drive import: month=%s, downloading %d file(s) in parallel", month, len(invoice_files))
+    for f, data, err in gdrive.download_many(invoice_files):
         name = f.get("name")
-        try:
-            data = gdrive.download(f["id"], f.get("mimeType"), svc=svc)
-        except Exception as exc:  # noqa: BLE001
-            errors.append(f"{name}: download failed ({exc})")
+        if err is not None:
+            errors.append(f"{name}: download failed ({err})")
             continue
         logger.info("drive import: downloaded %s (%d bytes), parsing", name, len(data))
         kind = _ingest_into_cache(name, data, errors)

@@ -1088,9 +1088,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 #invWtProdExport { margin-left: auto; }
 #invReconPanel .table-scroll { max-height: 88vh; overflow: auto; border-radius: 10px; }
 
-.recon-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 0; font-size: 12px; }
+.recon-table { border-collapse: separate; border-spacing: 0; width: 100%; min-width: 0; font-size: 11px; }
 .recon-table th.num, .recon-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.recon-table td, .recon-table th { padding: 4px 8px; white-space: nowrap; }
+.recon-table td, .recon-table th { padding: 3px 5px; white-space: nowrap; }
 
 /* Sticky two-row header so column meaning stays visible while scrolling */
 .recon-table thead th { position: sticky; background: var(--paper-2); z-index: 3; }
@@ -1108,16 +1108,17 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 .recon-table tbody tr:nth-child(even) th { background: var(--paper); }
 .recon-table tbody tr:hover td, .recon-table tbody tr:hover th { background: var(--paper-2); }
 
-.recon-table th[scope="row"].mono { font-family: var(--mono); font-size: 12px;
-  font-weight: 500; color: var(--ink-soft, var(--ink)); text-align: left; }
+.recon-table th[scope="row"].mono { font-family: var(--mono); font-size: 11px;
+  font-weight: 500; color: var(--ink-soft, var(--ink)); text-align: left;
+  max-width: 118px; overflow: hidden; text-overflow: ellipsis; }
 .recon-table th.recon-edit { color: var(--accent-deep); }
 .recon-calc { font-family: var(--mono); color: var(--ink); }
 .recon-payable { color: var(--accent-deep); font-weight: 600; }
 .recon-table td.recon-payable { background: var(--good-soft, var(--paper-2)); }
 
 .recon-in {
-  width: 60px; text-align: right; font-family: var(--mono); font-size: 12px;
-  padding: 4px 6px; background: #fff; border: 1px solid var(--line-strong);
+  width: 44px; text-align: right; font-family: var(--mono); font-size: 11px;
+  padding: 3px 4px; background: #fff; border: 1px solid var(--line-strong);
   border-radius: 6px; color: var(--ink);
 }
 .recon-in:hover { border-color: var(--accent); }

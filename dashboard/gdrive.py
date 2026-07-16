@@ -132,13 +132,40 @@ def download(file_id, mime=None, svc=None):
     return buf.getvalue()
 
 
-def new_service():
-    """Build a Drive API client to reuse across several download() calls in one
-    request. Rebuilding the client per file (new credentials + a discovery fetch)
-    is the main per-file overhead, so callers downloading many files should build
-    it once here and pass it to each download().
+def download_many(files, max_workers=None):
+    """Download several Drive files concurrently.
 
-    Note: downloads are kept sequential (one reused client, no threads). Parallel
-    downloads segfaulted the Python worker on Vercel's serverless runtime, where
-    native SSL under the API client is not safe across threads."""
-    return _service()
+    Returns [(file, data_bytes, error)] in the same order as `files`; data_bytes
+    is None (and error a message) for any file that failed, so one bad file never
+    aborts the batch. Downloads are network-bound, so fetching them in parallel is
+    far faster than one at a time — the main slowdown when importing a month of
+    invoices. httplib2 (under the API client) is not thread-safe, so each worker
+    builds and reuses its OWN Drive service via thread-local storage rather than
+    sharing one across threads. Concurrency: env GDRIVE_DOWNLOAD_WORKERS
+    (default 6)."""
+    import concurrent.futures
+    import threading
+
+    files = list(files)
+    if not files:
+        return []
+    raw = os.environ.get("GDRIVE_DOWNLOAD_WORKERS", "6") if max_workers is None else str(max_workers)
+    n = int(raw) if str(raw).isdigit() and int(raw) > 0 else 6
+    workers = max(1, min(n, len(files)))
+
+    tl = threading.local()
+
+    def _svc():
+        svc = getattr(tl, "svc", None)
+        if svc is None:
+            svc = tl.svc = _service()
+        return svc
+
+    def _one(f):
+        try:
+            return (f, download(f["id"], f.get("mimeType"), svc=_svc()), None)
+        except Exception as exc:  # noqa: BLE001 - report per-file, keep going
+            return (f, None, str(exc))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
+        return list(ex.map(_one, files))

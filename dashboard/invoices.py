@@ -642,6 +642,7 @@ def _parse_swift(sheets, filename):
             continue
         amt_i = _first(cmap, ["cost", "cost incl gst", "freight", "shipping cost"])
         awb_i = cmap.get("awb")
+        swiftid_i = cmap.get("swift id")
         date_i = _first(cmap, ["billing date", "invoice date", "date"])
         wt_i = _first(cmap, ["weight", "weight in gms", "charge weight"])
         dir_i = cmap.get("direction")
@@ -658,7 +659,11 @@ def _parse_swift(sheets, filename):
         for row in rows[idx + 1:]:
             if not row:
                 continue
-            awb = _norm_awb(_cell(row, awb_i))
+            # Some Swift invoices (e.g. Surface / NDD) leave the AWB column blank
+            # and only carry the Swift Id — fall back to it so the line isn't
+            # dropped (which would push the whole file to the generic parser and
+            # mis-read Total Amount as the freight cost).
+            awb = _norm_awb(_cell(row, awb_i)) or _norm_awb(_cell(row, swiftid_i))
             amt = _f(_cell(row, amt_i))
             if not awb or amt is None:
                 continue
@@ -896,6 +901,7 @@ def _parse_generic(sheets, filename):
     """Frido 'Working' billing template + Urban Bolt: any sheet with an amount
     column (Invoice Amt (₹) / Invoice Value / ...) plus an AWB or Order id."""
     carrier_fb = carrier_from_filename(filename)
+    is_swift_file = (carrier_fb or "").strip().lower().startswith("swift")
     for name, rows in sheets:
         idx, cmap = _find_header(rows, need_amount=True)
         if idx is None:
@@ -908,6 +914,9 @@ def _parse_generic(sheets, filename):
         sku_i = _first(cmap, SKU_KEYS)
         name_i = _first(cmap, NAME_KEYS)
         car_i = _first(cmap, CARRIER_COL_KEYS)
+        # Swift invoices carry a per-line Billing Date; capture it so the month
+        # (service month) is taken from that column rather than the file name.
+        date_i = _first(cmap, ["billing date", "bill date", "invoice date", "date"])
         out = []
         for row in rows[idx + 1:]:
             if not row:
@@ -919,14 +928,23 @@ def _parse_generic(sheets, filename):
                 continue
             carrier = _clean_courier(_cell(row, car_i)) or carrier_fb
             nm = _clean_name(_cell(row, name_i))
-            out.append({
+            rec = {
                 "carrier": carrier or "Unknown carrier", "awb": awb, "order_id": order,
                 "sku": _s(_cell(row, sku_i)), "sku_name": nm, "product": nm,
                 "category": resolve_category(nm, nm),
                 "weight_kg": _f(_cell(row, wt_i)),
                 "zone": _norm_zone(_cell(row, zone_i)),
                 "amount": amt, "shipments": 1,
-            })
+            }
+            # For Swift, derive the service month from the Billing Date column.
+            if date_i is not None and (is_swift_file
+                                       or (carrier or "").strip().lower().startswith("swift")):
+                dlabel, mlabel, mkey = _invoice_period(_cell(row, date_i))
+                if mkey:
+                    rec["invoice_date"] = dlabel
+                    rec["service_month"] = mlabel
+                    rec["service_month_key"] = mkey
+            out.append(rec)
         if out:
             return out
     return None
