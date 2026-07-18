@@ -239,6 +239,71 @@ def tier_for_pincode(pin: str) -> str:
     return "Tier 3"
 
 
+# ---------------------------------------------------------------------------
+# Delivery-zone classification (A / B / C / E). Each shipment goes to exactly
+# one drop pincode, so it lands in exactly one zone:
+#   A - Intra City         : pickup and drop are the same city
+#   B - To Tier 1 city     : drop pincode is a Tier 1 metro
+#   C - Rest of the Cities : any other resolvable destination
+#   E - North East & J&K   : drop pincode in the NE states or J&K / Ladakh
+# Precedence A > E > B > C keeps the buckets mutually exclusive so the four
+# counts sum to the shipment total (a same-city delivery is "local" A even
+# inside the NE/J&K circles). Destinations with no usable pincode fall to C.
+# ---------------------------------------------------------------------------
+GEO_ZONES = ["A", "B", "C", "E"]
+GEO_ZONE_LABELS = {
+    "A": "Intra City",
+    "B": "Tier 1 City",
+    "C": "Rest of Cities",
+    "E": "North East & J&K",
+}
+# 2-digit PIN prefixes for the North East states + J&K / Ladakh.
+#   18, 19 -> J&K / Ladakh   78 -> Assam   79 -> other NE states
+_NE_JK_PIN2 = {"18", "19", "78", "79"}
+# Sikkim (737xxx) rolls up to circle "73" (West Bengal) on the 2-digit table,
+# so pin it explicitly by its 3-digit prefix.
+_NE_JK_PIN3 = {"737"}
+
+
+@lru_cache(maxsize=100_000)
+def _canon_city(pin_digits: str) -> str:
+    """Canonical city for intra-city matching. Uses the PIN3 city label with any
+    parenthetical region qualifier dropped, so the multiple prefixes of one metro
+    fold together ('Pune (Maval)' 412 and 'Pune' 411 -> 'Pune'; 'Bengaluru
+    (Rural)' 561/562 and 'Bengaluru' 560 -> 'Bengaluru'). Returns '' for pincodes
+    that don't resolve to a specific city (2-digit circle fallback), so two
+    unrelated towns in the same postal circle aren't mistaken for one city."""
+    if len(pin_digits) < 3:
+        return ""
+    label = PIN3_CITY.get(pin_digits[:3])
+    if not label:
+        return ""
+    return label.split(" (")[0].strip()
+
+
+@lru_cache(maxsize=100_000)
+def geo_zone(pickup_pin: str, drop_pin: str) -> str:
+    """Delivery zone (A/B/C/E) for a shipment, from its pickup + drop pincodes."""
+    d = "".join(ch for ch in str(drop_pin or "") if ch.isdigit())
+    p = "".join(ch for ch in str(pickup_pin or "") if ch.isdigit())
+    # A - intra city: same 3-digit region, OR both pincodes resolve to the same
+    # city (folds a metro's multiple prefixes together, e.g. Pune 411 & 412).
+    if len(d) >= 3 and len(p) >= 3:
+        if d[:3] == p[:3]:
+            return "A"
+        cp = _canon_city(p)
+        if cp and cp == _canon_city(d):
+            return "A"
+    # E - North East & J&K (by destination).
+    if len(d) >= 2 and (d[:2] in _NE_JK_PIN2 or d[:3] in _NE_JK_PIN3):
+        return "E"
+    # B - Tier 1 destination.
+    if tier_for_pincode(d) == "Tier 1":
+        return "B"
+    # C - everything else (including unresolvable destinations).
+    return "C"
+
+
 @lru_cache(maxsize=100_000)
 def _clean_city(text: str) -> str:
     """Normalize a free-text city name so casing/spacing variants merge.
@@ -393,39 +458,48 @@ def _pickup_slot(dt):
 # "pregnancy pillow" must hit Maternity before the generic Pillows rule; an
 # "arch support insole" must hit Insoles before Footwears/Orthotics).
 #
-# Top-level categories are consolidated into 6 themed groups (Comfort & Sleep,
-# Footwear, Orthopedic & Wellness, Mobility & Furniture, Maternity & Baby Care,
-# Accessories); the subcategory (2nd field) preserves the finer catalogue
+# Top-level categories are consolidated into themed groups (Comfort & Sleep,
+# Footwear, Orthopedic & Wellness, Mobility, Furniture, Maternity & Baby Care,
+# Accessories & Others); the subcategory (2nd field) preserves the finer catalogue
 # grouping and can be tuned freely. Anything unmatched falls to
-# ("Others", "Other"). Keywords match as case-insensitive substrings.
+# ("Accessories & Others", "Other"). Keywords match as case-insensitive substrings.
 PRODUCT_RULES = [
     # --- Maternity & Baby Care (FIRST, so a pregnancy/maternity/feeding pillow
     # lands here instead of under Comfort & Sleep) ---
     ("Maternity & Baby Care", "Pregnancy Pillow", ["pregnancy", "maternity"]),
     ("Maternity & Baby Care", "Baby Care", ["baby", "infant", "nursing", "feeding pillow", "kids"]),
 
+    # --- Orthopedic & Wellness :: Flat Feet Combo (explicit, BEFORE the generic
+    # Bundles rule so this specific combo lands under Orthopedic & Wellness
+    # rather than being swept into Comfort & Sleep) ---
+    ("Orthopedic & Wellness", "Flat Feet Combo", ["flat feet", "flat foot", "flatfeet"]),
+
+    # --- Comfort & Sleep :: Bundles (all multi-item bundles/combos group here,
+    # after Maternity and the Flat Feet Combo exception above) ---
+    ("Comfort & Sleep", "Bundles", ["combo", "bundle"]),
+
     # --- Footwear :: Barefoot (Frido's barefoot shoes/socks line — before the
     # broader Footwear/Socks rules so a "barefoot sock shoe" lands here) ---
     ("Footwear", "Barefoot", ["barefoot", "sock shoe", "skinners"]),
 
-    # --- Mobility & Furniture :: Mobility Devices (wheelchairs, scooters,
-    # transfer/bathroom aids). Early so a wheelchair mentioning "footrest"/"seat"
-    # isn't read as Foot Care/Cushion. ---
-    ("Mobility & Furniture", "Wheelchair", ["wheelchair", "wheel chair"]),
-    ("Mobility & Furniture", "Mobility Scooter", ["mobility scooter", "scooter"]),
-    ("Mobility & Furniture", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist", "walker", "rollator", "crutch"]),
-    ("Mobility & Furniture", "Commode", ["commode"]),
-    ("Mobility & Furniture", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair", "ramp"]),
+    # --- Mobility :: Mobility Devices (wheelchairs, scooters, transfer/bathroom
+    # aids). Early so a wheelchair mentioning "footrest"/"seat" isn't read as
+    # Foot Care/Cushion. ---
+    ("Mobility", "Wheelchair", ["wheelchair", "wheel chair"]),
+    ("Mobility", "Mobility Scooter", ["mobility scooter", "scooter"]),
+    ("Mobility", "Transfer & Lift Aids", ["transfer lift", "patient lift", "transfer aid", "hoist", "walker", "rollator", "crutch"]),
+    ("Mobility", "Commode", ["commode"]),
+    ("Mobility", "Bathroom Safety", ["bath mat", "anti-slip", "anti slip", "grab bar", "bed rail", "shower stool", "shower chair", "ramp"]),
 
-    # --- Mobility & Furniture :: Chairs (ergonomic / office / gaming, recliners) ---
-    ("Mobility & Furniture", "Ergonomic Chair", ["ergonomic chair", "ergo chair", "office chair", "gaming chair", "study chair"]),
-    ("Mobility & Furniture", "Recliner", ["recliner"]),
-    ("Mobility & Furniture", "Chair", ["chair"]),
+    # --- Furniture :: Chairs (ergonomic / office / gaming, recliners) ---
+    ("Furniture", "Ergonomic Chair", ["ergonomic chair", "ergo chair", "office chair", "gaming chair", "study chair"]),
+    ("Furniture", "Recliner", ["recliner"]),
+    ("Furniture", "Chair", ["chair"]),
 
-    # --- Mobility & Furniture :: Workspace (standing desks, laptop tables/stands) ---
-    ("Mobility & Furniture", "Standing Desk", ["standing desk", "height desk", "adjustable desk"]),
-    ("Mobility & Furniture", "Desk & Table", ["laptop table", "study table", "work table", "desk", "workstation"]),
-    ("Mobility & Furniture", "Stand & Mount", ["laptop stand", "monitor stand", "monitor arm", "monitor mount", "laptop mount", "laptop holder", "monitor", "foot rest", "footrest"]),
+    # --- Furniture :: Workspace (standing desks, laptop tables/stands) ---
+    ("Furniture", "Standing Desk", ["standing desk", "height desk", "adjustable desk"]),
+    ("Furniture", "Desk & Table", ["laptop table", "study table", "work table", "desk", "workstation"]),
+    ("Furniture", "Stand & Mount", ["laptop stand", "monitor stand", "monitor arm", "monitor mount", "laptop mount", "laptop holder", "monitor", "foot rest", "footrest"]),
 
     # --- Footwear :: Insoles (before the broader Footwear/Orthopedic rules) ---
     ("Footwear", "Insoles", ["insole", "arch support", "shoe insert", "foot insert"]),
@@ -472,16 +546,17 @@ PRODUCT_RULES = [
     ("Orthopedic & Wellness", "Massage & Relief", ["massager", "massage", "roller", "pain relief", "pain-relief", "kinesiology", "tape"]),
     ("Orthopedic & Wellness", "Gloves", ["glove"]),
 
-    # --- Accessories (wallets, straps, bags, combos, spare parts) ---
-    ("Accessories", "Wallet", ["wallet", "card holder", "cardholder"]),
-    ("Accessories", "Spare Parts", ["spare part", "sparepart", "castor wheel", "castor", "joystick"]),
-    ("Accessories", "Accessories", ["strap", "pouch", "bag", "cap", "combo", "accessor"]),
+    # --- Accessories & Others (wallets, straps, bags, spare parts; also the
+    # catch-all for anything unmatched — see _product_category fallback) ---
+    ("Accessories & Others", "Wallet", ["wallet", "card holder", "cardholder"]),
+    ("Accessories & Others", "Spare Parts", ["spare part", "sparepart", "castor wheel", "castor", "joystick"]),
+    ("Accessories & Others", "Accessories", ["strap", "pouch", "bag", "cap", "accessor"]),
 ]
 
 
 @lru_cache(maxsize=100_000)
 def _product_category(item_name):
-    """Return (category, subcategory) for a product name, or ('Others','Other')."""
+    """Return (category, subcategory), or ('Accessories & Others','Other')."""
     if not item_name:
         return ("Unknown", "Unknown")
     text = item_name.lower()
@@ -489,13 +564,13 @@ def _product_category(item_name):
         for kw in keywords:
             if kw in text:
                 return (category, subcategory)
-    return ("Others", "Other")
+    return ("Accessories & Others", "Other")
 
 
 # ---------------------------------------------------------------------------
 # Consolidated category groups. Shipments are tagged with fine-grained catalogue
 # categories (from the item master's Category column, invoice enrichment, or the
-# name rules above). For the Product breakdown we roll those up into 6 legible
+# name rules above). For the Product breakdown we roll those up into legible
 # groups. This is a DISPLAY rollup only — the fine category is left on the record
 # in case other consumers need the finer taxonomy.
 # ---------------------------------------------------------------------------
@@ -505,6 +580,7 @@ CATEGORY_GROUP = {
     "Cushions": "Comfort & Sleep",
     "Mattress Topper Protector": "Comfort & Sleep",
     "Covers": "Comfort & Sleep",
+    "Bundles": "Comfort & Sleep",
     # Footwear
     "Footwear": "Footwear",
     "Barefoot": "Footwear",
@@ -514,22 +590,27 @@ CATEGORY_GROUP = {
     "Orthotics": "Orthopedic & Wellness",
     "Personal Care": "Orthopedic & Wellness",
     "Masks": "Orthopedic & Wellness",
-    # Mobility & Furniture
-    "Mobility Devices": "Mobility & Furniture",
-    "Chairs": "Mobility & Furniture",
-    "Workspace": "Mobility & Furniture",
+    # Mobility (mobility devices / aids)
+    "Mobility Devices": "Mobility",
+    "Mobility": "Mobility",
+    # Furniture (chairs, workspace)
+    "Chairs": "Furniture",
+    "Workspace": "Furniture",
+    "Furniture": "Furniture",
     # Unchanged
     "Maternity & Baby Care": "Maternity & Baby Care",
-    "Accessories": "Accessories",
+    # Accessories & Others (merged)
+    "Accessories": "Accessories & Others",
+    "Accessories & Others": "Accessories & Others",
     # Fallbacks
-    "Others": "Others",
-    "Unknown": "Others",
+    "Others": "Accessories & Others",
+    "Unknown": "Accessories & Others",
 }
 
 
 def canonical_category(cat):
-    """Roll a fine-grained catalogue category up to one of the 6 consolidated
-    groups. Values already in group form (or unknown labels) pass through."""
+    """Roll a fine-grained catalogue category up to one of the consolidated
+    display groups. Values already in group form (or unknown labels) pass through."""
     if not cat:
         return cat
     return CATEGORY_GROUP.get(cat, cat)
@@ -1861,6 +1942,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
     pay_groups: dict[str, dict] = {}
     _daily: dict[str, dict] = {}
     product_tree: dict[str, dict] = {}
+    zone_groups: dict[str, dict] = {}
     has_products = False
     for r in rows:
         val = r.get("_rev") or 0.0   # de-duplicated revenue (see revenue block)
@@ -1868,6 +1950,22 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         is_rto = outcome == "RTO"
         deliv = r["delivered"]
         pick = r["picked"]
+
+        # -- delivery-zone (A/B/C/E) economics, by drop pincode + intra-city --
+        z = geo_zone(r["pickup_pin"], r["drop_pin"])
+        zg = zone_groups.get(z)
+        if zg is None:
+            zg = {"zone": z, "n": 0, "revenue": 0.0, "rto": 0,
+                  "delivered": 0, "picked": 0}
+            zone_groups[z] = zg
+        zg["n"] += 1
+        zg["revenue"] += val
+        if is_rto:
+            zg["rto"] += 1
+        if deliv:
+            zg["delivered"] += 1
+        if pick:
+            zg["picked"] += 1
 
         # -- payment-mode performance (key is never blank -> no rows skipped) --
         pk = r["payment"] or "(unknown)"
@@ -1932,6 +2030,26 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
 
     payment_perf = _perf_rows(pay_groups)
     daily = [{**_daily[d], "revenue": _round(_daily[d]["revenue"])} for d in sorted(_daily)]
+
+    # Delivery-zone breakdown (A/B/C/E), always in fixed zone order so the four
+    # cards render consistently even when a zone has no shipments this filter.
+    zone_breakdown = []
+    for z in GEO_ZONES:
+        g = zone_groups.get(z) or {"n": 0, "revenue": 0.0, "rto": 0,
+                                    "delivered": 0, "picked": 0}
+        zn = g["n"]
+        zone_breakdown.append({
+            "zone": z,
+            "label": GEO_ZONE_LABELS[z],
+            "n": zn,
+            "share_pct": _round(zn / total * 100 if total else None),
+            "revenue": _round(g["revenue"]),
+            "revenue_pct": _round(g["revenue"] / revenue * 100 if revenue else None),
+            "rto_pct": _round(g["rto"] / zn * 100 if zn else None),
+            "aov": _round(g["revenue"] / zn if zn else None),
+            "success_rate": _round(g["delivered"] / g["picked"] * 100 if g["picked"] else None),
+        })
+
     products = []
     # Ranked by revenue so the biggest-money categories lead the view.
     for c in sorted(product_tree.values(), key=lambda x: -x["revenue"]):
@@ -2003,6 +2121,7 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
         "carriers": agg,
         "products": products,
         "has_products": has_products,
+        "zone_breakdown": zone_breakdown,
         "warehouses": wh,
         "warehouse_total": wh_total_count,
         "warehouse_top_n": TOP_N_WAREHOUSES,

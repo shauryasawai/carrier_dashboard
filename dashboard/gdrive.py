@@ -2,15 +2,23 @@
 from __future__ import annotations
 
 import io
+import json
 import os
 import re
 
 from . import bq
 
-_SCOPES = ["https://www.googleapis.com/auth/drive.readonly"]
+# Read/write: onboarding a new carrier creates a folder, uploads the reference
+# invoice and stores the shared carrier-config file, so the read-only scope is
+# no longer enough. Full "drive" also covers every read the import path needs.
+_SCOPES = ["https://www.googleapis.com/auth/drive"]
 SUPPORTED_EXT = (".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")
 _XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _FOLDER_MIME = "application/vnd.google-apps.folder"
+
+# File name (inside the root invoice folder) that holds the saved per-carrier
+# column-mapping configs — the shared source of truth read by every deployment.
+CONFIG_FILE_NAME = "carrier_configs.json"
 
 
 def folder_id(value=None):
@@ -112,3 +120,77 @@ def download_many(files, max_workers=None):
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as ex:
         return list(ex.map(_one, files))
+
+
+# --------------------------------------------------------------------------
+# Write helpers (new-carrier onboarding): create a folder, upload the reference
+# invoice, and read/write the shared carrier-config JSON. All best-effort — the
+# caller surfaces any failure to the user.
+# --------------------------------------------------------------------------
+def find_file(name, parent_id, svc=None):
+    """Return the file metadata (id, name, mimeType) for `name` directly inside
+    `parent_id`, or None. Matches on exact (case-insensitive) name."""
+    svc = svc or _service()
+    safe = (name or "").replace("'", "\\'")
+    q = ("name = '%s' and '%s' in parents and trashed = false" % (safe, parent_id))
+    resp = svc.files().list(
+        q=q, spaces="drive", fields="files(id, name, mimeType)",
+        pageSize=10, supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute()
+    files = resp.get("files", [])
+    return files[0] if files else None
+
+
+def find_or_create_folder(name, parent_id, svc=None):
+    """Return the id of the sub-folder `name` under `parent_id`, creating it if
+    it doesn't exist yet. Used to give each onboarded carrier its own folder."""
+    svc = svc or _service()
+    existing = find_file(name, parent_id, svc=svc)
+    if existing and existing.get("mimeType") == _FOLDER_MIME:
+        return existing["id"]
+    meta = {"name": name, "mimeType": _FOLDER_MIME, "parents": [parent_id]}
+    folder = svc.files().create(
+        body=meta, fields="id", supportsAllDrives=True).execute()
+    return folder["id"]
+
+
+def upload_bytes(name, data, parent_id, mime=None, svc=None):
+    """Upload `data` as a file named `name` into `parent_id`. If a file with the
+    same name already exists there it is replaced (new revision). Returns file id."""
+    from googleapiclient.http import MediaIoBaseUpload
+    svc = svc or _service()
+    media = MediaIoBaseUpload(io.BytesIO(data), mimetype=mime or "application/octet-stream",
+                              resumable=False)
+    existing = find_file(name, parent_id, svc=svc)
+    if existing:
+        f = svc.files().update(
+            fileId=existing["id"], media_body=media, fields="id",
+            supportsAllDrives=True).execute()
+        return f["id"]
+    meta = {"name": name, "parents": [parent_id]}
+    f = svc.files().create(
+        body=meta, media_body=media, fields="id", supportsAllDrives=True).execute()
+    return f["id"]
+
+
+def read_configs(root_folder_id, svc=None):
+    """Read the shared carrier-config JSON from the root invoice folder. Returns
+    a dict keyed by carrier name (empty when the file is absent or unreadable)."""
+    svc = svc or _service()
+    meta = find_file(CONFIG_FILE_NAME, root_folder_id, svc=svc)
+    if not meta:
+        return {}
+    try:
+        raw = download(meta["id"], meta.get("mimeType"), svc=svc)
+        data = json.loads(raw.decode("utf-8-sig"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 - a corrupt config must not break imports
+        return {}
+
+
+def write_configs(root_folder_id, configs, svc=None):
+    """Persist the carrier-config dict as JSON into the root invoice folder."""
+    svc = svc or _service()
+    blob = json.dumps(configs, ensure_ascii=False, indent=2).encode("utf-8")
+    return upload_bytes(CONFIG_FILE_NAME, blob, root_folder_id,
+                        mime="application/json", svc=svc)

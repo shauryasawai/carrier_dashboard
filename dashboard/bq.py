@@ -504,6 +504,7 @@ def _page_size() -> int | None:
 def fetch_awb_product_map(date_from: str, date_to: str,
                           limit: int | None = None,
                           awbs: set | None = None,
+                          orders: set | None = None,
                           carriers: set | None = None,
                           use_arrow: bool | None = None) -> tuple[dict, dict, dict, dict, dict]:
     """Return (awb2prod, order2prod, awb2value, order2value, awb2order) for
@@ -545,12 +546,45 @@ def fetch_awb_product_map(date_from: str, date_to: str,
 
     where = _range_predicate(project, dataset, table, date_from, date_to)
 
+    # Push the invoice's AWB *and* order-id sets INTO the query so BigQuery
+    # returns only those shipments, not every courier in the window (the bulk of
+    # the transfer/latency). Both keys are normalised in SQL exactly as in Python
+    # below — CAST -> TRIM -> UPPER, and for the AWB also strip a trailing ".0" —
+    # so the match is identical; the sets are passed as query PARAMETERS (arrays)
+    # to stay injection-safe. A row is kept if it matches EITHER key: carriers
+    # like Swift leave the invoice AWB blank (the AWB set is really their Swift
+    # Id, absent from BigQuery), so those lines are matched on the order id.
+    # Skipped when a set is empty or very large.
+    want = awbs or None
+    want_orders = {str(o).strip().upper() for o in orders} if orders else None
+    use_awb_pushdown = bool(want) and len(want) <= 45000
+    use_order_pushdown = bool(want_orders) and len(want_orders) <= 45000
+    match_terms = []
+    if use_awb_pushdown:
+        match_terms.append(
+            f"REGEXP_REPLACE(UPPER(TRIM(CAST(`{awb_col}` AS STRING))), r'\\.0$', '') "
+            f"IN UNNEST(@wanted_awbs)")
+    if use_order_pushdown:
+        # BigQuery stores the order id with a leading '#' and sometimes a
+        # '_<route/suffix>' (e.g. '#MF0222948031_EX890'); marketplace ids have
+        # neither. Strip both so it lines up with the invoice's cleaned order id.
+        match_terms.append(
+            f"UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(CAST(`{order_col}` AS STRING)), "
+            f"r'^#', ''), r'_.*$', '')) IN UNNEST(@wanted_orders)")
+    pushdown_pred = (" AND (" + " OR ".join(match_terms) + ")") if match_terms else ""
+
     # Restrict to the invoice's carrier(s) so BigQuery scans/returns only those
     # shipments (e.g. BlueDart) instead of every courier in the window. Tokens
     # are sanitised to [a-z0-9] so they can't inject SQL; matched as a prefix on
     # the carrier column (so "BlueDart" also catches "Bluedart Reverse").
+    #
+    # BUT only when we have NO exact key set to push down: with an AWB/order set
+    # the query is already precise, and filtering on the carrier label wrongly
+    # excludes shipments whose courier_partner in BigQuery is labelled
+    # differently from the invoice's carrier name (e.g. Swift's sub-services),
+    # which dropped their SKU/product enrichment and left every line "unmatched".
     carrier_pred = ""
-    if carriers:
+    if carriers and not match_terms:
         car_col = cmap.get("carrier", "courier_partner")
         _check_identifier(str(car_col))
         toks = set()
@@ -561,27 +595,12 @@ def fetch_awb_product_map(date_from: str, date_to: str,
         if toks:
             likes = " OR ".join(f"LOWER(`{car_col}`) LIKE '{t}%'" for t in sorted(toks))
             carrier_pred = f" AND ({likes})"
-
-    # Push the invoice's AWB set INTO the query so BigQuery returns only those
-    # waybills, not every shipment for the carrier across the whole window (the
-    # bulk of the transfer/latency). The AWB column is normalised in SQL exactly
-    # as it is in Python below — CAST -> TRIM -> UPPER -> strip trailing ".0" —
-    # so the match is identical; the set is passed as a query PARAMETER (array)
-    # to stay injection-safe and avoid a giant inline IN list. The Python-side
-    # `want` filter is kept as a belt-and-braces guard. Skipped when the set is
-    # empty or very large (fall back to the carrier-only scan + Python filter).
-    want = awbs or None
-    use_awb_pushdown = bool(want) and len(want) <= 45000
-    awb_pred = ""
-    if use_awb_pushdown:
-        awb_pred = (f" AND REGEXP_REPLACE(UPPER(TRIM(CAST(`{awb_col}` AS STRING))), "
-                    f"r'\\.0$', '') IN UNNEST(@wanted_awbs)")
     sql = (
         f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
         f"`{items_col}` AS items, `{order_col}` AS order_id, "
         f"`{val_col}` AS order_value "
         f"FROM `{project}.{dataset}.{table}` "
-        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}{awb_pred}"
+        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}{pushdown_pred}"
     )
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -597,12 +616,14 @@ def fetch_awb_product_map(date_from: str, date_to: str,
         return c
 
     client = _client()
-    if use_awb_pushdown:
+    if use_awb_pushdown or use_order_pushdown:
         from google.cloud import bigquery  # lazy import (matches _client)
-        job_config = bigquery.QueryJobConfig(query_parameters=[
-            bigquery.ArrayQueryParameter("wanted_awbs", "STRING", sorted(want))
-        ])
-        job = client.query(sql, job_config=job_config)
+        qparams = []
+        if use_awb_pushdown:
+            qparams.append(bigquery.ArrayQueryParameter("wanted_awbs", "STRING", sorted(want)))
+        if use_order_pushdown:
+            qparams.append(bigquery.ArrayQueryParameter("wanted_orders", "STRING", sorted(want_orders)))
+        job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qparams))
     else:
         job = client.query(sql)
     awb2prod, order2prod = {}, {}
@@ -614,14 +635,21 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     awb2order = {}
 
     def _emit(awb_raw, sku_raw, items_raw, order_raw, value_raw):
-        if awb_raw is None:
-            return
-        awb = _norm_re.sub("", str(awb_raw).strip().upper())
-        in_want = (want is None) or (awb in want)
-        # Skip shipments not on the invoice entirely (no AWB match and, for the
-        # AWB-filtered path, no order fallback needed) — saves all the per-row
-        # string/category work for the ~70% of window rows we don't bill.
-        if want is not None and not in_want:
+        awb = _norm_re.sub("", str(awb_raw).strip().upper()) if awb_raw is not None else ""
+        # Canonical order key: drop a leading '#' and any '_<route/suffix>' so the
+        # invoice's cleaned order id lines up with BigQuery's many variants
+        # (#MF..., #MF..._EX890, or plain marketplace ids like 171-...-...).
+        okey = str(order_raw or "").strip()
+        if okey.startswith("#"):
+            okey = okey[1:]
+        okey = okey.split("_", 1)[0].strip().upper()
+        awb_ok = bool(awb) and (want is not None) and (awb in want)
+        ord_ok = bool(okey) and (want_orders is not None) and (okey in want_orders)
+        # When either key set is given, keep only rows matching one of them (an
+        # AWB-set match OR an order-id match — Swift lines match on order id since
+        # their invoice AWB is blank). Saves the per-row string/category work for
+        # the window rows we don't bill.
+        if (want is not None or want_orders is not None) and not (awb_ok or ord_ok):
             return
         items_text = str(items_raw or "").strip()
         sku = str(sku_raw or "").strip()
@@ -631,17 +659,19 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             val = float(value_raw) if value_raw not in (None, "") else None
         except (TypeError, ValueError):
             val = None
-        oid = str(order_raw or "").strip().upper()
-        if awb and in_want:
+        # Store the AWB map for AWB matches (or the whole-window scan with no
+        # filter); always store the order map (keyed by the canonical order id)
+        # so order-keyed joins work too.
+        if awb and (awb_ok or (want is None and want_orders is None)):
             awb2prod[awb] = prod
             if val is not None:
                 awb2value[awb] = val
-            if oid:
-                awb2order[awb] = oid
-        if oid:
-            order2prod.setdefault(oid, prod)
+            if okey:
+                awb2order[awb] = okey
+        if okey:
+            order2prod.setdefault(okey, prod)
             if val is not None:
-                order2value.setdefault(oid, val)
+                order2value.setdefault(okey, val)
 
     # Consume the result columnar via REST-based Arrow (pyarrow only, NOT the
     # Storage API) — materialising 5 columns in bulk and iterating by index is

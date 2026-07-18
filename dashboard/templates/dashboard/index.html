@@ -292,6 +292,18 @@ body {
 .tier-rev { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--line);
   font-family: var(--display); font-weight: 500; font-size: 16px; letter-spacing: -.01em; color: var(--ink-soft); }
 .tier-rev .unit { font-size: 10.5px; color: var(--ink-faint); font-family: var(--mono); margin-left: 6px; font-weight: 400; }
+/* Delivery-zone cards reuse the tier-card look with their own accent colours. */
+.tier-card.za::before { background: var(--good); }
+.tier-card.zb::before { background: #5b8def; }
+.tier-card.zc::before { background: var(--ink-faint); }
+.tier-card.ze::before { background: var(--gold); }
+.tier-card.za .tier-bar > span { background: var(--good); }
+.tier-card.zb .tier-bar > span { background: #5b8def; }
+.tier-card.zc .tier-bar > span { background: var(--ink-faint); }
+.tier-card.ze .tier-bar > span { background: var(--gold); }
+.zone-kpi { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--ink-soft); }
+.zone-kpi b { font-weight: 600; color: var(--ink); }
 .filter label {
   display: block; font-family: var(--mono); font-size: 9.5px; letter-spacing: .07em;
   text-transform: uppercase; color: var(--ink-faint); margin-bottom: 3px;
@@ -1341,13 +1353,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
             </div>
           </div>
           <div class="filter">
-            <label>Zone</label>
-            <div class="msel" data-name="zone" data-all="All zones">
-              <button type="button" class="msel-toggle"><span class="msel-text">All zones</span><span class="msel-caret">▾</span></button>
-              <div class="msel-menu" hidden></div>
-            </div>
-          </div>
-          <div class="filter">
             <label>Weight</label>
             <div class="msel" data-name="weight" data-all="All weights">
               <button type="button" class="msel-toggle"><span class="msel-text">All weights</span><span class="msel-caret">▾</span></button>
@@ -1435,6 +1440,15 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <p id="dailySub" class="panel-sub"></p>
         </div>
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDaily"></canvas></div>
+      </div>
+
+      <!-- Delivery zones (A / B / C / E) -->
+      <div class="panel">
+        <div class="panel-head">
+          <h3>Delivery zones</h3>
+          <p id="zoneSub" class="panel-sub"></p>
+        </div>
+        <div class="tier-row zone-row" id="zoneRow"></div>
       </div>
 
       <!-- Score table -->
@@ -1559,6 +1573,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
           <label class="btn-primary" for="invFileInput">Upload invoices</label>
           <input type="file" id="invFileInput" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv" multiple hidden>
           <button type="button" class="btn-ghost" id="invDriveImportEmpty" style="margin-top:10px">☁ Import from Google Drive</button>
+          <button type="button" class="btn-ghost" id="invRegisterCarrierEmpty" style="margin-top:10px" title="Onboard a new carrier: map its invoice columns once, and future invoices parse automatically">＋ Register new carrier</button>
           <p class="upload-hint" id="invHint"></p>
         </div>
       </section>
@@ -1588,6 +1603,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
             </label>
             <span class="inv-tb-btngroup">
               <button type="button" class="btn-ghost" id="invDriveImport" title="Import invoices from the shared Google Drive folder">☁ Import from Drive</button>
+              <button type="button" class="btn-ghost" id="invRegisterCarrier" title="Onboard a new carrier: map its invoice columns once, and future invoices parse automatically">＋ New carrier</button>
               <label class="btn-ghost" for="invMasterInput" title="Replace the stored item master">⤒ Update master</label>
               <input type="file" id="invMasterInput" accept=".xlsx,.xlsm,.csv,.tsv" hidden>
               <label class="btn-primary-sm" for="invAddInput">＋ Add invoices</label>
@@ -1679,7 +1695,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="panel" id="invWtDisputePanel" hidden>
           <div class="panel-head">
             <h3>Weight dispute opportunities</h3>
-            <p class="panel-sub" id="invWtDisputeSub">charged weight vs item-master volumetric weight, 1&nbsp;kg slabs</p>
+            <p class="panel-sub" id="invWtDisputeSub">charged weight vs item-master volumetric weight, BlueDart&nbsp;slabs</p>
             <button type="button" class="btn-ghost" id="invWtProdExport" title="Download every flagged AWB (with product, SKU, charged vs expected weight) as CSV">⤓ Export AWB detail</button>
           </div>
           <div id="invWtDisputeHint" class="cost-empty" hidden></div>
@@ -1839,6 +1855,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     window.INVOICE_AWBS_URL = "{% url 'export_invoice_awbs' %}";
     window.MASTER_URL = "{% url 'master_config' %}";
     window.DRIVE_URL = "{% url 'import_from_drive' %}";
+    window.REGISTER_CARRIER_URL = "{% url 'register_carrier' %}";
     window.EXPORT_URL = "{% url 'export_shipments' %}";
     window.AI_SUMMARY_URL = "{% url 'ai_summary' %}";
     window.SLA_URL = "{% url 'sla_config' %}";
@@ -2190,7 +2207,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Each dynamic dropdown is filled independently and only the FIRST time it
   // actually receives options. This way a partial first response (e.g. only
   // "zones") never permanently blocks the others from filling on a later one.
-  var filled = { channel: false, zone: false, account: false, warehouse: false };
+  var filled = { channel: false, account: false, warehouse: false };
   var dateBoundsSet = false;
 
   // When a NEW dataset loads (fresh BigQuery pull or file upload), the dynamic
@@ -2201,9 +2218,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // and their selections are left intact. Not called on client-side re-filters
   // (the loaded record set, and thus the option lists, don't change there).
   function resetDynamicFilters() {
-    filled = { channel: false, zone: false, account: false, warehouse: false };
+    filled = { channel: false, account: false, warehouse: false };
     dateBoundsSet = false;
-    ["channel", "zone", "account", "warehouse"].forEach(function (name) {
+    ["channel", "account", "warehouse"].forEach(function (name) {
       var m = document.querySelector('.msel[data-name="' + name + '"]');
       if (!m) return;
       var menu = m.querySelector(".msel-menu");
@@ -2235,9 +2252,6 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 
     fillMsel("channel", filters.channels, function (c) {
       return { value: c.value, text: c.label + " (" + (c.n || 0).toLocaleString() + ")" };
-    });
-    fillMsel("zone", filters.zones, function (z) {
-      return { value: z, text: z };
     });
     fillMsel("account", filters.accounts, function (a) {
       return { value: a.value, text: a.label + " (" + (a.n || 0).toLocaleString() + ")" };
@@ -2377,6 +2391,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     renderTable(report.carriers);
     renderStatusMatrix(report);
     renderProducts(report);
+    renderZones(report);
     renderWarehouses(report);
     renderDestinations(report);
     renderWarehouseCarrierPanel(report);
@@ -2555,6 +2570,36 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         '<div class="tier-bar"><span style="width:' + Math.round(pct) + '%"></span></div>' +
         '<div class="tier-rev">' + fmtINRc(r) +
         '<span class="unit">' + revPct.toFixed(1) + '% of value</span></div>' +
+        '</div>';
+    }).join("");
+  }
+
+  // ---- Delivery zones (A / B / C / E) ----------------------------------
+  function renderZones(report) {
+    var zones = report.zone_breakdown || [];
+    var row = $("zoneRow");
+    if (!row) return;
+    var total = zones.reduce(function (a, z) { return a + z.n; }, 0);
+    var totalRev = zones.reduce(function (a, z) { return a + (z.revenue || 0); }, 0);
+    var sub = $("zoneSub");
+    if (sub) {
+      sub.textContent = total.toLocaleString() + " shipments across 4 zones · " +
+        fmtINRc(totalRev) + " · classified by drop pincode (intra-city vs Tier 1 vs NE/J&K)";
+    }
+    var CLS = { "A": "za", "B": "zb", "C": "zc", "E": "ze" };
+    row.innerHTML = zones.map(function (z) {
+      var pct = z.share_pct == null ? 0 : z.share_pct;
+      return '<div class="tier-card ' + (CLS[z.zone] || "") + '">' +
+        '<div class="tier-head"><span class="tier-name">Zone ' + esc(z.zone) + '</span>' +
+        '<span class="tier-cap">' + esc(z.label) + '</span></div>' +
+        '<div class="tier-val">' + z.n.toLocaleString() +
+        '<span class="unit">' + pct.toFixed(1) + '%</span></div>' +
+        '<div class="tier-bar"><span style="width:' + Math.round(pct) + '%"></span></div>' +
+        '<div class="tier-rev">' + fmtINRc(z.revenue) +
+        '<span class="unit">' + (z.revenue_pct == null ? "—" : z.revenue_pct.toFixed(1) + '% of value') + '</span></div>' +
+        '<div class="zone-kpi"><span>RTO <b style="color:' + rtoColor(z.rto_pct) + '">' + fmtPct(z.rto_pct) + '</b></span>' +
+        '<span>Success <b>' + fmtPct(z.success_rate) + '</b></span>' +
+        '<span>AOV <b>' + fmtRupee(z.aov) + '</b></span></div>' +
         '</div>';
     }).join("");
   }
@@ -2853,23 +2898,24 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     // Real Frido category images (Shopify CDN); categories without one fall back
     // to an emoji badge below.
     var _CDN = "https://cdn.shopify.com/s/files/1/0553/0419/2034/files/";
-    // Consolidated 6-group scheme (Comfort & Sleep, Footwear, Orthopedic &
-    // Wellness, Mobility & Furniture, Maternity & Baby Care, Accessories). One
-    // representative Frido image per group; anything else uses the emoji badge.
+    // Consolidated group scheme (Comfort & Sleep, Footwear, Orthopedic &
+    // Wellness, Mobility, Furniture, Maternity & Baby Care, Accessories &
+    // Others). One representative Frido image per group; anything else uses the
+    // emoji badge.
     var CATEGORY_IMG = {
       "Comfort & Sleep": _CDN + "CNP-Black-01B_4997708e-d0e7-49d3-af3f-fe7d51f06423.jpg?v=1739886430&width=200",
       "Footwear": _CDN + "WS-01_8b6068d3-4e48-4b4c-8d37-07fd0338d7cb.jpg?v=1753101892&width=200",
       "Orthopedic & Wellness": _CDN + "Category_1_2_1.jpg?v=1769695217&width=200",
-      "Mobility & Furniture": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=200"
+      "Furniture": _CDN + "Ergo-chair-01_f909b535-6d3d-4bc9-b4bd-0c3ff7ecdeee.jpg?v=1729333804&width=200"
     };
     var CATEGORY_ICON = {
       "Comfort & Sleep": "🛏️",
       "Footwear": "🥿",
       "Orthopedic & Wellness": "🩺",
-      "Mobility & Furniture": "♿",
+      "Mobility": "♿",
+      "Furniture": "🪑",
       "Maternity & Baby Care": "🤰",
-      "Accessories": "🎒",
-      "Others": "📦"
+      "Accessories & Others": "🎒"
     };
 
     // Show the first 3 rows of a section; tuck the rest behind a "+N more" toggle.
@@ -3855,6 +3901,167 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     }).catch(function () {});
   }
 
+  // ---- Register a new carrier (column mapping → auto-parse future invoices) --
+  // Onboard a carrier the pipeline has never seen: upload one sample invoice,
+  // map its columns to the standard fields, and save. The server stores the
+  // mapping (+ a Drive folder holding the reference invoice) so that carrier's
+  // future invoices parse automatically — no code change needed.
+  var carrierSampleFile = null, carrierColumns = [], carrierSheet = "";
+
+  function ensureCarrierModalStyles() {
+    if ($("carrierModalStyles")) return;
+    var st = document.createElement("style");
+    st.id = "carrierModalStyles";
+    st.textContent =
+      ".cc-modal{background:var(--paper,#fff);color:var(--ink,#0f172a);border-radius:14px;" +
+      "padding:22px 24px;width:min(640px,94vw);max-height:88vh;overflow:auto;box-shadow:0 20px 60px rgba(0,0,0,.25);}" +
+      ".cc-modal h3{margin:0 0 4px;font-size:17px;}" +
+      ".cc-modal p.cc-sub{margin:0 0 16px;font-size:13px;color:var(--muted,#64748b);}" +
+      ".cc-field{display:flex;flex-direction:column;gap:6px;font-size:13px;margin-bottom:14px;}" +
+      ".cc-field>span{font-weight:600;}" +
+      ".cc-field input[type=text],.cc-field input[type=file],.cc-field select{padding:9px 10px;" +
+      "border:1px solid var(--line-strong,#cbd5e1);border-radius:8px;font-size:14px;" +
+      "background:var(--paper,#fff);color:var(--ink,#0f172a);}" +
+      ".cc-map{display:grid;grid-template-columns:1fr 1fr;gap:12px 16px;margin:6px 0 14px;}" +
+      ".cc-map .cc-field{margin-bottom:0;}" +
+      ".cc-req{color:#dc2626;}" +
+      ".cc-hint{font-size:11px;color:var(--muted,#64748b);font-weight:400;}" +
+      ".cc-samples{font-size:11px;color:var(--muted,#94a3b8);font-style:italic;min-height:14px;}" +
+      ".cc-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:8px;}" +
+      ".cc-actions button[disabled]{opacity:.5;cursor:not-allowed;}" +
+      ".cc-status{font-size:12.5px;margin:6px 0;min-height:16px;}" +
+      ".cc-status.err{color:#dc2626;}.cc-status.ok{color:#059669;}";
+    document.head.appendChild(st);
+  }
+
+  function ccSetStatus(msg, kind) {
+    var el = $("ccStatus"); if (!el) return;
+    el.textContent = msg || ""; el.className = "cc-status" + (kind ? " " + kind : "");
+  }
+
+  function openRegisterCarrier() {
+    ensureDriveModalStyles(); ensureCarrierModalStyles();
+    carrierSampleFile = null; carrierColumns = []; carrierSheet = "";
+    var old = $("carrierModal"); if (old) old.parentNode.removeChild(old);
+    var overlay = document.createElement("div");
+    overlay.id = "carrierModal";
+    overlay.className = "drive-modal-overlay";
+    overlay.innerHTML =
+      '<div class="cc-modal" role="dialog" aria-modal="true" aria-label="Register a new carrier">' +
+        '<h3>Register a new carrier</h3>' +
+        '<p class="cc-sub">Map a sample invoice’s columns once. A Drive folder is created for this carrier and the reference invoice is stored there, so future invoices parse automatically.</p>' +
+        '<label class="cc-field"><span>Carrier name <span class="cc-req">*</span></span>' +
+          '<input type="text" id="ccName" placeholder="e.g. XpressBees, Shadowfax Surface…" autocomplete="off"></label>' +
+        '<label class="cc-field"><span>Sample invoice <span class="cc-req">*</span></span>' +
+          '<input type="file" id="ccFile" accept=".xlsx,.xlsm,.xlsb,.csv,.tsv">' +
+          '<span class="cc-hint">.xlsx / .xlsb / .csv — one real invoice from this carrier.</span></label>' +
+        '<div id="ccMapWrap" hidden>' +
+          '<div class="cc-hint" style="margin-bottom:6px">Match each field to a column from your file. Leave blank if the file has no such column. <span class="cc-req">*</span> fields are required.</div>' +
+          '<div class="cc-map" id="ccMap"></div>' +
+          '<label class="cc-field"><span>Does the billed amount include GST?</span>' +
+            '<select id="ccGst"><option value="included">Yes — amount already includes GST</option>' +
+            '<option value="add_18">No — amount is pre-GST (add 18%)</option></select></label>' +
+        '</div>' +
+        '<div class="cc-status" id="ccStatus"></div>' +
+        '<div class="cc-actions">' +
+          '<button type="button" class="btn-ghost" id="ccCancel">Cancel</button>' +
+          '<button type="button" class="btn-primary" id="ccSave" disabled>Save carrier</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    $("ccCancel").addEventListener("click", close);
+    overlay.addEventListener("click", function (e) { if (e.target === overlay) close(); });
+    $("ccFile").addEventListener("change", function (e) {
+      var f = e.target.files && e.target.files[0]; if (f) carrierAnalyze(f);
+    });
+    $("ccSave").addEventListener("click", carrierSave);
+  }
+
+  // Step 1 — send the sample to the server; get back its columns + a suggested
+  // mapping, then render the mapping form.
+  function carrierAnalyze(file) {
+    carrierSampleFile = file;
+    ccSetStatus("Reading columns from " + file.name + "…", null);
+    var fd = new FormData(); fd.append("action", "analyze"); fd.append("file", file);
+    invPost(fd, window.REGISTER_CARRIER_URL).then(function (info) {
+      carrierColumns = info.columns || [];
+      carrierSheet = info.sheet || "";
+      renderCarrierMapping(info);
+      $("ccMapWrap").hidden = false;
+      $("ccSave").disabled = false;
+      ccSetStatus("Detected " + carrierColumns.length + " column(s) on sheet “" +
+        (info.sheet || "") + "”. Review the mapping below.", "ok");
+    }).catch(function (err) { ccSetStatus(err.message, "err"); });
+  }
+
+  function renderCarrierMapping(info) {
+    var wrap = $("ccMap"); if (!wrap) return;
+    var cols = info.columns || [], sug = info.suggestions || {};
+    function optionsFor(sel) {
+      var o = '<option value="">— not in file —</option>';
+      cols.forEach(function (c) {
+        o += '<option value="' + esc(c.name) + '"' + (c.name === sel ? ' selected' : '') +
+             '>' + esc(c.name) + '</option>';
+      });
+      return o;
+    }
+    wrap.innerHTML = (info.fields || []).map(function (f) {
+      return '<label class="cc-field" data-fkey="' + esc(f.key) + '">' +
+        '<span>' + esc(f.label) + (f.required ? ' <span class="cc-req">*</span>' : '') + '</span>' +
+        '<select data-fkey="' + esc(f.key) + '">' + optionsFor(sug[f.key] || "") + '</select>' +
+        '<span class="cc-hint">' + esc(f.hint || "") + '</span>' +
+        '<span class="cc-samples" data-samples-for="' + esc(f.key) + '"></span>' +
+      '</label>';
+    }).join("");
+    function sampleFor(name) {
+      for (var i = 0; i < cols.length; i++) {
+        if (cols[i].name === name) return (cols[i].samples || []).slice(0, 3).join(" · ");
+      }
+      return "";
+    }
+    wrap.querySelectorAll("select[data-fkey]").forEach(function (s) {
+      var out = wrap.querySelector('[data-samples-for="' + s.getAttribute("data-fkey") + '"]');
+      function upd() { if (out) out.textContent = s.value ? ("e.g. " + sampleFor(s.value)) : ""; }
+      s.addEventListener("change", upd); upd();
+    });
+  }
+
+  // Step 2 — validate + save. The server checks the mapping against the sample,
+  // stores the config, creates the carrier's Drive folder and saves the reference.
+  function carrierSave() {
+    var name = ($("ccName").value || "").trim();
+    if (!name) { ccSetStatus("Enter a carrier name.", "err"); return; }
+    if (!carrierSampleFile) { ccSetStatus("Choose a sample invoice.", "err"); return; }
+    var fields = {};
+    document.querySelectorAll("#ccMap select[data-fkey]").forEach(function (s) {
+      if (s.value) fields[s.getAttribute("data-fkey")] = s.value;
+    });
+    if (!fields.amount) { ccSetStatus("Map the billed-amount column.", "err"); return; }
+    if (!fields.awb && !fields.order_id) {
+      ccSetStatus("Map an AWB or an Order ID column.", "err"); return;
+    }
+    var fd = new FormData();
+    fd.append("action", "save");
+    fd.append("carrier", name);
+    fd.append("fields", JSON.stringify(fields));
+    fd.append("sheet", carrierSheet || "");
+    fd.append("gst_mode", ($("ccGst") && $("ccGst").value) || "included");
+    fd.append("file", carrierSampleFile);
+    $("ccSave").disabled = true;
+    ccSetStatus("Saving…", null);
+    invPost(fd, window.REGISTER_CARRIER_URL).then(function (rep) {
+      var driveMsg = rep.drive === "saved"
+        ? "Drive folder created & reference stored."
+        : ("Drive: " + rep.drive + ".");
+      ccSetStatus("✓ " + name + " registered · " + (rep.sample_lines || 0) +
+        " sample rows parsed · " + driveMsg, "ok");
+      invSetHint(name + " registered — its invoices will now parse automatically.", null);
+      var m = $("carrierModal");
+      setTimeout(function () { if (m && m.parentNode) m.parentNode.removeChild(m); }, 2200);
+    }).catch(function (err) { $("ccSave").disabled = false; ccSetStatus(err.message, "err"); });
+  }
+
   // (Re)build the carrier dropdown from the full carrier list the server always
   // returns (rep.all_carriers), keeping the current selection if still valid.
   function populateInvCarrierFilter(rep) {
@@ -3987,11 +4194,15 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var panel = $("invCarrierCmpPanel");
     if (!panel) return;
     var cc = rep && rep.carrier_comparison;
-    if (!cc || !cc.rows || cc.carrier_count < 2) { panel.hidden = true; return; }
+    // Need 2+ carriers to "compare" when unfiltered; but when a single carrier is
+    // selected up top, show its one-row summary so the panel tracks the filter.
+    var filtered = !!(rep && rep.carrier_filter);
+    if (!cc || !cc.rows || !cc.rows.length ||
+        (cc.carrier_count < 2 && !filtered)) { panel.hidden = true; return; }
     panel.hidden = false;
 
     var sub = $("invCarrierCmpSub");
-    if (sub) sub.textContent = cc.carrier_count + " carriers · " +
+    if (sub) sub.textContent = cc.carrier_count + (cc.carrier_count === 1 ? " carrier · " : " carriers · ") +
       cc.totals.invoices.toLocaleString("en-IN") + " invoices · " +
       cc.totals.shipments.toLocaleString("en-IN") + " AWBs · " +
       inr(cc.totals.amount_with_gst) + " billed";
@@ -4263,7 +4474,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         hint.hidden = false;
         hint.textContent = "Upload your item master (SKU + volumetric weight in kg) to flag " +
           "weight over-charges. Each invoice AWB is matched to its SKU and compared to the " +
-          "charged weight in 1 kg slabs.";
+          "charged weight using BlueDart weight slabs (0.5 / 1 / 2 / 3 / 5 / 7 / 10 kg, +1 kg beyond); " +
+          "a line is flagged only when the charge jumps more than one slab above expected.";
       }
       if (sub) sub.textContent = "no item master loaded yet";
       return;
@@ -4274,8 +4486,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     if (sub) {
       var cov = wd.total_lines ? Math.round(wd.checked / wd.total_lines * 100) : 0;
       sub.textContent = wd.flagged.toLocaleString("en-IN") + " of " +
-        wd.checked.toLocaleString("en-IN") + " checked AWBs over-charged ≥ " +
-        wd.slab + " kg · " + wd.excess_kg.toLocaleString("en-IN") + " kg excess · est. " +
+        wd.checked.toLocaleString("en-IN") + " checked AWBs over-charged by more than one BlueDart slab · " +
+        wd.excess_kg.toLocaleString("en-IN") + " kg excess · est. " +
         inr(wd.est_overcharge) + " disputable · only " +
         wd.checked.toLocaleString("en-IN") + " of " + (wd.total_lines || 0).toLocaleString("en-IN") +
         " AWBs (" + cov + "%) had a master SKU to check";
@@ -5256,6 +5468,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     });
     if ($("invDriveImport")) $("invDriveImport").addEventListener("click", importFromDrive);
     if ($("invDriveImportEmpty")) $("invDriveImportEmpty").addEventListener("click", importFromDrive);
+    if ($("invRegisterCarrier")) $("invRegisterCarrier").addEventListener("click", openRegisterCarrier);
+    if ($("invRegisterCarrierEmpty")) $("invRegisterCarrierEmpty").addEventListener("click", openRegisterCarrier);
     refreshMasterStatus();
     if ($("invProductSearch")) $("invProductSearch").addEventListener("input", function () {
       renderActiveProdView();

@@ -15,4 +15,5 @@ urlpatterns = [
     path("api/invoices/awbs/", views.export_invoice_awbs, name="export_invoice_awbs"),
     path("api/master/", views.master_config, name="master_config"),
     path("api/invoices/drive/", views.import_from_drive, name="import_from_drive"),
+    path("api/carriers/register/", views.register_carrier, name="register_carrier"),
 ]

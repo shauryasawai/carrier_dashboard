@@ -124,6 +124,56 @@ _PROD_CACHE = {"records": None, "maps": None}
 _VALUE_CACHE = {"records": None, "maps": None}
 
 
+# Runtime carrier configs (column mappings for carriers onboarded via the
+# "Register new carrier" flow). Persisted to Google Drive (shared, canonical)
+# and mirrored to this local cache so parsing works without a Drive round-trip.
+_CARRIER_CFG_PATH = os.path.join(os.path.dirname(__file__), "data", "carrier_configs.json")
+_CARRIER_CFG_STATE = {"loaded": False}
+
+
+def _read_local_configs():
+    try:
+        with open(_CARRIER_CFG_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_local_configs(configs):
+    try:
+        os.makedirs(os.path.dirname(_CARRIER_CFG_PATH), exist_ok=True)
+        with open(_CARRIER_CFG_PATH, "w", encoding="utf-8") as fh:
+            json.dump(configs, fh, ensure_ascii=False, indent=2)
+    except OSError:
+        logger.exception("Could not write local carrier configs")
+
+
+def _ensure_carrier_configs(force=False):
+    """Load the saved carrier column-mapping configs into the invoices registry
+    so registered carriers parse automatically. Local cache is read first (fast,
+    always present); the shared Google Drive store is overlaid when configured
+    and mirrored back to the local cache. Cached after the first load."""
+    if _CARRIER_CFG_STATE["loaded"] and not force:
+        return invoices.get_carrier_configs()
+    configs = {}
+    configs.update(_read_local_configs())
+    try:
+        from . import gdrive
+        if gdrive.is_configured():
+            fid = gdrive.folder_id()
+            if fid:
+                drive_cfgs = gdrive.read_configs(fid)
+                if drive_cfgs:
+                    configs.update(drive_cfgs)
+                    _write_local_configs(configs)
+    except Exception:  # noqa: BLE001 - config loading must never block parsing
+        logger.exception("Loading carrier configs from Drive failed")
+    invoices.set_carrier_configs(configs)
+    _CARRIER_CFG_STATE["loaded"] = True
+    return configs
+
+
 def _reset_invoice_cache():
     _INVOICE_CACHE["version"] += 1
     _INVOICE_CACHE["report_cache"] = {}
@@ -171,12 +221,17 @@ def _refresh_invoice_product_map():
     # window (most of the per-row cost).
     inv_awbs = {it["awb"] for it in items if it.get("awb")}
     inv_carriers = {it.get("carrier") for it in items if it.get("carrier")}
+    # Also collect the invoice order ids: carriers like Swift carry no AWB, so
+    # their lines can only be joined to BigQuery product data by order id.
+    inv_orders = {(it.get("order_id") or "").strip().upper()
+                  for it in items if it.get("order_id")}
+    inv_orders.discard("")
     try:
         # use_arrow=False -> stream rows instead of materialising the whole window
         # through pyarrow, which was segfaulting the serverless worker.
         awb2prod, order2prod, awb2value, order2value, awb2order = bq.fetch_awb_product_map(
-            lo.isoformat(), hi.isoformat(), awbs=inv_awbs, carriers=inv_carriers,
-            use_arrow=False)
+            lo.isoformat(), hi.isoformat(), awbs=inv_awbs, orders=inv_orders,
+            carriers=inv_carriers, use_arrow=False)
     except Exception:  # noqa: BLE001 - enrichment is best-effort; never block upload
         logger.exception("Invoice BigQuery enrichment failed")
         return
@@ -269,9 +324,12 @@ def _invoice_report(carrier_filter=None):
     report["all_carriers"] = all_carriers
     report["carrier_filter"] = active
     report["prod_window"] = _INVOICE_CACHE.get("prod_window")
-    # Cross-carrier comparison is built from ALL loaded invoices (not the
-    # filtered subset) so it stays the same regardless of the carrier dropdown.
-    report["carrier_comparison"] = invoices.build_carrier_comparison(items)
+    # Carrier comparison + month-wise trends follow the active carrier filter too,
+    # so the WHOLE page reflects the selection: with a carrier chosen they narrow
+    # to just that carrier (single-row summary + its own month trend); with "All
+    # carriers" they show every carrier side by side as before. The dropdown still
+    # lists every carrier (all_carriers is built from the full item set above).
+    report["carrier_comparison"] = invoices.build_carrier_comparison(selected)
     _INVOICE_CACHE["report_cache"][ckey] = report
     return report
 
@@ -1180,6 +1238,9 @@ def import_from_drive(request):
     if request.POST.get("append") != "1":
         _reset_invoice_cache()
 
+    # Make sure any onboarded-carrier column mappings are active before parsing.
+    _ensure_carrier_configs()
+
     errors = []
     master_saved = False
     # Download all of the month's files concurrently (network-bound — the main
@@ -1266,6 +1327,9 @@ def process_invoices(request):
 
     if request.POST.get("append") != "1":
         _reset_invoice_cache()
+
+    # Make sure any onboarded-carrier column mappings are active before parsing.
+    _ensure_carrier_configs()
 
     errors = []
     for up in uploads:
@@ -1382,6 +1446,145 @@ def master_config(request):
     dm = _default_master()
     return JsonResponse({"ok": True, "loaded": dm["sku_count"] > 0,
                          "sku_count": dm["sku_count"], "updated_at": dm["updated_at"]})
+
+
+def _drive_upload_mime(name):
+    n = (name or "").lower()
+    if n.endswith((".xlsx", ".xlsm")):
+        from . import gdrive
+        return gdrive._XLSX_MIME
+    if n.endswith(".csv"):
+        return "text/csv"
+    if n.endswith(".tsv"):
+        return "text/tab-separated-values"
+    return None
+
+
+@auth.team_required
+@require_POST
+def register_carrier(request):
+    """Onboard a NEW carrier so its invoices flow through the existing pipeline
+    without a code change.
+
+    actions:
+      list    -> the carriers already registered (with their column mappings).
+      analyze -> read an uploaded sample invoice and return its columns + an
+                 auto-suggested field mapping, so the UI can render a mapping form.
+      save    -> persist a carrier's column mapping (validated against the sample),
+                 create a Drive folder named after the carrier, drop the reference
+                 invoice inside it, and store the shared carrier-config file. From
+                 then on, dropping that carrier's monthly invoices into its Drive
+                 folder (or uploading them) parses automatically.
+    """
+    action = request.POST.get("action", "list")
+
+    if action == "list":
+        cfgs = _ensure_carrier_configs()
+        return JsonResponse({"ok": True, "carriers": [
+            {"carrier": c.get("carrier"), "fields": c.get("fields", {}),
+             "gst_mode": c.get("gst_mode"), "updated_at": c.get("updated_at")}
+            for c in cfgs.values()]})
+
+    if action == "analyze":
+        upload = request.FILES.get("file")
+        if upload is None:
+            return JsonResponse({"error": "No file uploaded."}, status=400)
+        if not upload.name.lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv", ".tsv")):
+            return JsonResponse(
+                {"error": "Upload a .xlsx / .xlsb / .csv sample invoice."}, status=400)
+        data = upload.read() or b""
+        try:
+            info = invoices.detect_columns(data, upload.name)
+        except Exception as exc:  # noqa: BLE001
+            return JsonResponse({"error": f"Could not read the file: {exc}"}, status=400)
+        info["ok"] = True
+        info["filename"] = upload.name
+        return JsonResponse(info)
+
+    if action == "save":
+        carrier = (request.POST.get("carrier") or "").strip()
+        if not carrier:
+            return JsonResponse({"error": "Enter a carrier name."}, status=400)
+        try:
+            fields = json.loads(request.POST.get("fields") or "{}")
+        except ValueError:
+            return JsonResponse({"error": "Invalid column mapping."}, status=400)
+        fields = {k: v for k, v in (fields or {}).items() if v}   # drop unmapped
+        if not fields.get("amount"):
+            return JsonResponse({"error": "Map the billed-amount column."}, status=400)
+        if not (fields.get("awb") or fields.get("order_id")):
+            return JsonResponse(
+                {"error": "Map an AWB or an Order ID column."}, status=400)
+
+        config = {
+            "carrier": carrier,
+            "fields": fields,
+            "sheet": (request.POST.get("sheet") or "").strip() or None,
+            "gst_mode": (request.POST.get("gst_mode") or "included").strip(),
+            "gst_rate": 18,
+            "filename_tokens": [carrier.lower()],
+            "updated_at": datetime.datetime.now().strftime("%d %b %Y %H:%M"),
+        }
+
+        # Validate the mapping against the uploaded sample (when provided) so a
+        # broken mapping is caught before it's saved.
+        upload = request.FILES.get("file")
+        sample_data = upload.read() if upload is not None else None
+        sample_lines = 0
+        if sample_data:
+            try:
+                items = invoices._parse_configured(
+                    invoices._read_sheets(sample_data, upload.name), upload.name, config)
+            except Exception as exc:  # noqa: BLE001
+                return JsonResponse(
+                    {"error": f"The mapping failed on the sample file: {exc}"}, status=400)
+            if not items:
+                return JsonResponse(
+                    {"error": "The mapping produced no billed rows from the sample. "
+                              "Check the amount and AWB/Order ID columns."}, status=400)
+            sample_lines = len(items)
+
+        # Persist: local cache (used by the parser) + register in memory now.
+        configs = _ensure_carrier_configs()
+        configs[carrier] = config
+        _write_local_configs(configs)
+        invoices.set_carrier_configs(configs)
+        _INVOICE_CACHE["version"] += 1
+        _INVOICE_CACHE["report_cache"] = {}
+
+        # Push to Google Drive: create the carrier's folder, store the reference
+        # invoice, and write the shared carrier-config file.
+        drive_status = "not configured"
+        drive_folder_url = ""
+        from . import gdrive
+        if gdrive.is_configured():
+            fid = gdrive.folder_id()
+            if not fid:
+                drive_status = "no root Drive folder set (GDRIVE_INVOICE_FOLDER)"
+            else:
+                try:
+                    svc = gdrive._service()
+                    carrier_folder = gdrive.find_or_create_folder(carrier, fid, svc=svc)
+                    if sample_data:
+                        ref_folder = gdrive.find_or_create_folder(
+                            "reference", carrier_folder, svc=svc)
+                        gdrive.upload_bytes(upload.name, sample_data, ref_folder,
+                                            mime=_drive_upload_mime(upload.name), svc=svc)
+                    gdrive.write_configs(fid, configs, svc=svc)
+                    drive_status = "saved"
+                    drive_folder_url = ("https://drive.google.com/drive/folders/"
+                                        + carrier_folder)
+                except Exception as exc:  # noqa: BLE001 - surface, don't crash
+                    logger.exception("Drive carrier onboarding write failed")
+                    drive_status = f"failed: {exc}"
+
+        return JsonResponse({
+            "ok": True, "carrier": carrier, "fields": fields,
+            "sample_lines": sample_lines,
+            "drive": drive_status, "drive_folder": drive_folder_url,
+        })
+
+    return JsonResponse({"error": "Unknown action."}, status=400)
 
 
 @auth.team_required

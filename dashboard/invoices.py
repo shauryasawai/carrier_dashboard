@@ -629,6 +629,17 @@ def _parse_skyair(sheets, filename):
     return None
 
 
+def _clean_swift_order(v):
+    """Swift's 'Order Number' is '#<OMS order>_<route code>' — e.g.
+    '#MF0223010553_AAJKOL26'. Strip the leading '#' and the trailing '_<route>'
+    so it matches the OMS order id stored in BigQuery ('MF0223010553'), which is
+    the only usable join key for Swift (the invoice AWB column is blank)."""
+    s = _s(v).lstrip("#").strip()
+    if not s:
+        return ""
+    return s.split("_", 1)[0].strip()
+
+
 def _parse_swift(sheets, filename):
     """Swift B2C billing detail. Columns: Swift Id / AWB / Cost (incl GST) /
     Weight (in gms) / Billing Date / Direction / Product Description. The invoice
@@ -679,7 +690,7 @@ def _parse_swift(sheets, filename):
             carrier = _clean_courier(_cell(row, car_i)) or "Swift"
             out.append({
                 "carrier": carrier or "Swift", "awb": awb,
-                "order_id": _s(_cell(row, ord_i)),
+                "order_id": _clean_swift_order(_cell(row, ord_i)),
                 "sku": sku, "sku_name": pname, "product": pname,
                 "category": "Others",
                 "weight_kg": (wt_g / 1000.0) if wt_g else None,
@@ -950,9 +961,252 @@ def _parse_generic(sheets, filename):
     return None
 
 
+# --------------------------------------------------------------------------
+# Configurable adapter for carriers onboarded at runtime (no code change)
+# --------------------------------------------------------------------------
+# The standard target fields a saved carrier config can map its columns onto.
+# Order + labels drive the mapping UI; `required` marks the minimum a config
+# needs to parse (an amount plus at least one of awb/order_id — enforced below).
+STANDARD_FIELDS = [
+    {"key": "amount", "label": "Billed amount", "required": True,
+     "hint": "Total charge for the shipment (with GST unless you pick ex-GST below)"},
+    {"key": "amount_ex_gst", "label": "Amount excl. GST", "required": False,
+     "hint": "Pre-tax charge, if the file has a separate column"},
+    {"key": "awb", "label": "AWB / tracking number", "required": False,
+     "hint": "Waybill / tracking id"},
+    {"key": "order_id", "label": "Order ID", "required": False,
+     "hint": "Client order number (needed only if there's no AWB)"},
+    {"key": "weight_kg", "label": "Charged weight (kg)", "required": False,
+     "hint": "Billed / chargeable weight"},
+    {"key": "zone", "label": "Zone", "required": False, "hint": "Pricing zone / lane"},
+    {"key": "sku", "label": "SKU code", "required": False, "hint": "Product SKU code(s)"},
+    {"key": "sku_name", "label": "Product name", "required": False,
+     "hint": "Item / product description"},
+    {"key": "invoice_number", "label": "Invoice number", "required": False,
+     "hint": "Carrier's invoice / bill number"},
+    {"key": "invoice_date", "label": "Invoice / shipment date", "required": False,
+     "hint": "Used to bucket the billing month"},
+]
+
+# Auto-suggestion: which of the existing header-keyword lists to try for each
+# standard field, so the mapping UI comes pre-filled with a sensible guess.
+_SUGGEST_KEYS = {
+    "amount": AMOUNT_KEYS,
+    "amount_ex_gst": ["net amount", "net", "before tax", "ex gst", "freight subtotal",
+                      "total freight", "gross_amount", "base charge", "ntotalamt"],
+    "awb": AWB_KEYS,
+    "order_id": ORDER_KEYS,
+    "weight_kg": WEIGHT_KEYS,
+    "zone": ZONE_KEYS,
+    "sku": SKU_KEYS,
+    "sku_name": NAME_KEYS,
+    "invoice_number": ["invoice number", "invoice no", "invoice no.", "bill number",
+                       "cinvoicenbr", "client_invoice_number", "serial_number"],
+    "invoice_date": ["invoice date", "billing date", "bill date", "pickup date",
+                     "shipment date", "dinvdate", "client_invoice_date", "date"],
+}
+
+# Carrier configs registered at runtime (carrier name -> config dict). Populated
+# by the view layer from the shared store (Google Drive / local cache) via
+# set_carrier_configs(); consulted by _parse_registered during ingest.
+_CARRIER_CONFIGS = {}
+
+
+def set_carrier_configs(configs):
+    """Replace the runtime carrier-config registry (carrier name -> config)."""
+    global _CARRIER_CONFIGS
+    _CARRIER_CONFIGS = dict(configs or {})
+
+
+def get_carrier_configs():
+    return dict(_CARRIER_CONFIGS)
+
+
+def _best_header_row(rows, scan=15):
+    """Heuristically pick the header row of a sheet: the row (within the first
+    `scan`) with the most distinct non-empty text cells. Returns (idx, cells) or
+    (None, None)."""
+    best_i, best_score = None, 0
+    for i in range(min(scan, len(rows))):
+        cells = rows[i] or []
+        names = [_s(c) for c in cells]
+        score = sum(1 for n in names if n)
+        if score > best_score:
+            best_i, best_score = i, score
+    if best_i is None:
+        return None, None
+    return best_i, [_s(c) for c in (rows[best_i] or [])]
+
+
+def detect_columns(data, filename=""):
+    """Inspect a sample invoice file and describe its columns so the UI can build
+    a column-mapping form for a new carrier.
+
+    Returns:
+        {"sheet": <sheet name>, "sheets": [names],
+         "header_row": <0-based index>,
+         "columns": [{"name": raw header, "samples": [up to 3 values]}],
+         "suggestions": {field_key: raw header or ""},
+         "fields": STANDARD_FIELDS}
+    """
+    sheets = _read_sheets(data, filename)
+    # Choose the sheet whose best header row has the most columns.
+    chosen = None
+    for name, rows in sheets:
+        idx, cells = _best_header_row(rows)
+        if idx is None:
+            continue
+        width = sum(1 for c in cells if c)
+        if chosen is None or width > chosen[3]:
+            chosen = (name, rows, idx, width, cells)
+    if chosen is None:
+        raise ValueError("Could not find a header row in the file.")
+    sheet_name, rows, hidx, _w, header_cells = chosen
+
+    # Sample up to 3 non-empty values per column from the rows below the header.
+    columns = []
+    for j, raw in enumerate(header_cells):
+        if not raw:
+            continue
+        samples = []
+        for row in rows[hidx + 1:]:
+            v = _cell(row or [], j)
+            sv = _s(v)
+            if sv:
+                samples.append(sv)
+            if len(samples) >= 3:
+                break
+        columns.append({"index": j, "name": raw, "samples": samples})
+
+    # Auto-suggest a mapping by matching normalized header names to the known
+    # keyword lists (exact match first, then substring).
+    norm = {_nh(c["name"]): c["name"] for c in columns}
+    suggestions = {}
+    for field, keys in _SUGGEST_KEYS.items():
+        hit = ""
+        for k in keys:
+            if k in norm:
+                hit = norm[k]
+                break
+        if not hit:
+            for k in keys:
+                for nh, raw in norm.items():
+                    if k in nh:
+                        hit = raw
+                        break
+                if hit:
+                    break
+        suggestions[field] = hit
+
+    return {
+        "sheet": sheet_name,
+        "sheets": [n for n, _ in sheets],
+        "header_row": hidx,
+        "columns": columns,
+        "suggestions": suggestions,
+        "fields": STANDARD_FIELDS,
+    }
+
+
+def _parse_configured(sheets, filename, config):
+    """Parse an invoice using a saved carrier column-mapping config. Returns the
+    standard line-item list, or None when the config's columns aren't found in
+    the file (so the next adapter can be tried)."""
+    fields = config.get("fields") or {}
+    amt_h = _nh(fields.get("amount"))
+    exgst_h = _nh(fields.get("amount_ex_gst"))
+    awb_h = _nh(fields.get("awb"))
+    ord_h = _nh(fields.get("order_id"))
+    wt_h = _nh(fields.get("weight_kg"))
+    zone_h = _nh(fields.get("zone"))
+    sku_h = _nh(fields.get("sku"))
+    name_h = _nh(fields.get("sku_name"))
+    inv_h = _nh(fields.get("invoice_number"))
+    date_h = _nh(fields.get("invoice_date"))
+    if not amt_h or not (awb_h or ord_h):
+        return None
+    carrier = config.get("carrier") or carrier_from_filename(filename)
+    gst_mode = (config.get("gst_mode") or "included").lower()
+    gst_rate = float(config.get("gst_rate") or 18)
+    gst_mult = 1.0 + gst_rate / 100.0
+    want_sheet = (config.get("sheet") or "").strip()
+
+    def _match(cells):
+        return amt_h in cells and (awb_h in cells or ord_h in cells)
+
+    for name, rows in sheets:
+        if want_sheet and name != want_sheet:
+            continue
+        idx, cmap = _scan_header(rows, 15, _match)
+        if idx is None:
+            continue
+        amt_i = cmap.get(amt_h)
+        exgst_i = cmap.get(exgst_h)
+        awb_i = cmap.get(awb_h)
+        ord_i = cmap.get(ord_h)
+        wt_i = cmap.get(wt_h)
+        zone_i = cmap.get(zone_h)
+        sku_i = cmap.get(sku_h)
+        name_i = cmap.get(name_h)
+        inv_i = cmap.get(inv_h)
+        date_i = cmap.get(date_h)
+        out = []
+        for row in rows[idx + 1:]:
+            if not row:
+                continue
+            raw_amt = _f(_cell(row, amt_i))
+            awb = _norm_awb(_cell(row, awb_i)) if awb_i is not None else ""
+            order = _s(_cell(row, ord_i)) if ord_i is not None else ""
+            if raw_amt is None or (not awb and not order):
+                continue
+            if gst_mode == "add_18" or gst_mode == "ex_gst":
+                amount = round(raw_amt * gst_mult, 2)
+                amount_ex = round(raw_amt, 2)
+            else:
+                amount = raw_amt
+                ex = _f(_cell(row, exgst_i)) if exgst_i is not None else None
+                amount_ex = ex if ex is not None else round(raw_amt / gst_mult, 2)
+            nm = _clean_name(_cell(row, name_i)) if name_i is not None else ""
+            dlabel, mlabel, mkey = _invoice_period(_cell(row, date_i)) if date_i is not None else ("", "", "")
+            wt = _f(_cell(row, wt_i)) if wt_i is not None else None
+            out.append({
+                "carrier": carrier, "awb": awb, "order_id": order,
+                "sku": _s(_cell(row, sku_i)) if sku_i is not None else "",
+                "sku_name": nm, "product": nm,
+                "category": resolve_category(nm, nm),
+                "weight_kg": wt,
+                "zone": _norm_zone(_cell(row, zone_i)) if zone_i is not None else "",
+                "amount": amount, "shipments": 1,
+                "amount_ex_gst": amount_ex,
+                "invoice_number": _s(_cell(row, inv_i)) if inv_i is not None else "",
+                "invoice_date": dlabel,
+                "service_month": mlabel,
+                "service_month_key": mkey,
+                "direction": "",
+            })
+        if out:
+            return out
+    return None
+
+
+def _parse_registered(sheets, filename):
+    """Try every registered carrier config against the file (column-signature
+    match, so it works regardless of the file name). First config that parses
+    wins. Runs before the generic adapter so onboarded carriers are handled by
+    their explicit mapping."""
+    for config in _CARRIER_CONFIGS.values():
+        try:
+            items = _parse_configured(list(sheets), filename, config)
+        except Exception:  # noqa: BLE001 - a bad config must not break ingest
+            items = None
+        if items:
+            return items
+    return None
+
+
 _ADAPTERS = [_parse_frido_prime, _parse_bluedart_b2c, _parse_bluedart_b2b,
              _parse_skyair, _parse_swift, _parse_delhivery, _parse_elasticrun,
-             _parse_safexpress, _parse_urbanbolt, _parse_generic]
+             _parse_safexpress, _parse_urbanbolt, _parse_registered, _parse_generic]
 
 
 # --------------------------------------------------------------------------
@@ -1004,6 +1258,19 @@ def _parse_master(sheets):
             if not (cat_raw or nm or sku):
                 continue
             cat = resolve_category(cat_raw, nm)
+            # Bundles: the item master flags these with Category "Combo". Per the
+            # product taxonomy every combo groups under Comfort & Sleep (a bundle
+            # is sold as a comfort/sleep set), EXCEPT the Flat Feet Combo which is
+            # an orthopedic product. Route by the master's own "Combo" flag rather
+            # than the fuzzy product-name keywords (which otherwise scatter combos
+            # into Accessories/Insoles/etc.) so every bundle lands consistently.
+            _cat_tok = re.split(r"[|/]", cat_raw)[0].strip().lower() if cat_raw else ""
+            if _cat_tok == "combo":
+                _nlow = (nm or "").lower()
+                if "flat feet" in _nlow or "flat foot" in _nlow:
+                    cat = "Orthotics"    # -> canonical "Orthopedic & Wellness"
+                else:
+                    cat = "Bundles"      # -> canonical "Comfort & Sleep"
             awb = _norm_awb(_cell(row, awb_i)) if awb_i is not None else ""
             if awb:
                 awb2cat[awb] = (cat, nm or sku, sku)
@@ -1360,14 +1627,48 @@ def _build_multi_sku_awbs(items, sku2cat=None, top=1000):
     }
 
 
-def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
-    """Flag invoice AWB lines where BlueDart's charged weight exceeds the
-    expected billable weight (from the uploaded item master) by at least one
-    weight slab — i.e. likely weight over-charges worth disputing.
+# BlueDart chargeable-weight slabs (kg). The billed weight is rounded UP to the
+# next slab; below 10 kg the slabs are fixed steps, at/above 10 kg it steps by
+# 1 kg (10, 11, 12, ...).
+_BLUEDART_SLABS = (0.5, 1.0, 2.0, 3.0, 5.0, 7.0, 10.0)
+
+
+def bluedart_slab(weight):
+    """Round a weight (kg) UP to BlueDart's next chargeable-weight slab:
+    0.5, 1, 2, 3, 5, 7, 10, then every 1 kg beyond 10."""
+    w = weight or 0.0
+    if w <= 0:
+        return 0.0
+    for s in _BLUEDART_SLABS:
+        if w <= s + 1e-9:
+            return s
+    return float(math.ceil(w - 1e-9))
+
+
+def _slab_index(slab):
+    """Position of a BlueDart slab value on the slab ladder
+    (0.5→0, 1→1, 2→2, 3→3, 5→4, 7→5, 10→6, then 11→7, 12→8, …). Lets us count
+    how many slabs a billed weight jumps above the expected slab. `slab` must be
+    a value returned by bluedart_slab()."""
+    for i, s in enumerate(_BLUEDART_SLABS):
+        if abs(slab - s) < 1e-9:
+            return i
+    # Above 10 kg every +1 kg is one more slab (10 is the last fixed slab).
+    return (len(_BLUEDART_SLABS) - 1) + int(round(slab - 10.0))
+
+
+def _build_weight_dispute(items, sku2vol, min_slab_jump=2):
+    """Flag invoice AWB lines where BlueDart's charged weight jumps MORE THAN ONE
+    slab above the expected billable weight (from the uploaded item master) —
+    i.e. likely weight over-charges worth disputing.
 
     Per AWB: expected = sum of the master volumetric weight (kg) for the SKU(s)
-    on that AWB, rounded UP to the next `slab` (0.5 kg) = expected_slab. A line is
-    flagged when charged_weight - expected_slab >= min_over (one slab). The
+    on that AWB, rounded UP to BlueDart's next chargeable-weight slab
+    (0.5 / 1 / 2 / 3 / 5 / 7 / 10 kg, then +1 kg beyond) = expected_slab. The
+    billed weight is likewise mapped to its slab, and a line is flagged only when
+    it sits at least `min_slab_jump` slabs above expected (default 2 — i.e. more
+    than one slab). A single-slab gap (e.g. 0.5 → 1 kg) is skipped because it's
+    usually just volumetric vs actual dead-weight noise, not an over-charge. The
     estimated over-charge is excess_kg x the line's own ₹/kg (amount / charged).
     Aggregated per invoice number and per sub-category for raising disputes."""
     sku2vol = sku2vol or {}
@@ -1383,15 +1684,20 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
         if not vols or charged <= 0:
             continue
         expected = sum(vols)
-        expected_slab = math.ceil(round(expected / slab, 6)) * slab
+        expected_slab = bluedart_slab(expected)
         checked += 1
         inv = it.get("invoice_number") or "(no invoice)"
         bi = by_inv.setdefault(inv, {"invoice_number": inv, "checked": 0,
                                      "flagged": 0, "charged_kg": 0.0, "expected_kg": 0.0,
                                      "excess_kg": 0.0, "est_overcharge": 0.0})
         bi["checked"] += 1
+        # How many BlueDart slabs the billed weight sits above the expected slab.
+        # Flag only when it's more than one slab (default >= 2); a single-slab
+        # gap is treated as volumetric-vs-actual noise, not an over-charge.
+        charged_slab = bluedart_slab(charged)
+        slabs_jumped = _slab_index(charged_slab) - _slab_index(expected_slab)
         excess = round(charged - expected_slab, 3)
-        if excess >= min_over:
+        if slabs_jumped >= min_slab_jump:
             est = excess * (it["amount"] / charged) if charged else 0.0
             flagged += 1
             bi["flagged"] += 1
@@ -1473,7 +1779,8 @@ def _build_weight_dispute(items, sku2vol, slab=1.0, min_over=1.0):
         "expected_kg": round(tot_expected, 1),
         "excess_kg": round(tot_excess, 1),
         "est_overcharge": round(tot_est, 2),
-        "slab": slab,
+        "slab_label": "BlueDart slabs (0.5 / 1 / 2 / 3 / 5 / 7 / 10 kg, +1 kg beyond)",
+        "min_slab_jump": min_slab_jump,
         "has_master": bool(sku2vol),
     }
 
@@ -1535,10 +1842,12 @@ def _build_lane_comparison(items):
 
 
 def build_carrier_comparison(items, tds_rate=2.0):
-    """Summary per carrier (across ALL loaded invoices, ignoring the carrier
-    filter) so multiple carriers can be compared side by side: invoices,
-    shipments, amount with / ex GST, avg ₹/parcel, charged weight, TDS @2% and
-    payable (before any disputes / CNs, which are entered per-invoice in the UI)."""
+    """Summary per carrier over the given invoice lines so carriers can be
+    compared side by side: invoices, shipments, amount with / ex GST, avg
+    ₹/parcel, charged weight, TDS @2% and payable (before any disputes / CNs,
+    which are entered per-invoice in the UI). The caller passes either every
+    loaded line (all carriers) or the carrier-filtered subset (one carrier), so
+    this view honours the dashboard's active carrier filter."""
     car = {}
     months = {}                 # month_key -> month_label
     cmn = {}                    # (carrier, month_key) -> aggregates
