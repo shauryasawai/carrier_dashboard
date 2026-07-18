@@ -557,34 +557,48 @@ def fetch_awb_product_map(date_from: str, date_to: str,
     # Skipped when a set is empty or very large.
     want = awbs or None
     want_orders = {str(o).strip().upper() for o in orders} if orders else None
-    use_awb_pushdown = bool(want) and len(want) <= 45000
-    use_order_pushdown = bool(want_orders) and len(want_orders) <= 45000
-    match_terms = []
-    if use_awb_pushdown:
-        match_terms.append(
-            f"REGEXP_REPLACE(UPPER(TRIM(CAST(`{awb_col}` AS STRING))), r'\\.0$', '') "
-            f"IN UNNEST(@wanted_awbs)")
-    if use_order_pushdown:
-        # BigQuery stores the order id with a leading '#' and sometimes a
-        # '_<route/suffix>' (e.g. '#MF0222948031_EX890'); marketplace ids have
-        # neither. Strip both so it lines up with the invoice's cleaned order id.
-        match_terms.append(
-            f"UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(CAST(`{order_col}` AS STRING)), "
-            f"r'^#', ''), r'_.*$', '')) IN UNNEST(@wanted_orders)")
-    pushdown_pred = (" AND (" + " OR ".join(match_terms) + ")") if match_terms else ""
 
-    # Restrict to the invoice's carrier(s) so BigQuery scans/returns only those
-    # shipments (e.g. BlueDart) instead of every courier in the window. Tokens
-    # are sanitised to [a-z0-9] so they can't inject SQL; matched as a prefix on
-    # the carrier column (so "BlueDart" also catches "Bluedart Reverse").
-    #
-    # BUT only when we have NO exact key set to push down: with an AWB/order set
-    # the query is already precise, and filtering on the carrier label wrongly
-    # excludes shipments whose courier_partner in BigQuery is labelled
-    # differently from the invoice's carrier name (e.g. Swift's sub-services),
-    # which dropped their SKU/product enrichment and left every line "unmatched".
-    carrier_pred = ""
-    if carriers and not match_terms:
+    # BigQuery array parameters have a practical size ceiling, so for large
+    # invoice sets we push the ids down in CHUNKS and merge the results — rather
+    # than disabling pushdown once the set passes a threshold and falling back to
+    # a carrier-NAME filter. That fallback wrongly dropped shipments whose
+    # courier_partner is labelled differently from the invoice carrier, so when
+    # ALL carriers were analysed at once (tens of thousands of lines > the old
+    # cap) the great majority came back "no SKU / unmatched". Chunked pushdown
+    # keeps the join precise at any size.
+    _CHUNK = 45000
+    _awb_re = (f"REGEXP_REPLACE(UPPER(TRIM(CAST(`{awb_col}` AS STRING))), r'\\.0$', '') "
+               f"IN UNNEST(@wanted_awbs)")
+    # BigQuery stores the order id with a leading '#' and sometimes a
+    # '_<route/suffix>'; strip both so it lines up with the invoice's cleaned id.
+    _ord_re = (f"UPPER(REGEXP_REPLACE(REGEXP_REPLACE(TRIM(CAST(`{order_col}` AS STRING)), "
+               f"r'^#', ''), r'_.*$', '')) IN UNNEST(@wanted_orders)")
+
+    awb_list = sorted(want) if want else []
+    ord_list = sorted(want_orders) if want_orders else []
+
+    # Query specs as (awb_chunk, order_chunk):
+    #   * small sets  -> ONE combined query (awb IN … OR order IN …), fast path.
+    #   * large sets  -> one query per awb chunk + one per order chunk, each a
+    #                    precise pushdown (a row matching both is emitted once).
+    #   * no ids      -> a single whole-window scan (carrier-name filtered).
+    specs = []
+    if len(awb_list) <= _CHUNK and len(ord_list) <= _CHUNK:
+        specs.append((awb_list or None, ord_list or None))
+    else:
+        for i in range(0, len(awb_list), _CHUNK):
+            specs.append((awb_list[i:i + _CHUNK], None))
+        for i in range(0, len(ord_list), _CHUNK):
+            specs.append((None, ord_list[i:i + _CHUNK]))
+    if not specs:
+        specs.append((None, None))
+
+    # Carrier-name prefix filter — ONLY for a spec with no id pushdown (the
+    # whole-window scan). Tokens are sanitised to [a-z0-9] so they can't inject
+    # SQL; matched as a prefix (so "BlueDart" also catches "Bluedart Reverse").
+    def _carrier_pred():
+        if not carriers:
+            return ""
         car_col = cmap.get("carrier", "courier_partner")
         _check_identifier(str(car_col))
         toks = set()
@@ -592,18 +606,10 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             tok = re.sub(r"[^a-z0-9]", "", re.split(r"[ _\-/]", str(c).strip().lower())[0])
             if tok:
                 toks.add(tok)
-        if toks:
-            likes = " OR ".join(f"LOWER(`{car_col}`) LIKE '{t}%'" for t in sorted(toks))
-            carrier_pred = f" AND ({likes})"
-    sql = (
-        f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
-        f"`{items_col}` AS items, `{order_col}` AS order_id, "
-        f"`{val_col}` AS order_value "
-        f"FROM `{project}.{dataset}.{table}` "
-        f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}{pushdown_pred}"
-    )
-    if limit:
-        sql += f" LIMIT {int(limit)}"
+        if not toks:
+            return ""
+        likes = " OR ".join(f"LOWER(`{car_col}`) LIKE '{t}%'" for t in sorted(toks))
+        return f" AND ({likes})"
 
     _norm_re = re.compile(r"\.0$")
     _cat_memo = {}
@@ -616,16 +622,7 @@ def fetch_awb_product_map(date_from: str, date_to: str,
         return c
 
     client = _client()
-    if use_awb_pushdown or use_order_pushdown:
-        from google.cloud import bigquery  # lazy import (matches _client)
-        qparams = []
-        if use_awb_pushdown:
-            qparams.append(bigquery.ArrayQueryParameter("wanted_awbs", "STRING", sorted(want)))
-        if use_order_pushdown:
-            qparams.append(bigquery.ArrayQueryParameter("wanted_orders", "STRING", sorted(want_orders)))
-        job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qparams))
-    else:
-        job = client.query(sql)
+    arrow_ok = use_arrow if use_arrow is not None else (not _env_flag("BQ_DISABLE_ARROW"))
     awb2prod, order2prod = {}, {}
     # AWB/order -> declared order value (invoice_value = the product's selling
     # price), so invoice shipping cost can be expressed as a % of item value.
@@ -673,33 +670,57 @@ def fetch_awb_product_map(date_from: str, date_to: str,
             if val is not None:
                 order2value.setdefault(okey, val)
 
-    # Consume the result columnar via REST-based Arrow (pyarrow only, NOT the
-    # Storage API) — materialising 5 columns in bulk and iterating by index is
-    # far faster than allocating one Python Row object per record. Falls back to
-    # plain REST row iteration when pyarrow is unavailable. (We intentionally do
-    # NOT use create_bqstorage_client=True here: when the Storage API isn't
-    # enabled it can silently yield an empty table and drop all enrichment.)
-    cols = None
-    # Arrow materialises the whole window at once (fast, but a memory spike that
-    # can segfault constrained serverless workers). `use_arrow=False` — or the
-    # global BQ_DISABLE_ARROW=1 — forces the low-memory REST row iteration below.
-    arrow_ok = use_arrow if use_arrow is not None else (not _env_flag("BQ_DISABLE_ARROW"))
-    if arrow_ok:
-        try:
-            table = job.result().to_arrow(create_bqstorage_client=False)
-            cols = {n: table.column(n).to_pylist() for n in
-                    ("awb", "sku", "items", "order_id", "order_value")}
-        except Exception:  # noqa: BLE001 - pyarrow missing/incompatible -> row iteration
-            cols = None
-    if cols is not None:
-        awb_c, sku_c = cols["awb"], cols["sku"]
-        items_c, ord_c, val_c = cols["items"], cols["order_id"], cols["order_value"]
-        for i in range(len(awb_c)):
-            _emit(awb_c[i], sku_c[i], items_c[i], ord_c[i], val_c[i])
-    else:
-        for row in job.result(page_size=_page_size()):
-            _emit(row.get("awb"), row.get("sku"), row.get("items"),
-                  row.get("order_id"), row.get("order_value"))
+    # Run each spec (chunked pushdown, or a single whole-window scan) and merge
+    # into the shared maps. Arrow gives a fast columnar download (REST-based, NOT
+    # the Storage API — which can silently yield an empty table when disabled);
+    # it falls back to low-memory REST row iteration when pyarrow is unavailable
+    # or BQ_DISABLE_ARROW / use_arrow=False is set.
+    for awb_chunk, ord_chunk in specs:
+        terms = []
+        if awb_chunk:
+            terms.append(_awb_re)
+        if ord_chunk:
+            terms.append(_ord_re)
+        pushdown_pred = (" AND (" + " OR ".join(terms) + ")") if terms else ""
+        carrier_pred = "" if terms else _carrier_pred()
+        sql = (
+            f"SELECT `{awb_col}` AS awb, `{sku_col}` AS sku, "
+            f"`{items_col}` AS items, `{order_col}` AS order_id, "
+            f"`{val_col}` AS order_value "
+            f"FROM `{project}.{dataset}.{table}` "
+            f"WHERE {where} AND `{awb_col}` IS NOT NULL{carrier_pred}{pushdown_pred}"
+        )
+        if limit:
+            sql += f" LIMIT {int(limit)}"
+
+        if terms:
+            from google.cloud import bigquery  # lazy import (matches _client)
+            qparams = []
+            if awb_chunk:
+                qparams.append(bigquery.ArrayQueryParameter("wanted_awbs", "STRING", awb_chunk))
+            if ord_chunk:
+                qparams.append(bigquery.ArrayQueryParameter("wanted_orders", "STRING", ord_chunk))
+            job = client.query(sql, job_config=bigquery.QueryJobConfig(query_parameters=qparams))
+        else:
+            job = client.query(sql)
+
+        cols = None
+        if arrow_ok:
+            try:
+                table = job.result().to_arrow(create_bqstorage_client=False)
+                cols = {n: table.column(n).to_pylist() for n in
+                        ("awb", "sku", "items", "order_id", "order_value")}
+            except Exception:  # noqa: BLE001 - pyarrow missing/incompatible -> rows
+                cols = None
+        if cols is not None:
+            awb_c, sku_c = cols["awb"], cols["sku"]
+            items_c, ord_c, val_c = cols["items"], cols["order_id"], cols["order_value"]
+            for i in range(len(awb_c)):
+                _emit(awb_c[i], sku_c[i], items_c[i], ord_c[i], val_c[i])
+        else:
+            for row in job.result(page_size=_page_size()):
+                _emit(row.get("awb"), row.get("sku"), row.get("items"),
+                      row.get("order_id"), row.get("order_value"))
     return awb2prod, order2prod, awb2value, order2value, awb2order
 
 
