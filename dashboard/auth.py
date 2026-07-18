@@ -1,5 +1,13 @@
 """Database-free auth for the internal dashboard: username -> PBKDF2 hash in
-settings.INTERNAL_USERS, verified with Django hashers, with a per-IP throttle."""
+settings.INTERNAL_USERS, verified with Django hashers, with a per-IP throttle.
+
+SERVERLESS CAVEAT: the per-IP failure counter (`_FAILS`) lives in process
+memory, so it is per-instance and resets on cold starts. On a single long-lived
+process (Docker/Cloud Run with one worker) it throttles effectively; on Vercel's
+serverless functions, requests can fan out across instances, so treat this as a
+best-effort speed bump only. For hard brute-force protection there, add a shared
+store (e.g. Vercel KV / Redis) behind these helpers, or enable platform-level
+rate limiting / WAF on the login route."""
 from __future__ import annotations
 
 import time

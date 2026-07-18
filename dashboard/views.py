@@ -211,11 +211,15 @@ def _refresh_invoice_product_map():
         nxt = _date(y + 1, 1, 1) if m == 12 else _date(y, m + 1, 1)
         return nxt - _td(days=1)
 
-    # Shipments billed in month M were dispatched in/just around M, so a tight
-    # window keeps the enrichment scan small (fewer rows to stream). The old
-    # -15/+45 padding pulled in weeks of shipments that can't match the invoices.
-    lo = _month_start(keys[0]) - _td(days=7)
-    hi = _month_end(keys[-1]) + _td(days=10)
+    # Window around the billed month(s). It must be generous on the LOWER side:
+    # a shipment billed in month M was often dispatched well before M — RTOs,
+    # reverse-leg originals and late-billed orders can ship 1-2 months earlier —
+    # and a tight -7d bound dropped ~9% of otherwise-matchable orders (they fell
+    # just before the window). Because the fetch pushes the invoice's own order
+    # ids/AWBs down into the query, only those rows come back regardless of how
+    # wide the date range is, so widening it is essentially free here.
+    lo = _month_start(keys[0]) - _td(days=90)
+    hi = _month_end(keys[-1]) + _td(days=15)
     # Only the AWBs actually on the invoices need enriching — pass them so the
     # BigQuery loader skips category derivation for every other shipment in the
     # window (most of the per-row cost).
@@ -246,18 +250,28 @@ def _refresh_invoice_product_map():
 
 def _invoice_product_maps():
     """Prefer the BigQuery-by-invoice-date map; fall back to the loaded shipment
-    record set when no invoice-date enrichment has been fetched."""
-    if _INVOICE_CACHE.get("awb2prod"):
-        return _INVOICE_CACHE["awb2prod"], _INVOICE_CACHE.get("order2prod") or {}
+    record set when no invoice-date enrichment has been fetched.
+
+    Use the enrichment when EITHER map is populated: AWB-less carriers (e.g.
+    Swift, whose invoice AWB column is blank) match purely by order id, so only
+    order2prod fills — awb2prod stays empty. Gating on awb2prod alone would throw
+    the order matches away and fall back to the loaded set, leaving every Swift
+    line 'unmatched'."""
+    if _INVOICE_CACHE.get("awb2prod") or _INVOICE_CACHE.get("order2prod"):
+        return (_INVOICE_CACHE.get("awb2prod") or {},
+                _INVOICE_CACHE.get("order2prod") or {})
     return _product_maps()
 
 
 def _invoice_value_maps():
     """AWB/order -> declared order value (selling price). Prefer the
     BigQuery-by-invoice-date enrichment (covers the full invoice window); fall
-    back to the loaded shipment record set."""
-    if _INVOICE_CACHE.get("awb2value"):
-        return _INVOICE_CACHE["awb2value"], _INVOICE_CACHE.get("order2value") or {}
+    back to the loaded shipment record set. Use it when EITHER map is populated
+    so AWB-less carriers (Swift) still get order-id value matches (see
+    _invoice_product_maps)."""
+    if _INVOICE_CACHE.get("awb2value") or _INVOICE_CACHE.get("order2value"):
+        return (_INVOICE_CACHE.get("awb2value") or {},
+                _INVOICE_CACHE.get("order2value") or {})
     return _value_maps()
 
 
@@ -1607,19 +1621,45 @@ def load_bigquery(request):
     lookback = request.POST.get("lookback_days")
     lookback_days = int(lookback) if (lookback or "").isdigit() else None
 
-    try:
-        records = bq.fetch_records(
-            lookback_days=lookback_days,
-            date_from=win_from or None,
-            date_to=win_to or None,
-        )
-    except ValueError as exc:  # bad date input -> client error, not a 502
-        return JsonResponse({"error": str(exc)}, status=400)
-    except Exception as exc:  # noqa: BLE001 - surface any BQ/auth failure cleanly
-        # Log the full traceback to the server console so the real cause is
-        # visible (the client only sees the short message below).
-        logger.exception("BigQuery load failed")
-        return JsonResponse({"error": f"BigQuery load failed: {exc}"}, status=502)
+    # The two Unicommerce reads (orders-per-day + order-received times) don't
+    # depend on the shipment records, so fire all three BigQuery queries at once
+    # and let the two UC reads overlap the (longest) shipment fetch instead of
+    # running strictly after it — this cuts the cold-load wait to roughly the
+    # single slowest query. The BQ client is a thread-safe per-process singleton.
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Unicommerce window mirrors the shipment window (picked range or lookback).
+    uc_from = (win_from or None) if use_range else None
+    uc_to = (win_to or None) if use_range else None
+    uc_lookback = None if use_range else lookback_days
+
+    def _uc(fn):
+        # Best-effort: a missing UC table / auth issue must never block the load;
+        # the orders series falls back to ClickPost and O2S to its stored value.
+        try:
+            return fn(date_from=uc_from, date_to=uc_to, lookback_days=uc_lookback)
+        except Exception:  # noqa: BLE001
+            logger.exception("Unicommerce query failed: %s",
+                             getattr(fn, "__name__", fn))
+            return None
+
+    with ThreadPoolExecutor(max_workers=3) as _ex:
+        f_records = _ex.submit(
+            bq.fetch_records, lookback_days=lookback_days,
+            date_from=win_from or None, date_to=win_to or None)
+        f_daily = _ex.submit(_uc, bq.fetch_d2c_orders_per_day)
+        f_times = _ex.submit(_uc, bq.fetch_d2c_order_times)
+        try:
+            records = f_records.result()
+        except ValueError as exc:  # bad date input -> client error, not a 502
+            return JsonResponse({"error": str(exc)}, status=400)
+        except Exception as exc:  # noqa: BLE001 - surface any BQ/auth failure cleanly
+            # Log the full traceback so the real cause is visible server-side
+            # (the client only sees the short message below).
+            logger.exception("BigQuery load failed")
+            return JsonResponse({"error": f"BigQuery load failed: {exc}"}, status=502)
+        daily_orders = f_daily.result()
+        order_times = f_times.result()
 
     if not records:
         return JsonResponse(
@@ -1634,28 +1674,17 @@ def load_bigquery(request):
     else:
         _CACHE["window"] = bq.lookback_window(lookback_days)
 
-    # Orders-per-day chart: pull "orders placed per day" from Unicommerce for the
-    # SAME window. ClickPost only holds shipped orders, so its recent days look
-    # like a false decline; Unicommerce is complete at placement time. Best-effort
-    # — on any failure (table missing, auth) fall back to the ClickPost series.
-    uc_from = win_from or None if use_range else None
-    uc_to = win_to or None if use_range else None
-    uc_lookback = None if use_range else lookback_days
-    try:
-        _CACHE["daily_orders"] = bq.fetch_d2c_orders_per_day(
-            date_from=uc_from, date_to=uc_to, lookback_days=uc_lookback) or None
-    except Exception:  # noqa: BLE001 - never block the load on the orders series
-        logger.exception("Unicommerce orders-per-day fetch failed")
-        _CACHE["daily_orders"] = None
+    # Orders-per-day chart uses the Unicommerce "orders placed per day" series
+    # (ClickPost holds only shipped orders, so its recent days look like a false
+    # decline); None falls back to the ClickPost-derived series.
+    _CACHE["daily_orders"] = daily_orders or None
     # Accurate O2S: recompute each record's order->pickup on the Unicommerce
-    # order-received time (falls back to the ClickPost value on failure), so the
-    # headline card and every per-carrier/warehouse O2S column share one basis.
-    try:
-        order_times = bq.fetch_d2c_order_times(
-            date_from=uc_from, date_to=uc_to, lookback_days=uc_lookback)
-        if order_times:
+    # order-received time so the headline and every per-carrier/warehouse O2S
+    # column share one basis (falls back to the stored ClickPost value on error).
+    if order_times:
+        try:
             _recompute_o2s_from_uc(records, order_times)
-    except Exception:  # noqa: BLE001 - never block the load on the O2S refinement
-        logger.exception("Unicommerce O2S recompute failed")
+        except Exception:  # noqa: BLE001 - never block the load on the O2S refinement
+            logger.exception("Unicommerce O2S recompute failed")
 
     return _report_response(request, "No data loaded.")

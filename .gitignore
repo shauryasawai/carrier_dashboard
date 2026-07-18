@@ -8,6 +8,11 @@ sa-key.json
 *service-account*.json
 *credentials*.json
 *.pem
+# TLS certs / private keys — local dev only, never commit.
+*.key
+*.crt
+cert.key
+cert.crt
 /my_env
 # Python bytecode / caches (any level, not just repo root).
 *.pyc

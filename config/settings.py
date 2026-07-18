@@ -10,7 +10,14 @@ if not SECRET_KEY:
     raise ValueError("DJANGO_SECRET_KEY environment variable is not set.")
 
 DEBUG = os.environ.get("DJANGO_DEBUG", "False").lower() == "true"
-ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",")
+# Comma-separated hostnames from the env; blanks dropped so a stray comma can't
+# introduce an empty ('') host. In local DEBUG we fall back to localhost so the
+# dev server works without extra config; in production DJANGO_ALLOWED_HOSTS MUST
+# be set (an empty list makes Django reject every request — fail closed).
+ALLOWED_HOSTS = [h.strip() for h in
+                 os.environ.get("DJANGO_ALLOWED_HOSTS", "").split(",") if h.strip()]
+if DEBUG and not ALLOWED_HOSTS:
+    ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
 CSRF_TRUSTED_ORIGINS = [
     o.strip()
     for o in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
@@ -86,6 +93,13 @@ X_FRAME_OPTIONS = "DENY"
 if not DEBUG:
     SECURE_SSL_REDIRECT = os.environ.get("DJANGO_SSL_REDIRECT", "1") == "1"
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    # HTTP Strict Transport Security: tell browsers to only ever use HTTPS.
+    # Defaults to 1 year with subdomains + preload; override/relax via env while
+    # you validate that every subdomain is HTTPS-ready (preload is hard to undo).
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_HSTS_SECONDS", 60 * 60 * 24 * 365))
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = (
+        os.environ.get("DJANGO_HSTS_INCLUDE_SUBDOMAINS", "1") == "1")
+    SECURE_HSTS_PRELOAD = os.environ.get("DJANGO_HSTS_PRELOAD", "1") == "1"
 
 
 import os as _os

@@ -1870,6 +1870,28 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   var charts = [];
   var loaded = false;
   var lastReport = null;       // keep the latest report for the warehouse picker
+  // Client-side report cache: re-selecting a previously-seen filter combination
+  // renders straight from memory with no server round-trip. Keyed by a dataset
+  // "version" (bumped on every full/non-refilter render — fresh load, upload or
+  // SLA save) + the serialized filter state, so it self-invalidates whenever the
+  // underlying data changes. LRU-capped to keep browser memory bounded.
+  var datasetVersion = 0;
+  var reportCache = {};
+  var reportCacheKeys = [];
+  var REPORT_CACHE_MAX = 12;
+  function filterKey(fd) {
+    var parts = [];
+    fd.forEach(function (v, k) { parts.push(k + "=" + v); });
+    parts.sort();
+    return datasetVersion + "|" + parts.join("&");
+  }
+  function cacheReport(key, report) {
+    if (!reportCache[key]) reportCacheKeys.push(key);
+    reportCache[key] = report;
+    while (reportCacheKeys.length > REPORT_CACHE_MAX) {
+      delete reportCache[reportCacheKeys.shift()];
+    }
+  }
   var whcSelection = [];       // currently selected warehouse pin(s) in the partner-per-warehouse panel
   var destShowAll = false;     // Destination rollup: false = top-N only, true = full list
   var animateMode = true;      // false on re-filter -> instant render (no count-up/grow)
@@ -2191,8 +2213,15 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   function refilter() {
     if (!loaded) return;
     var seq = ++refilterSeq;
-    post(currentFilters()).then(function (report) {
+    var fd = currentFilters();
+    // Instant path: this exact filter combination was already fetched for the
+    // current dataset — render from the client cache, no network round-trip.
+    var key = filterKey(fd);
+    var hit = reportCache[key];
+    if (hit) { render(hit, { refilter: true }); return; }
+    post(fd).then(function (report) {
       if (seq !== refilterSeq) return;          // superseded by a newer filter
+      cacheReport(key, report);
       render(report, { refilter: true });
     }).catch(function (err) {
       if (seq !== refilterSeq) return;
@@ -2379,6 +2408,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     // (no destroy/recreate) so the refresh feels instant. A fresh dataset load
     // (opts omitted) animates as before.
     animateMode = !(opts && opts.refilter);
+    // A full render (fresh BigQuery load, file upload or SLA re-score) means the
+    // underlying data changed — bump the version so every cached filter result
+    // from the previous dataset is orphaned, and drop them to free memory.
+    if (!(opts && opts.refilter)) {
+      datasetVersion++;
+      reportCache = {};
+      reportCacheKeys = [];
+    }
     lastReport = report;
     resetAiSummary();
     populateOptions(report.filters);

@@ -1,4 +1,7 @@
-Django>=5.0
+# Pinned to the current secure minor of each dependency for reproducible builds.
+# The ~= (compatible release) operator locks major+minor while still allowing
+# patch-level security updates, e.g. Django~=5.2.16 accepts 5.2.17 but not 5.3.
+Django
 openpyxl
 pyxlsb
 python-dotenv
@@ -12,7 +15,9 @@ google-api-python-client
 # to_arrow(create_bqstorage_client=False) — a REST-based Arrow download that
 # does NOT require the BigQuery Storage Read API, yet parses a month of rows far
 # faster than iterating one Python Row object per record. If the code can't
-# import pyarrow it transparently falls back to the slower REST row iteration,
-# so this dependency is safe to drop if the Vercel bundle-size limit is hit.
+# import pyarrow it transparently falls back to the slower REST row iteration.
+# NOTE (Vercel): pyarrow + bigquery-storage are the two largest wheels here; if
+# the serverless function exceeds the 250 MB unzipped limit, dropping these two
+# is safe — the loader falls back to REST row iteration automatically.
 google-cloud-bigquery-storage
-pyarrow>=14
+pyarrow

@@ -8,6 +8,11 @@ env.yaml
 *.json.key
 sa-key.json
 *-key.json
+*.pem
+*.key
+*.crt
+cert.key
+cert.crt
 db.sqlite3
 .git/
 .idea/
