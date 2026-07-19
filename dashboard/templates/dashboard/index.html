@@ -1286,7 +1286,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       <div class="control-panel">
       <div class="toolbar">
         <div class="toolbar-window filter-window">
-          <span class="toolbar-label">Data window <span class="hint-inline">re-queries BigQuery</span></span>
+          <span class="toolbar-label">Data window</span>
           <input type="text" id="winRange" class="win-input" placeholder="Select start → end date" aria-label="Data window date range">
         </div>
         <div class="toolbar-actions">
@@ -2185,8 +2185,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         setHint("Loaded " + report.summary.total.toLocaleString() + " shipments from BigQuery.", "ok");
         $("uploadZone").hidden = true;
         $("dashboard").hidden = false;
-        $("metaStatus").textContent = "BigQuery · " + desc + " · " +
-          report.summary.total.toLocaleString() + " rows";
+        $("metaStatus").textContent = "";
         syncWin(report, opts);
         resetDynamicFilters();   // rebuild zone/account/warehouse from the new data
         render(report);
@@ -2400,7 +2399,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     var box = $("aiSummary");
     if (!box) return;
     box.className = "ai-summary ai-empty";
-    box.innerHTML = 'Click <strong>Generate summary</strong> for an AI overview &amp; health score of the current filters';
+    box.innerHTML = 'Click <strong>Generate summary</strong> for an AI overview &amp; health score';
   }
 
   function render(report, opts) {
