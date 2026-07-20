@@ -214,9 +214,20 @@ def _coerce_date(date_expr: str, kind: str) -> str:
     return date_expr
 
 
-# Filter on ORDER DATE (day the order was placed) so KPIs reconcile with
-# order-date sales reports. order_date is an ISO string -> cast to DATE.
-# partition_date (always >= order_date) is kept only to prune partitions cheaply.
+# Window date = the ORDER date (day the order was placed) so KPIs reconcile with
+# order-date sales reports. But reverse-pickup shipments carry NO order_date
+# (they're returns of older orders), so an order-date-only window drops every
+# reverse row — which also leaves the reverse-carrier filter empty. Fall back to
+# pickup_date when order_date is absent so reverse shipments are included in the
+# window. Both are ISO strings -> SAFE_CAST to TIMESTAMP, then DATE. partition_date
+# (kept via _prune) still prunes partitions cheaply.
+_WINDOW_DATE_SQL = (
+    "DATE(COALESCE(SAFE_CAST(`order_date` AS TIMESTAMP), "
+    "SAFE_CAST(`pickup_date` AS TIMESTAMP)))"
+)
+
+# Pure order-date expression (no pickup fallback). Used by the orders-per-day
+# D2C query, which is intentionally about the day the order was PLACED.
 _ORDER_DATE_SQL = "DATE(SAFE_CAST(`order_date` AS TIMESTAMP))"
 
 
@@ -235,19 +246,20 @@ def _prune(project, dataset, table, lo: str) -> str:
 
 
 def _lookback_predicate(project, dataset, table, days: int) -> str:
-    """Orders placed in the last `days` days, by order_date."""
+    """Rows in the last `days` days, by order_date (pickup_date for reverse)."""
     lo = f"DATE_SUB(CURRENT_DATE(), INTERVAL {days} DAY)"
-    return f"{_ORDER_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}"
+    return f"{_WINDOW_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}"
 
 
 def _range_predicate(project, dataset, table, date_from, date_to) -> str:
-    """Inclusive [date_from, date_to] order-date range (either bound optional)."""
+    """Inclusive [date_from, date_to] window range (order_date, or pickup_date
+    for reverse pickups); either bound optional."""
     parts = []
     if date_from:
         lo = _date_literal(date_from)
-        parts.append(f"{_ORDER_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}")
+        parts.append(f"{_WINDOW_DATE_SQL} >= {lo}{_prune(project, dataset, table, lo)}")
     if date_to:
-        parts.append(f"{_ORDER_DATE_SQL} <= {_date_literal(date_to)}")
+        parts.append(f"{_WINDOW_DATE_SQL} <= {_date_literal(date_to)}")
     return " AND ".join(parts) if parts else "TRUE"
 
 

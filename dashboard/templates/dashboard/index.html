@@ -1342,6 +1342,13 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <!-- Secondary filters: finer slices, used less often. -->
         <div class="filter-row filter-row--secondary">
           <div class="filter">
+            <label>Reverse carrier <span class="hint-inline"></span></label>
+            <div class="msel" data-name="reverse_carrier" data-all="All reverse carriers">
+              <button type="button" class="msel-toggle"><span class="msel-text">All reverse carriers</span><span class="msel-caret">▾</span></button>
+              <div class="msel-menu" hidden></div>
+            </div>
+          </div>
+          <div class="filter">
             <label>City tier <span class="hint-inline">by destination</span></label>
             <div class="msel" data-name="tier" data-all="All tiers">
               <button type="button" class="msel-toggle"><span class="msel-text">All tiers</span><span class="msel-caret">▾</span></button>
@@ -2235,7 +2242,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // Each dynamic dropdown is filled independently and only the FIRST time it
   // actually receives options. This way a partial first response (e.g. only
   // "zones") never permanently blocks the others from filling on a later one.
-  var filled = { channel: false, account: false, warehouse: false };
+  var filled = { channel: false, account: false, reverse_carrier: false, warehouse: false };
   var dateBoundsSet = false;
 
   // When a NEW dataset loads (fresh BigQuery pull or file upload), the dynamic
@@ -2248,7 +2255,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   function resetDynamicFilters() {
     filled = { channel: false, account: false, warehouse: false };
     dateBoundsSet = false;
-    ["channel", "account", "warehouse"].forEach(function (name) {
+    ["channel", "account", "reverse_carrier", "warehouse"].forEach(function (name) {
       var m = document.querySelector('.msel[data-name="' + name + '"]');
       if (!m) return;
       var menu = m.querySelector(".msel-menu");
@@ -2283,6 +2290,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     });
     fillMsel("account", filters.accounts, function (a) {
       return { value: a.value, text: a.label + " (" + (a.n || 0).toLocaleString() + ")" };
+    });
+    fillMsel("reverse_carrier", filters.reverse_carriers, function (c) {
+      return { value: c.value, text: c.label };
     });
     fillMsel("warehouse", filters.warehouses, function (w) {
       return { value: w.value, text: w.label + " (" + (w.n || 0).toLocaleString() + ")" };
@@ -2416,6 +2426,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       reportCacheKeys = [];
     }
     lastReport = report;
+    window.__report = report;  // debug hook: inspect report.filters in the console
     resetAiSummary();
     populateOptions(report.filters);
     renderDataRange(report);

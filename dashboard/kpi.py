@@ -17,6 +17,7 @@ Excel serials automatically) or as raw numeric serials; both are handled.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from functools import lru_cache
 from io import BytesIO
@@ -1027,10 +1028,39 @@ def _filter_set(val):
     return {val}
 
 
+def _is_reverse(delivery_type) -> bool:
+    """True when a string marks reverse logistics (return pickup / RVP).
+    Matches the substrings used by the TAT rules (dashboard/tat.py) so the two
+    stay consistent."""
+    d = str(delivery_type or "").strip().lower()
+    return ("revers" in d) or ("rvp" in d)
+
+
+def _record_is_reverse(r) -> bool:
+    """A shipment is reverse if its delivery type says so OR its carrier name
+    itself signals reverse (e.g. 'Delhivery Reverse', 'Bluedart Reverse',
+    'Ekart Large Reverse'). Belt-and-braces so the reverse-carrier filter still
+    works when the delivery-type column is blank/missing on a loaded row."""
+    return _is_reverse(r.get("delivery_type")) or _is_reverse(r.get("carrier"))
+
+
+# Strip the redundant reverse markers from a carrier name for display in the
+# reverse-carrier dropdown, so 'Delhivery Reverse' -> 'Delhivery' and
+# 'Bluedart MPS Reverse [B2B]' -> 'Bluedart MPS [B2B]'. The full name is kept
+# as the filter VALUE (build_record stores the raw carrier), so only the shown
+# label is cleaned.
+def _clean_reverse_label(name) -> str:
+    s = str(name or "").strip()
+    cleaned = re.sub(r"\b(reverse|revers|rvp)\b", " ", s, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s*\[\s*", " [", cleaned)   # tidy spacing around [tags]
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+    return cleaned or s
+
+
 def filter_records(records, delivery_type="all", zone="all", payment="all",
                    warehouse="all", account="all", weight="all",
                    slot="all", date_from="", date_to="", tier="all",
-                   channel="all"):
+                   channel="all", reverse_carrier="all"):
     # Every categorical filter supports single value, list (multi-select) or
     # "all". An empty selection (None) means no constraint on that field.
     dt_set = _filter_set(delivery_type)
@@ -1042,18 +1072,25 @@ def filter_records(records, delivery_type="all", zone="all", payment="all",
     slot_set = _filter_set(slot)
     tier_set = _filter_set(tier)
     channel_set = _filter_set(channel)
+    # Reverse-carrier filter: pick one or more Carrier Partner Names and see
+    # ONLY their reverse (return-pickup / RVP) shipments. Selecting a value
+    # therefore constrains both the carrier AND the direction to reverse.
+    rev_carrier_set = _filter_set(reverse_carrier)
 
     # Fast path: nothing is actually constrained (the common initial/unfiltered
     # load), so skip a full scan + list copy and hand back the record set as-is.
     if (dt_set is None and zone_set is None and pay_set is None and wh_set is None
             and acct_set is None and wt_set is None and slot_set is None
-            and tier_set is None and channel_set is None
+            and tier_set is None and channel_set is None and rev_carrier_set is None
             and not date_from and not date_to):
         return records
 
     out = []
     for r in records:
         if dt_set is not None and r["delivery_type"] not in dt_set:
+            continue
+        if rev_carrier_set is not None and (
+                not _record_is_reverse(r) or r["carrier"] not in rev_carrier_set):
             continue
         if tier_set is not None and r["tier"] not in tier_set:
             continue
@@ -1494,6 +1531,7 @@ def _filter_options(records) -> dict:
     zones = sorted({r["zone"] for r in records if r["zone"]})
     channel_counts: dict[str, int] = {}
     acct_counts: dict[str, int] = {}
+    rev_carrier_counts: dict[str, int] = {}
     wh_counts: dict[str, int] = {}
     wh_labels: dict[str, str] = {}
     pickup_dates_min = None
@@ -1505,6 +1543,12 @@ def _filter_options(records) -> dict:
         a = r["account"]
         if a:
             acct_counts[a] = acct_counts.get(a, 0) + 1
+        # Reverse-carrier options: Carrier Partner Names seen on reverse/RVP
+        # shipments only (drives the reverse-carrier dropdown).
+        if _record_is_reverse(r):
+            rc = r["carrier"]
+            if rc:
+                rev_carrier_counts[rc] = rev_carrier_counts.get(rc, 0) + 1
         pin = r["pickup_pin"]
         if pin:
             wh_counts[pin] = wh_counts.get(pin, 0) + 1
@@ -1524,6 +1568,10 @@ def _filter_options(records) -> dict:
         {"value": a, "label": a, "n": cnt}
         for a, cnt in sorted(acct_counts.items(), key=lambda kv: -kv[1])
     ]
+    reverse_carriers = [
+        {"value": c, "label": _clean_reverse_label(c), "n": cnt}
+        for c, cnt in sorted(rev_carrier_counts.items(), key=lambda kv: -kv[1])
+    ]
     warehouses_opts = [
         {"value": pin, "label": wh_labels[pin], "n": cnt}
         for pin, cnt in sorted(wh_counts.items(), key=lambda kv: -kv[1])
@@ -1535,6 +1583,7 @@ def _filter_options(records) -> dict:
         "zones": zones,
         "channels": channels,
         "accounts": accounts,
+        "reverse_carriers": reverse_carriers,
         "warehouses": warehouses_opts,
         "weight_classes": ["Light", "Medium", "Heavy"],
         "pickup_slots": PICKUP_SLOTS,
@@ -1580,7 +1629,7 @@ _REPORT_CACHE = {"records": None, "gen": None, "entries": {}}
 
 
 def _report_cache_key(delivery_type, zone, payment, warehouse, account, weight,
-                      slot, date_from, date_to, tier, channel):
+                      slot, date_from, date_to, tier, channel, reverse_carrier):
     """Hashable, order-independent key for a filter selection (multi-select
     values arrive as lists, so sort them; two selections that filter to the same
     rows map to the same key)."""
@@ -1590,7 +1639,7 @@ def _report_cache_key(delivery_type, zone, payment, warehouse, account, weight,
         return v
     return tuple(norm(v) for v in (
         delivery_type, zone, payment, warehouse, account, weight, slot,
-        date_from, date_to, tier, channel))
+        date_from, date_to, tier, channel, reverse_carrier))
 
 
 def _report_cache_get(records, key):
@@ -1742,17 +1791,19 @@ def _aggregate_all(rows):
 def build_report(records, delivery_type="all", zone="all", payment="all",
                  warehouse="all", account="all", weight="all",
                  slot="all", date_from="", date_to="", tier="all",
-                 channel="all") -> dict:
+                 channel="all", reverse_carrier="all") -> dict:
     """Top-level entry: filter, aggregate, score, and assemble the payload."""
     _ckey = _report_cache_key(delivery_type, zone, payment, warehouse, account,
-                              weight, slot, date_from, date_to, tier, channel)
+                              weight, slot, date_from, date_to, tier, channel,
+                              reverse_carrier)
     _cached = _report_cache_get(records, _ckey)
     if _cached is not None:
         return _cached
 
     rows = filter_records(records, delivery_type, zone, payment,
                           warehouse, account, weight,
-                          slot, date_from, date_to, tier=tier, channel=channel)
+                          slot, date_from, date_to, tier=tier, channel=channel,
+                          reverse_carrier=reverse_carrier)
 
     # Every per-row grouping the report needs is collected in a single scan.
     acc = _aggregate_all(rows)

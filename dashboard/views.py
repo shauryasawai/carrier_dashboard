@@ -461,6 +461,9 @@ def _filter_kwargs(request):
         "payment": request.POST.getlist("payment") or "all",
         "warehouse": request.POST.getlist("warehouse") or "all",
         "account": request.POST.getlist("account") or "all",
+        # Reverse-carrier: Carrier Partner Names, restricted to their reverse
+        # (return-pickup / RVP) shipments (see kpi.filter_records).
+        "reverse_carrier": request.POST.getlist("reverse_carrier") or "all",
         "weight": request.POST.getlist("weight") or "all",
         "slot": request.POST.getlist("slot") or "all",
         "date_from": request.POST.get("date_from", ""),
