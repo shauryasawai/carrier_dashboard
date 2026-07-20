@@ -2562,7 +2562,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         suffix: tag(nc(s.delivered) + " delivered") },
       { label: "RTO value", value: s.rto_value, kind: "money_c", tone: "bad",
         suffix: countPct(s.rto, s.rto_value_pct, "orders") },
-      { label: "Forward pendency", value: s.pending_value, kind: "money_c",
+      { label: "Pendency", value: s.pending_value, kind: "money_c",
         suffix: countPct(s.pending_orders, s.pending_value_pct, "in transit") },
       { label: "Cancelled / Lost", value: s.cancelled_value, kind: "money_c", tone: "bad",
         suffix: countPct(s.cancelled_orders, s.cancelled_value_pct, "orders") },

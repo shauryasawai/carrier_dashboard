@@ -847,12 +847,16 @@ def build_record(get):
     # promised TAT for this lane (hours for Blue Dart, calendar days for Delhivery).
     # Late forward pendency past its SLA is counted as Out of TAT for all carriers;
     # RTO is scored on pickup->OFD1 vs the same promise.
+    # Reverse (return-pickup / RVP) shipments are scored on the flat reverse SLA
+    # window instead of any forward carrier rule.
+    reverse_ship = _is_reverse(get("delivery_type")) or _is_reverse(carrier_name)
     tat_status, promised_tat, tat_margin = tat_rules.classify(
         carrier_name, account_name, pickup_pin, payment, drop_pin,
         p2d, transit_days, delivered_flag,
         age_hours=age_hours, age_days=age_days, forward_pending=forward_pending,
         rto=is_rto, ofd1_hours=p2o, ofd1_days=ofd1_days,
         pickup_city=pickup_city, drop_city=drop_city, edd_days=edd_days,
+        reverse=reverse_ship,
     )
 
     return {
@@ -1614,6 +1618,7 @@ def reclassify(records) -> None:
             ofd1_hours=r.get("p2o"), ofd1_days=r.get("ofd1_days"),
             pickup_city=r.get("city"), drop_city=r.get("drop_city"),
             edd_days=r.get("edd_days"),
+            reverse=_record_is_reverse(r),
         )
         r["tat_status"], r["promised_tat"], r["tat_margin"] = status, promised, margin
 

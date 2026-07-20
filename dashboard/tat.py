@@ -499,11 +499,39 @@ def _city_promised(entry_idx: int, pickup_city: str, drop_city: str):
     return node.get(_norm_city(drop_city))
 
 
+# Reverse-logistics (return pickup / RVP) SLA: reverse shipments are excluded
+# from every forward carrier rule above, so they're scored on a single flat
+# window instead — a return has REVERSE_TAT_DAYS calendar days (pickup -> back
+# at destination) to complete.
+REVERSE_TAT_DAYS = 45
+
+
+def _classify_reverse(transit_days, delivered, age_days):
+    """SLA for a reverse (return-pickup) shipment, measured pickup -> delivery:
+
+        In TAT      - returned within REVERSE_TAT_DAYS days
+        Out of TAT  - returned later than that, OR still in transit past it
+        Pending     - still in transit but within the window
+    """
+    limit = REVERSE_TAT_DAYS
+    if delivered:
+        if transit_days is None:
+            return ("Pending", limit, None)
+        return ("In TAT" if transit_days <= limit else "Out of TAT",
+                limit, limit - transit_days)
+    # Not delivered yet: a breach only once it's been in transit beyond the
+    # window; still within it counts as pendency.
+    if age_days is not None and age_days > limit:
+        return ("Out of TAT", limit, limit - age_days)
+    return ("Pending", limit, None)
+
+
 def classify(carrier, account, pickup_pin, payment, drop_pin,
              p2d_hours, transit_days, delivered,
              age_hours=None, age_days=None, forward_pending=False,
              rto=False, ofd1_hours=None, ofd1_days=None,
-             pickup_city=None, drop_city=None, edd_days=None):
+             pickup_city=None, drop_city=None, edd_days=None,
+             reverse=False):
     """Return (tat_status, promised, margin).
 
     UNIVERSAL basis (default): score against the carrier's OWN committed
@@ -517,7 +545,13 @@ def classify(carrier, account, pickup_pin, payment, drop_pin,
     committed-TAT lookup is used instead, measured pickup->OFD1 by default or
     pickup->delivery for carriers with measure_on="delivery". `promised` is in
     the carrier's unit (hours or days); `margin` is promised - actual.
+
+    REVERSE (return pickups / RVP): scored on the flat REVERSE_TAT_DAYS window
+    instead of any forward carrier rule (see _classify_reverse).
     """
+    if reverse:
+        return _classify_reverse(transit_days, delivered, age_days)
+
     idx = _match_carrier(carrier or "", account or "")
     if idx is None:
         return ("No rule", None, None)
