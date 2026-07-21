@@ -7,6 +7,12 @@
   <title>Frido · Carrier Efficiency Console</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Warm up TLS/DNS to the asset CDNs so the render-blocking libraries
+       (Chart.js, flatpickr) and the logo image start downloading sooner. -->
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.shopify.com" crossorigin>
+  <link rel="dns-prefetch" href="https://cdnjs.cloudflare.com">
+  <link rel="dns-prefetch" href="https://cdn.shopify.com">
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=Spline+Sans+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -453,6 +459,13 @@ body {
 .stat-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .07em; text-transform: uppercase; color: var(--ink-faint); }
 .stat-value { font-family: var(--display); font-weight: 600; font-size: 27px; letter-spacing: -.02em; margin-top: 5px; font-optical-sizing: auto; white-space: nowrap; color: var(--ink); }
 .stat-value .unit { font-size: 13px; color: var(--ink-faint); font-family: var(--mono); margin-left: 3px; font-weight: 400; }
+
+/* Headline row carries 6 cards (Shipments, Delivery success, In TAT, Out of TAT,
+   Pendency, RTO): 6-wide on desktop, reflowing to 3 then 2 on smaller screens.
+   Placed after the base .stat-row media queries so it overrides them. */
+.stat-row--primary { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .stat-row--primary { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 640px) { .stat-row--primary { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* Revenue KPI row: 6 cards as 3-wide × 2 rows so the ₹ value + order-count tag
    never clip. Reflows to 2-wide then 1-wide on smaller screens. */
@@ -1204,9 +1217,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 .wtd-table tfoot th, .wtd-table tfoot td { position: sticky; bottom: 0; z-index: 2; background: var(--paper-2); border-top: 2px solid var(--line-strong); white-space: nowrap; font-weight: 600; }
 
   </style>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <!-- flatpickr CSS stays in <head> so the date picker paints styled. The two
+       libraries' JS moved to just before the app script at end-of-body so they
+       no longer block the first paint of the dashboard (see there). -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
 </head>
 <body>
   <div class="grain" aria-hidden="true"></div>
@@ -1396,7 +1410,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div><!-- /filters -->
 
+      {% if is_super %}
       <!-- AI business summary (NEW) — sits directly below the frozen filter bar -->
+      <!-- Super-user only -->
       <div class="panel ai-panel">
         <div class="panel-head">
           <h3>Business summary <span class="ai-badge">AI</span></h3>
@@ -1405,6 +1421,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
         <div id="aiSummary" class="ai-summary ai-empty">Click <strong>Generate summary</strong> for an AI overview</div>
       </div>
+      {% endif %}
 
       <!-- Summary stats, grouped: headline KPIs then operational detail -->
       <div class="kpi-group">
@@ -1415,12 +1432,14 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="kpi-label">Operations</div>
         <div class="stat-row stat-row--ops" id="statRow2"></div>
       </div>
+      {% if is_super %}
+      <!-- Revenue / order value — super-user only -->
       <div class="kpi-group">
         <div class="kpi-label">Revenue <span class="hint-inline">order value</span></div>
         <div class="stat-row stat-row--rev" id="revRow"></div>
       </div>
 
-      <!-- Destination city-tier breakdown -->
+      <!-- Destination city-tier breakdown — super-user only -->
       <div class="tier-section">
         <div class="tier-section-head">
           <h3>Destination city tiers</h3>
@@ -1429,7 +1448,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="tier-row" id="tierRow"></div>
       </div>
 
-      <!-- Payment mode performance (COD vs Prepaid) (NEW) -->
+      <!-- Payment mode performance (COD vs Prepaid) (NEW) — super-user only -->
       <div class="panel">
         <div class="panel-head">
           <h3>Payment mode performance</h3>
@@ -1440,7 +1459,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
-      <!-- Orders per day (NEW) -->
+      <!-- Orders per day (NEW) — super-user only -->
       <div class="panel">
         <div class="panel-head">
           <h3>Orders placed per day (D2C)</h3>
@@ -1449,7 +1468,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         <div class="chart-box" style="--h: 300px; padding-bottom: 4px;"><canvas id="cDaily"></canvas></div>
       </div>
 
-      <!-- Delivery zones (A / B / C / E) -->
+      <!-- Delivery zones (A / B / C / E) — super-user only -->
       <div class="panel">
         <div class="panel-head">
           <h3>Delivery zones</h3>
@@ -1457,6 +1476,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
         <div class="tier-row zone-row" id="zoneRow"></div>
       </div>
+      {% endif %}
 
       <!-- Score table -->
       <div class="panel">
@@ -1480,7 +1500,8 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
       </div>
 
-      <!-- Product breakdown -->
+      {% if is_super %}
+      <!-- Product breakdown — super-user only -->
       <div class="panel">
         <div class="panel-head">
           <h3>Product breakdown</h3>
@@ -1488,6 +1509,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
         </div>
         <div id="productGrid" class="product-grid"></div>
       </div>
+      {% endif %}
 
       <!-- Partner performance per warehouse (NEW) -->
       <div class="panel">
@@ -1855,6 +1877,11 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
     <p>Scores are relative within the current filter set &middot; TAT averages exclude shipments missing the required timestamps</p>
   </footer>
 
+  <!-- Charting + date-picker libraries. Loaded here (end of body) rather than in
+       <head> so the page's HTML/CSS paints first; they still execute before the
+       app IIFE below, which uses them. -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
   <script>
     window.PROCESS_URL = "{% url 'process_upload' %}";
     window.BIGQUERY_URL = "{% url 'load_bigquery' %}";
@@ -2526,6 +2553,9 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
       { label: "Delivery success", value: s.success_rate, kind: "pct", tone: "good" },
       { label: "In TAT", value: s.tat_in_pct, kind: "pct", tone: "good", suffix: countTag(s.tat_in) },
       { label: "Out of TAT", value: s.tat_out_pct, kind: "pct", tone: "bad", suffix: countTag(s.tat_out) },
+      // Pendency: shipments with an SLA rule, not delivered yet, still inside the
+      // promised window. Shows the % of all shipments with the raw count small.
+      { label: "Pendency", value: s.tat_pending_pct, kind: "pct", suffix: countTag(s.tat_pending) },
       { label: "RTO", value: s.rto_pct, kind: "pct", tone: "bad" }
     ];
     // Network coverage: carriers + warehouses combined into one card so both
@@ -2587,6 +2617,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 
   // Destination city-tier breakdown cards (Tier 1/2/3 by drop pincode).
   function renderTiers(s) {
+    if (!$("tierRow")) return;  // hidden for non-super users
     var t = (s && s.tiers) || {};
     var rev = (s && s.tier_revenue) || {};
     var total = s.total || 0;
@@ -2875,7 +2906,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
 
   function renderStatusMatrix(report) {
     var matrix = report.status_matrix || [];
-    var outcomes = report.outcomes || ["Delivered", "FWD Pendency", "RTO", "Cancelled"];
+    var outcomes = report.outcomes || ["Delivered", "Pendency", "RTO", "Cancelled"];
     var totalN = matrix.reduce(function (a, r) { return a + r.n; }, 0);
     $("statusSub").textContent =
       matrix.length + " carrier accounts \u00b7 " + totalN.toLocaleString() +
@@ -2923,9 +2954,10 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   // ---- Product breakdown ------------------------------------------------
 
   function renderProducts(report) {
+    var grid = $("productGrid");
+    if (!grid) return;  // hidden for non-super users
     var products = report.products || [];
     var total = products.reduce(function (a, c) { return a + c.n; }, 0);
-    var grid = $("productGrid");
 
     if (!report.has_products) {
       $("productSub").textContent =
@@ -3407,6 +3439,7 @@ body:has(#viewCost:not([hidden])) .wrap { padding-left: 14px; padding-right: 14p
   }
 
   function renderDailyChart(daily) {
+    if (!$("cDaily")) return;  // hidden for non-super users
     var sub = $("dailySub");
     if (!daily || !daily.length) {
       if (sub) sub.textContent = "";

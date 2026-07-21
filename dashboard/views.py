@@ -441,6 +441,9 @@ def index(request):
         # Lets the frontend auto-load the default window from BigQuery on entry
         # (and skip the manual upload screen) only when BQ is actually set up.
         "bq_configured": bq.is_configured(),
+        # Role gate: only super users see the restricted sections (AI summary,
+        # revenue, city tiers, payment performance, orders/day, product breakdown).
+        "is_super": auth.is_superuser(request),
     })
 
 
@@ -501,6 +504,42 @@ def _apply_uc_overrides(client_report):
     return client_report
 
 
+# Report keys that power the super-user-only sections. Stripped from the payload
+# for regular users so the restricted figures never reach the browser — the
+# panels are also hidden in the template, but this keeps the data out of the
+# network response too (real access control, not just a hidden UI).
+_SUPER_ONLY_REPORT_KEYS = ("payment_perf", "products", "daily", "zone_breakdown")
+# NOTE: headline/operational summary fields (total, success_rate, tat_in/out,
+# tat_pending/tat_pending_pct, rto_pct, o2s/p2o/p2d, ...) are intentionally NOT
+# listed here — they drive the shared headline row (incl. the Pendency card),
+# which is visible to every role. Only add a key below if that metric should be
+# hidden from regular users.
+_SUPER_ONLY_SUMMARY_KEYS = (
+    # Revenue / order-value section
+    "revenue", "delivered_value", "rto_value", "pending_value", "cancelled_value",
+    "aov", "rto_value_pct", "pending_value_pct", "cancelled_value_pct", "order_units",
+    # Destination city-tier section
+    "tiers", "tier_revenue",
+)
+
+
+def _scrub_report_for_role(request, client_report):
+    """Remove the super-user-only data from the report unless the requester is a
+    super user. Safe to mutate: the caller passes a fresh dict (from
+    _client_report / _apply_uc_overrides)."""
+    if auth.is_superuser(request):
+        return client_report
+    for key in _SUPER_ONLY_REPORT_KEYS:
+        client_report.pop(key, None)
+    summary = client_report.get("summary")
+    if isinstance(summary, dict):
+        summary = dict(summary)  # don't mutate the cached build_report summary
+        for key in _SUPER_ONLY_SUMMARY_KEYS:
+            summary.pop(key, None)
+        client_report["summary"] = summary
+    return client_report
+
+
 def _o2s_mature_days():
     """Orders younger than this (days) are excluded from O2S — they may not have
     shipped yet, so counting them would bias O2S low. Env BQ_O2S_MATURE_DAYS (4)."""
@@ -547,7 +586,8 @@ def _report_response(request, empty_msg):
     report["load_window"] = _CACHE.get("window")
     # Orders-per-day and O2S come from Unicommerce (complete/real-time) when a
     # BigQuery window is loaded; otherwise the ClickPost-derived values stand.
-    return JsonResponse(_apply_uc_overrides(_client_report(report)))
+    return JsonResponse(
+        _scrub_report_for_role(request, _apply_uc_overrides(_client_report(report))))
 
 
 # ---------------------------------------------------------------------------
@@ -894,9 +934,11 @@ def _openai_summary(api_key, metrics, model="gpt-4o-mini"):
 
 
 @auth.team_required
+@auth.super_required
 @require_POST
 def ai_summary(request):
-    """Generate an AI executive summary of the current (filtered) date range."""
+    """Generate an AI executive summary of the current (filtered) date range.
+    Restricted to super users (the Business summary panel is super-only)."""
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         return JsonResponse(
@@ -1070,7 +1112,8 @@ def sla_config(request):
         reclassify(records)
         report = build_report(records, **_filter_kwargs(request))
         report["load_window"] = _CACHE.get("window")
-        out["report"] = _apply_uc_overrides(_client_report(report))
+        out["report"] = _scrub_report_for_role(
+            request, _apply_uc_overrides(_client_report(report)))
     return JsonResponse(out)
 
 

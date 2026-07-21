@@ -502,8 +502,19 @@ def _city_promised(entry_idx: int, pickup_city: str, drop_city: str):
 # Reverse-logistics (return pickup / RVP) SLA: reverse shipments are excluded
 # from every forward carrier rule above, so they're scored on a single flat
 # window instead — a return has REVERSE_TAT_DAYS calendar days (pickup -> back
-# at destination) to complete.
-REVERSE_TAT_DAYS = 45
+# at destination) to complete. Configurable via the REVERSE_TAT_DAYS env var so
+# the committed return TAT can be tuned without a code change (a shorter window
+# reclassifies late-but-delivered returns from In TAT to Out of TAT). Defaults
+# to 45; a missing/invalid value falls back to that.
+def _reverse_tat_days_default() -> int:
+    try:
+        v = int(os.environ.get("REVERSE_TAT_DAYS", "45"))
+        return v if v > 0 else 45
+    except (TypeError, ValueError):
+        return 45
+
+
+REVERSE_TAT_DAYS = _reverse_tat_days_default()
 
 
 def _classify_reverse(transit_days, delivered, age_days):

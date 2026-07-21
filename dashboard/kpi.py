@@ -2168,6 +2168,13 @@ def build_report(records, delivery_type="all", zone="all", payment="all",
             "tat_out": tat_overall["out_tat"],
             "tat_in_pct": tat_overall["in_tat_pct"],
             "tat_out_pct": tat_overall["out_tat_pct"],
+            # TAT pendency: shipments with an SLA rule, not delivered yet, still
+            # inside the promised window (In TAT + Out of TAT + Pending + No rule
+            # = total). Surfaced as its own headline card. tat_pending_pct is a
+            # share of ALL shipments so it reads against the Shipments total.
+            "tat_pending": tat_overall["pending"],
+            "tat_pending_pct": _round(
+                tat_overall["pending"] / total * 100 if total else None),
             # Out of TAT split: delivered-but-late vs not-yet-delivered breach.
             "tat_out_delivered": tat_overall["out_delivered"],
             "tat_out_pending": tat_overall["out_pending"],

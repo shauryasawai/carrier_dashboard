@@ -119,6 +119,18 @@ if _env_users:
             "FRIDO_USERS env var contains invalid JSON — falling back to empty INTERNAL_USERS."
         )
 
+# Role-based access: usernames listed here (comma-separated in FRIDO_SUPERUSERS)
+# are "super users" and can see the restricted sections of the dashboard
+# (AI business summary, Revenue / order value, Destination city tiers, Payment
+# mode performance, Orders placed per day, Product breakdown). Everyone else is
+# a regular team user and sees the rest of the dashboard only. If the env var is
+# unset, no one is treated as a super user (fail closed).
+SUPERUSERS = {
+    u.strip()
+    for u in _os.environ.get("FRIDO_SUPERUSERS", "").split(",")
+    if u.strip()
+}
+
 ROOT_URLCONF = "config.urls"
 
 TEMPLATES = [

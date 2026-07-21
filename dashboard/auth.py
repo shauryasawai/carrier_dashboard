@@ -79,6 +79,19 @@ def is_authenticated(request) -> bool:
     return bool(request.session.get(SESSION_KEY))
 
 
+def current_user(request) -> str:
+    """The signed-in username (empty string when not authenticated)."""
+    return (request.session.get(SESSION_KEY) or "").strip()
+
+
+def is_superuser(request) -> bool:
+    """True when the signed-in user is a super user (see settings.SUPERUSERS).
+    Super users can view the restricted sections of the dashboard; everyone
+    else is a regular team user."""
+    supers = getattr(settings, "SUPERUSERS", set()) or set()
+    return current_user(request) in supers
+
+
 def login_session(request, username: str) -> None:
     request.session[SESSION_KEY] = username
     request.session.cycle_key()  # thwart session fixation
@@ -108,5 +121,22 @@ def team_required(view):
                 status=401,
             )
         return redirect(f"{settings.LOGIN_URL}?next={request.path}")
+
+    return wrapper
+
+
+def super_required(view):
+    """Restrict an API view to super users. Assumes team_required has already
+    established the session (stack it as the inner decorator). Non-super users
+    get a 403 JSON response so the frontend can surface it cleanly."""
+    @wraps(view)
+    def wrapper(request, *args, **kwargs):
+        if is_superuser(request):
+            return view(request, *args, **kwargs)
+        return JsonResponse(
+            {"error": "This section is restricted to super users.",
+             "forbidden": True},
+            status=403,
+        )
 
     return wrapper
